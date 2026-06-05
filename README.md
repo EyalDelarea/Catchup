@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="#requirements"><img src="https://img.shields.io/badge/node-%E2%89%A522-3c873a?logo=node.js&logoColor=white" alt="Node ≥ 22" /></a>
+  <a href="#-requirements"><img src="https://img.shields.io/badge/node-%E2%89%A522-3c873a?logo=node.js&logoColor=white" alt="Node ≥ 22" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-38bdf8" alt="MIT License" /></a>
   <a href="https://github.com/EyalDelarea/Catchup/actions/workflows/ci.yml"><img src="https://github.com/EyalDelarea/Catchup/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <img src="https://img.shields.io/badge/privacy-100%25%20local-0ea5e9" alt="100% local" />
@@ -26,13 +26,17 @@ A **local-first** personal WhatsApp summarizer. Messages are collected passively
 
 ## ✨ How it works
 
-```
-📲 WhatsApp  →  🗄️  Postgres  →  🎙️ Whisper (voice)  →  👁️ Ollama vision (media)  →  🧠 Ollama summary  →  📱 Web UI
-   (Baileys,        (your own        transcribe            caption images/video        "what I missed"      (mobile, RTL,
-    read-only)       database)        Hebrew notes          locally                     digest               Hebrew)
+```mermaid
+flowchart LR
+    WA["📲 WhatsApp<br/>Baileys · read-only"] --> PG[("🗄️ Postgres<br/>your database")]
+    PG --> W["🎙️ Whisper<br/>voice → text"]
+    PG --> V["👁️ Ollama vision<br/>images/video → captions"]
+    W --> S["🧠 Ollama<br/>structured summary"]
+    V --> S
+    S --> UI["📱 Web UI<br/>mobile · RTL · Hebrew"]
 ```
 
-Every arrow runs on **your machine**. The only thing that touches the network is the read-only WhatsApp link itself.
+Every box runs on **your machine**. The only thing that touches the network is the read-only WhatsApp link itself.
 
 ---
 
@@ -42,17 +46,17 @@ Catchup uses [Baileys](https://github.com/WhiskeySockets/Baileys), an **unoffici
 
 ---
 
-## Requirements
+## 📋 Requirements
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Node.js | ≥ 22 | `package.json` engines field |
+| Node.js | ≥ 22 | `package.json` engines field (and `.nvmrc`, which CI reads) |
 | Docker + Docker Compose v2 | any recent | `docker compose` (v2 syntax); runs Postgres, RabbitMQ, Loki, Grafana |
 | ffmpeg | any | On PATH; used for audio normalization and video frame extraction |
 | Python | ≥ 3.10 | With `faster-whisper` installed (Hebrew voice-note transcription) |
 | Ollama | any | Local LLM server; runs summaries and vision captioning |
 
-### RAM — the #1 gotcha
+### 🧠 RAM — the #1 gotcha
 
 The default model (`gemma4:26b`) is used for both summaries and image/video captioning. It requires significant memory:
 
@@ -61,19 +65,20 @@ The default model (`gemma4:26b`) is used for both summaries and image/video capt
 | `gemma4:26b` (default) | ~16 GB unified / ~26 GB system | Best quality; Hebrew OCR; multi-frame video |
 | `gemma4:12b` | ~10 GB | Good quality; set `SUMMARY_MODEL=gemma4:12b` and `VISION_MODEL=gemma4:12b` |
 | `gemma4:4b` | ~4 GB | Lighter; quality degrades for Hebrew |
-| Summaries only (no vision) | ~16 GB for `gemma4:26b` | Set `VISION_MODEL` to a small model or disable media analysis |
 
 To use a smaller model, set `SUMMARY_MODEL` and/or `VISION_MODEL` in your `.env`:
 
-```
+```bash
 SUMMARY_MODEL=gemma4:12b
 VISION_MODEL=gemma4:12b
 VISION_VIDEO_MODEL=gemma4:12b
 ```
 
+Both summaries and vision run on the same Ollama instance. The worker is single-threaded by default (`WORKER_CONCURRENCY=1`), so they run serially and share one model residency.
+
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ```bash
 # 1. Clone and install
@@ -81,30 +86,28 @@ git clone https://github.com/EyalDelarea/Catchup.git
 cd Catchup
 npm install
 
-# 2. Configure
+# 2. Configure (all keys have sane defaults)
 cp .env.example .env
-# Edit .env if you need non-default ports or a smaller model
 
 # 3. Install Python transcription dependencies
 python3 -m venv .venv
 .venv/bin/pip install -r src/transcription/requirements.txt
-# Then set TRANSCRIPTION_PYTHON=./.venv/bin/python in .env
+# TRANSCRIPTION_PYTHON already defaults to ./.venv/bin/python
 
-# 4. Pull the Ollama model (needs Ollama installed: https://ollama.com)
+# 4. Pull the Ollama model (needs Ollama: https://ollama.com)
 ollama pull gemma4:26b
 
 # 5. Start everything
 make dev
 
-# 6. Open the web UI
-# http://localhost:8787
+# 6. Open the web UI → http://localhost:8787
 ```
 
 `make dev` brings up Postgres, RabbitMQ, Loki, and Grafana via Docker Compose; applies database migrations; and starts the background worker and the web server + live collector together. Ctrl-C stops everything cleanly.
 
 ---
 
-## Verify with `doctor`
+## 🩺 Verify with `doctor`
 
 Before linking WhatsApp, confirm all 7 prerequisites pass:
 
@@ -126,7 +129,7 @@ Each line prints `✅ <check>` or `❌ <check> — fix: <command>`. The process 
 
 ---
 
-## Linking WhatsApp (QR walkthrough)
+## 🔗 Linking WhatsApp (QR walkthrough)
 
 This is the most important step. On first run (`make dev` or `npx tsx src/cli.ts serve --collect`), a QR code prints in the terminal.
 
@@ -160,58 +163,12 @@ rm -rf data/baileys-auth/
 
 ---
 
-## Configuration
+## 🛠️ CLI commands
 
-Copy `.env.example` to `.env`. All keys have defaults; the table below lists every option.
+<details>
+<summary><strong>Expand the full command reference</strong> — serve, collect, summarize, groups, transcribe, analyze-backlog, digest-run, import, doctor</summary>
 
-| Key | Default | Description |
-|---|---|---|
-| `DATABASE_URL` | `postgres://postgres:postgres@localhost:5432/whatsapp_sum` | Postgres connection string |
-| `DATA_DIR` | `./data` | Directory for auth state, media downloads, and exports |
-| `TRANSCRIPTION_PYTHON` | `./.venv/bin/python` | Python interpreter with `faster-whisper` installed |
-| `TRANSCRIPTION_MODEL` | `ivrit-ai/whisper-large-v3-turbo-ct2` | HuggingFace model for Hebrew speech-to-text (downloaded on first use) |
-| `FFMPEG_PATH` | `ffmpeg` | Path to ffmpeg binary |
-| `OLLAMA_HOST` | `http://localhost:11434` | Local Ollama server base URL |
-| `SUMMARY_MODEL` | `gemma4:26b` | Ollama model for generating summaries |
-| `SUMMARY_NUM_CTX` | `32768` | Context window size (Ollama defaults to 2048 — this must be raised) |
-| `SUMMARY_TOKEN_BUDGET` | `24000` | Max estimated input tokens before a selection is rejected as too large |
-| `VISION_MODEL` | `gemma4:26b` | Ollama model for image captioning and OCR |
-| `VISION_VIDEO_MODEL` | `gemma4:26b` | Ollama model for video analysis (defaults to `VISION_MODEL` if unset) |
-| `VISION_VIDEO_FPS` | `1` | Frames per second sampled from videos |
-| `VISION_VIDEO_MAX_FRAMES` | `8` | Maximum frames sent per video (caps memory usage) |
-| `VISION_MAX_VIDEO_MB` | `25` | Maximum video file size (MB) accepted for analysis |
-| `VISION_NUM_CTX` | `8192` | Context window for the vision model (kept small to control KV-cache memory) |
-| `WEB_PORT` | `8787` | Port for the local web UI |
-| `RABBITMQ_URL` | `amqp://guest:guest@localhost:5672` | RabbitMQ AMQP connection URL |
-| `LOKI_URL` | `http://localhost:3100` | Loki log-shipping endpoint |
-| `LOG_LEVEL` | `info` | pino log level (`trace` / `debug` / `info` / `warn` / `error` / `fatal`) |
-| `WORKER_CONCURRENCY` | `1` | Concurrent jobs per worker process |
-| `WHATSAPP_ALLOW_SEND` | `false` | Set `true` only to allow outbound WhatsApp messages. Leave `false` for passive collection. |
-| `RETAIN_MEDIA` | `false` | Set `true` to keep media files on disk after analysis/transcription. By default files are pruned after captioning. |
-| `DIGEST_ENABLED` | `true` | Enable scheduled twice-daily pre-summarization (so opening a group feels instant) |
-| `DIGEST_TIMES` | `08:00,18:00` | Comma-separated HH:MM times (local timezone) for the digest runs |
-
----
-
-## Model Choices / RAM
-
-See the RAM table in [Requirements](#ram--the-1-gotcha). To change models:
-
-```bash
-# Pull an alternative
-ollama pull gemma4:12b
-
-# Set in .env
-SUMMARY_MODEL=gemma4:12b
-VISION_MODEL=gemma4:12b
-VISION_VIDEO_MODEL=gemma4:12b
-```
-
-Both summaries and vision run on the same Ollama instance. The worker is single-threaded by default (`WORKER_CONCURRENCY=1`), so they run serially and share one model residency.
-
----
-
-## Usage
+<br/>
 
 All commands run via `npx tsx src/cli.ts <command>` in development, or `node dist/cli.js <command>` after `npm run build`.
 
@@ -228,8 +185,7 @@ Opens the mobile-first web UI at `http://localhost:8787`. The `--collect` flag s
 **Access from your phone (same Wi-Fi):**
 
 ```bash
-# Find your machine's LAN IP
-ipconfig getifaddr en0   # macOS
+ipconfig getifaddr en0   # macOS — find your machine's LAN IP
 # Then open http://<ip>:8787 in your phone's browser
 ```
 
@@ -302,35 +258,100 @@ npx tsx src/cli.ts import --folder ./exports                # bulk: enqueues all
 
 Imports a WhatsApp export (`.txt` or `.zip`) into Postgres. Re-importing the same file is safe — messages are deduplicated by a stable key. Bulk mode enqueues background jobs; requires the worker to be running.
 
+To export a chat from WhatsApp: open the chat → tap the group/contact name → scroll down to **Export Chat** → choose **Without Media** (`.txt`) or **Include Media** (`.zip`).
+
 ### `doctor` — verify prerequisites
 
 ```bash
 npx tsx src/cli.ts doctor
 ```
 
-See [Verify with `doctor`](#verify-with-doctor) above.
+See [Verify with `doctor`](#-verify-with-doctor) above.
+
+</details>
 
 ---
 
-## Importing Chat Exports
+## ⚙️ Configuration
 
-To export a chat from WhatsApp: open the chat → tap the group/contact name → Scroll down to **Export Chat** → choose **Without Media** (`.txt`) or **Include Media** (`.zip`). Then import:
+<details>
+<summary><strong>Expand the full <code>.env</code> reference</strong> — every key has a default</summary>
 
-```bash
-npx tsx src/cli.ts import ./WhatsApp\ Chat\ with\ Family.txt --name "Family"
-```
+<br/>
 
-For bulk import of many exports at once:
+Copy `.env.example` to `.env`. All keys have defaults; the table below lists every option.
 
-```bash
-# Worker must be running (make dev starts it automatically)
-npx tsx src/cli.ts import --folder ./exports
-# Output: Enqueued 7 import jobs.
-```
+| Key | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | `postgres://postgres:postgres@localhost:5432/whatsapp_sum` | Postgres connection string |
+| `DATA_DIR` | `./data` | Directory for auth state, media downloads, and exports |
+| `TRANSCRIPTION_PYTHON` | `./.venv/bin/python` | Python interpreter with `faster-whisper` installed |
+| `TRANSCRIPTION_MODEL` | `ivrit-ai/whisper-large-v3-turbo-ct2` | HuggingFace model for Hebrew speech-to-text (downloaded on first use) |
+| `FFMPEG_PATH` | `ffmpeg` | Path to ffmpeg binary |
+| `OLLAMA_HOST` | `http://localhost:11434` | Local Ollama server base URL |
+| `SUMMARY_MODEL` | `gemma4:26b` | Ollama model for generating summaries |
+| `SUMMARY_NUM_CTX` | `32768` | Context window size (Ollama defaults to 2048 — this must be raised) |
+| `SUMMARY_TOKEN_BUDGET` | `24000` | Max estimated input tokens before a selection is rejected as too large |
+| `VISION_MODEL` | `gemma4:26b` | Ollama model for image captioning and OCR |
+| `VISION_VIDEO_MODEL` | `gemma4:26b` | Ollama model for video analysis (defaults to `VISION_MODEL` if unset) |
+| `VISION_VIDEO_FPS` | `1` | Frames per second sampled from videos |
+| `VISION_VIDEO_MAX_FRAMES` | `8` | Maximum frames sent per video (caps memory usage) |
+| `VISION_MAX_VIDEO_MB` | `25` | Maximum video file size (MB) accepted for analysis |
+| `VISION_NUM_CTX` | `8192` | Context window for the vision model (kept small to control KV-cache memory) |
+| `WEB_PORT` | `8787` | Port for the local web UI |
+| `RABBITMQ_URL` | `amqp://guest:guest@localhost:5672` | RabbitMQ AMQP connection URL |
+| `LOKI_URL` | `http://localhost:3100` | Loki log-shipping endpoint |
+| `LOG_LEVEL` | `info` | pino log level (`trace` / `debug` / `info` / `warn` / `error` / `fatal`) |
+| `WORKER_CONCURRENCY` | `1` | Concurrent jobs per worker process |
+| `WHATSAPP_ALLOW_SEND` | `false` | Set `true` only to allow outbound WhatsApp messages. Leave `false` for passive collection. |
+| `RETAIN_MEDIA` | `false` | Set `true` to keep media files on disk after analysis/transcription. By default files are pruned after captioning. |
+| `DIGEST_ENABLED` | `true` | Enable scheduled twice-daily pre-summarization (so opening a group feels instant) |
+| `DIGEST_TIMES` | `08:00,18:00` | Comma-separated HH:MM times (local timezone) for the digest runs |
+
+</details>
 
 ---
 
-## Observability
+## 🏗️ Architecture
+
+<details>
+<summary><strong>Expand the architecture diagram and notes</strong></summary>
+
+<br/>
+
+```mermaid
+flowchart TB
+    imp["import / import --folder<br/>(.txt / .zip)"] --> norm["normalize + dedupe<br/>by stable key"]
+    live["serve --collect / collect<br/>(Baileys QR, live)"] --> norm
+    norm --> PG[("PostgreSQL<br/>source of truth")]
+
+    PG --> voice["faster-whisper<br/>voice notes → transcripts"]
+    PG --> media["Ollama vision<br/>images/video → captions"]
+    voice --> llm["Ollama LLM<br/>structured summary"]
+    media --> llm
+    llm --> out["web UI · CLI · digest<br/>http://localhost:8787"]
+
+    PG -. job refs only .-> mq{{"RabbitMQ work queue<br/>import · transcribe · analyze · summarize"}}
+    mq -. competing consumers .-> worker["worker pool<br/>retries + dead-letter"]
+    worker --> PG
+```
+
+- **Postgres** is the sole source of truth. The broker carries only job references (IDs), never message content.
+- **Node.js** runs the CLI, web server, collector (Baileys), and worker.
+- **Python + faster-whisper** runs as a subprocess for Hebrew voice-note transcription (local, nothing sent to any API).
+- **Ollama** hosts the LLM and vision model locally.
+- **Docker Compose** manages Postgres, RabbitMQ, Loki, and Grafana — the app itself runs on the host for GPU/CPU access.
+
+</details>
+
+---
+
+## 📊 Observability
+
+<details>
+<summary><strong>Expand dashboards, ports, and the live jobs view</strong></summary>
+
+<br/>
 
 `make dev` starts Loki (log aggregation) and Grafana alongside the app stack.
 
@@ -342,43 +363,7 @@ npx tsx src/cli.ts import --folder ./exports
 
 The **Jobs Status (live)** Grafana dashboard shows per-job-type throughput, latency, failure rates, and queue depths in real time. Use it to monitor bulk imports, transcription backlogs, and vision analysis progress.
 
----
-
-## Architecture
-
-```
-WhatsApp export (.txt/.zip) ──┐
-  import / import --folder     ├──► normalize ──► PostgreSQL ◄──────── source of truth
-WhatsApp live (Baileys QR) ───┘    (deduplicated                           │
-  serve --collect / collect          by stable key)                        │
-                                                                     ┌─────┴──────┐
-                                                            voice notes    images/videos
-                                                                 │              │
-                                                          faster-whisper    Ollama vision
-                                                          (transcripts)    (captions)
-                                                                 └──────┬──────┘
-                                                                        │
-                                                                   Ollama LLM
-                                                               (structured summary)
-                                                                        │
-                                                             web UI / CLI / digest
-                                                                (http://localhost:8787)
-
-                  producers ──► RabbitMQ work queue ──► worker pool
-                               (import.file, transcribe.voicenote,    (competing consumers;
-                                analyze.image, analyze.video,          retries + dead-letter)
-                                summarize.group)
-```
-
-- **Postgres** is the sole source of truth. The broker carries only job references (IDs), never message content.
-- **Node.js** runs the CLI, web server, collector (Baileys), and worker.
-- **Python + faster-whisper** runs as a subprocess for Hebrew voice-note transcription (local, nothing sent to any API).
-- **Ollama** hosts the LLM and vision model locally.
-- **Docker Compose** manages Postgres, RabbitMQ, Loki, and Grafana — the app itself runs on the host for GPU/CPU access.
-
----
-
-## Ports
+### Ports
 
 | Service | Port | Notes |
 |---|---|---|
@@ -389,17 +374,24 @@ WhatsApp live (Baileys QR) ───┘    (deduplicated                        
 | RabbitMQ management | 15672 | guest/guest |
 | Loki | 3100 | Log ingestion |
 
+</details>
+
 ---
 
-## Troubleshooting
+## 🧯 Troubleshooting
+
+<details>
+<summary><strong>Expand common issues and fixes</strong></summary>
+
+<br/>
 
 **Out of memory / Ollama crashes**
 The default `gemma4:26b` needs ~16 GB unified memory. Switch to a smaller model:
-```
+```bash
 SUMMARY_MODEL=gemma4:12b
 VISION_MODEL=gemma4:12b
 ```
-See the [RAM table](#ram--the-1-gotcha).
+See the [RAM table](#-ram--the-1-gotcha).
 
 **QR code won't scan**
 - Maximize your terminal — a small window breaks the QR rendering.
@@ -429,12 +421,19 @@ npm run migrate
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r src/transcription/requirements.txt
-# Set TRANSCRIPTION_PYTHON=./.venv/bin/python in .env
+# TRANSCRIPTION_PYTHON defaults to ./.venv/bin/python
 ```
+
+</details>
 
 ---
 
-## Development
+## 💻 Development
+
+<details>
+<summary><strong>Expand build, test, and worker commands</strong></summary>
+
+<br/>
 
 ```bash
 npm run typecheck     # TypeScript type-check (tsc --noEmit)
@@ -450,6 +449,8 @@ The worker can be started independently for debugging:
 ```bash
 npx tsx src/workers/worker.ts --types import.file,transcribe.voicenote,analyze.image,analyze.video,summarize.group
 ```
+
+</details>
 
 ---
 
