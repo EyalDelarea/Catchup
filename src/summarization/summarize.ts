@@ -1,9 +1,9 @@
 import pg from "pg";
 import { loadConfig } from "../config.js";
 import { insertSummary } from "../db/repositories/summaries.js";
-import { type Selection } from "./select.js";
-import { OllamaSummarizer, type Summarizer, type SummaryOutput } from "./summarizer.js";
 import { prepareSummary } from "./prepare.js";
+import type { Selection } from "./select.js";
+import { OllamaSummarizer, type Summarizer, type SummaryOutput } from "./summarizer.js";
 
 export type RunSummarizeInput = {
   groupName: string;
@@ -24,7 +24,7 @@ type RunSummarizeDeps = {
 
 export async function runSummarize(
   input: RunSummarizeInput,
-  deps?: Partial<RunSummarizeDeps>
+  deps?: Partial<RunSummarizeDeps>,
 ): Promise<RunSummarizeResult> {
   const config = loadConfig();
   const databaseUrl = deps?.databaseUrl ?? config.databaseUrl;

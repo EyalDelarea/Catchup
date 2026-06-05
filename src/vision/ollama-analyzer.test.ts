@@ -3,10 +3,11 @@
  *
  * All tests inject a fake fetchFn and a fake fs read; no real Ollama or files needed.
  */
-import { describe, it, expect, vi } from "vitest";
-import os from "node:os";
+
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { OllamaVisionAnalyzer, sanitizeDescription } from "./ollama-analyzer.js";
 
 describe("sanitizeDescription", () => {
@@ -59,7 +60,11 @@ describe("OllamaVisionAnalyzer", () => {
     const tmpFile = makeTempImageFile();
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ response: "תיאור מבחן" }));
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "llama3.2-vision", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "llama3.2-vision",
+      fetchFn: fakeFetch,
+    });
     await analyzer.describeImage(tmpFile);
 
     expect(fakeFetch).toHaveBeenCalledOnce();
@@ -71,7 +76,11 @@ describe("OllamaVisionAnalyzer", () => {
     const tmpFile = makeTempImageFile();
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ response: "תיאור" }));
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://ollama:11434", model: "llava:13b", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://ollama:11434",
+      model: "llava:13b",
+      fetchFn: fakeFetch,
+    });
     await analyzer.describeImage(tmpFile);
 
     const [, init] = fakeFetch.mock.calls[0] as [string, { body: string }];
@@ -83,7 +92,11 @@ describe("OllamaVisionAnalyzer", () => {
     const tmpFile = makeTempImageFile();
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ response: "תיאור" }));
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "llama3.2-vision", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "llama3.2-vision",
+      fetchFn: fakeFetch,
+    });
     await analyzer.describeImage(tmpFile);
 
     const [, init] = fakeFetch.mock.calls[0] as [string, { body: string }];
@@ -95,7 +108,11 @@ describe("OllamaVisionAnalyzer", () => {
     const tmpFile = makeTempImageFile();
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ response: "תיאור" }));
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "llama3.2-vision", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "llama3.2-vision",
+      fetchFn: fakeFetch,
+    });
     await analyzer.describeImage(tmpFile);
 
     const [, init] = fakeFetch.mock.calls[0] as [string, { body: string }];
@@ -106,7 +123,12 @@ describe("OllamaVisionAnalyzer", () => {
   it("caps the context window (num_ctx) and sets keep_alive to bound memory and stay warm", async () => {
     const tmpFile = makeTempImageFile();
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ response: "תיאור" }));
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "qwen2.5vl", fetchFn: fakeFetch, numCtx: 8192 });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "qwen2.5vl",
+      fetchFn: fakeFetch,
+      numCtx: 8192,
+    });
     await analyzer.describeImage(tmpFile);
     const [, init] = fakeFetch.mock.calls[0] as [string, { body: string }];
     const body = JSON.parse(init.body) as { options: { num_ctx: number }; keep_alive: string };
@@ -120,7 +142,11 @@ describe("OllamaVisionAnalyzer", () => {
     const expectedBase64 = Buffer.from(content, "utf8").toString("base64");
 
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ response: "תיאור" }));
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "llama3.2-vision", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "llama3.2-vision",
+      fetchFn: fakeFetch,
+    });
     await analyzer.describeImage(tmpFile);
 
     const [, init] = fakeFetch.mock.calls[0] as [string, { body: string }];
@@ -134,7 +160,11 @@ describe("OllamaVisionAnalyzer", () => {
     const tmpFile = makeTempImageFile();
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ response: "תיאור" }));
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "llama3.2-vision", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "llama3.2-vision",
+      fetchFn: fakeFetch,
+    });
     await analyzer.describeImage(tmpFile);
 
     const [, init] = fakeFetch.mock.calls[0] as [string, { body: string }];
@@ -147,7 +177,11 @@ describe("OllamaVisionAnalyzer", () => {
     const tmpFile = makeTempImageFile();
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ response: "תמונה של חתול" }));
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "llama3.2-vision", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "llama3.2-vision",
+      fetchFn: fakeFetch,
+    });
     const result = await analyzer.describeImage(tmpFile);
 
     expect(result.description).toBe("תמונה של חתול");
@@ -156,9 +190,15 @@ describe("OllamaVisionAnalyzer", () => {
 
   it("throws when the HTTP response is not OK", async () => {
     const tmpFile = makeTempImageFile();
-    const fakeFetch = vi.fn().mockResolvedValue(makeErrorResponse(500, { error: "model load failed" }));
+    const fakeFetch = vi
+      .fn()
+      .mockResolvedValue(makeErrorResponse(500, { error: "model load failed" }));
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "llama3.2-vision", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "llama3.2-vision",
+      fetchFn: fakeFetch,
+    });
     await expect(analyzer.describeImage(tmpFile)).rejects.toThrow();
   });
 
@@ -169,9 +209,13 @@ describe("OllamaVisionAnalyzer", () => {
     });
     const fakeFetch = vi.fn().mockRejectedValue(innerError);
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "llama3.2-vision", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "llama3.2-vision",
+      fetchFn: fakeFetch,
+    });
     await expect(analyzer.describeImage(tmpFile)).rejects.toThrow(
-      expect.objectContaining({ message: expect.stringContaining("ECONNREFUSED") })
+      expect.objectContaining({ message: expect.stringContaining("ECONNREFUSED") }),
     );
   });
 
@@ -179,7 +223,11 @@ describe("OllamaVisionAnalyzer", () => {
     const tmpFile = makeTempImageFile();
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ error: "unknown model" }));
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "llama3.2-vision", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "llama3.2-vision",
+      fetchFn: fakeFetch,
+    });
     await expect(analyzer.describeImage(tmpFile)).rejects.toThrow();
   });
 
@@ -187,7 +235,11 @@ describe("OllamaVisionAnalyzer", () => {
     const tmpFile = makeTempImageFile();
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ response: "תיאור" }));
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434/", model: "llama3.2-vision", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434/",
+      model: "llama3.2-vision",
+      fetchFn: fakeFetch,
+    });
     await analyzer.describeImage(tmpFile);
 
     const [url] = fakeFetch.mock.calls[0] as [string, ...unknown[]];
@@ -199,11 +251,15 @@ describe("OllamaVisionAnalyzer.describeImages (multi-frame / video)", () => {
   it("sends ALL frames as base64 in the images array, in order", async () => {
     const files = ["frame-a", "frame-b", "frame-c"].map((c) => makeTempImageFile(c));
     const expected = ["frame-a", "frame-b", "frame-c"].map((c) =>
-      Buffer.from(c, "utf8").toString("base64")
+      Buffer.from(c, "utf8").toString("base64"),
     );
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ response: "תיאור וידאו" }));
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "gemma4:12b", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "gemma4:12b",
+      fetchFn: fakeFetch,
+    });
     await analyzer.describeImages(files);
 
     const [, init] = fakeFetch.mock.calls[0] as [string, { body: string }];
@@ -216,7 +272,11 @@ describe("OllamaVisionAnalyzer.describeImages (multi-frame / video)", () => {
     const files = [makeTempImageFile("a"), makeTempImageFile("b")];
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ response: "x" }));
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "gemma4:12b", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "gemma4:12b",
+      fetchFn: fakeFetch,
+    });
     await analyzer.describeImages(files);
 
     const [, init] = fakeFetch.mock.calls[0] as [string, { body: string }];
@@ -228,7 +288,11 @@ describe("OllamaVisionAnalyzer.describeImages (multi-frame / video)", () => {
     const files = [makeTempImageFile("solo")];
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ response: "x" }));
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "gemma4:12b", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "gemma4:12b",
+      fetchFn: fakeFetch,
+    });
     await analyzer.describeImages(files);
 
     const [, init] = fakeFetch.mock.calls[0] as [string, { body: string }];
@@ -238,7 +302,11 @@ describe("OllamaVisionAnalyzer.describeImages (multi-frame / video)", () => {
 
   it("throws when called with an empty frame list", async () => {
     const fakeFetch = vi.fn();
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "gemma4:12b", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "gemma4:12b",
+      fetchFn: fakeFetch,
+    });
     await expect(analyzer.describeImages([])).rejects.toThrow(/no images/i);
     expect(fakeFetch).not.toHaveBeenCalled();
   });
@@ -247,7 +315,11 @@ describe("OllamaVisionAnalyzer.describeImages (multi-frame / video)", () => {
     const files = [makeTempImageFile("a"), makeTempImageFile("b")];
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ response: "x" }));
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "gemma4:12b", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "gemma4:12b",
+      fetchFn: fakeFetch,
+    });
     await analyzer.describeImages(files);
 
     const [, init] = fakeFetch.mock.calls[0] as [string, { body: string }];
@@ -259,7 +331,11 @@ describe("OllamaVisionAnalyzer.describeImages (multi-frame / video)", () => {
     const tmpFile = makeTempImageFile("single");
     const fakeFetch = vi.fn().mockResolvedValue(makeOkResponse({ response: "תיאור" }));
 
-    const analyzer = new OllamaVisionAnalyzer({ host: "http://localhost:11434", model: "gemma4:12b", fetchFn: fakeFetch });
+    const analyzer = new OllamaVisionAnalyzer({
+      host: "http://localhost:11434",
+      model: "gemma4:12b",
+      fetchFn: fakeFetch,
+    });
     await analyzer.describeImage(tmpFile);
 
     const [, init] = fakeFetch.mock.calls[0] as [string, { body: string }];

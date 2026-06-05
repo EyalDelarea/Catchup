@@ -9,15 +9,12 @@
  * - An already-resolved group (name != jid) is skipped.
  * - A subject that collides with an existing UNIQUE name is caught and skipped (others still resolve).
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
+
 import path from "node:path";
-import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroupByWhatsappId } from "../db/repositories/groups.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
@@ -54,24 +51,25 @@ describe("resolveAllGroupNames", () => {
     const result = await resolveAllGroupNames(pool, { groupSubject });
     expect(result.resolved).toBeGreaterThanOrEqual(1);
 
-    const { rows } = await pool.query(
-      `SELECT name FROM groups WHERE whatsapp_id = $1`,
-      [jid]
-    );
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
     expect(rows[0]?.name).toBe("Quiet Group Subject");
   });
 
   it("resolves a @lid group name from the most-recent stored participant display_name", async () => {
     // Seed: a @lid group (no groupSubject call expected) with a stored message
     const jid = "70390252580989@lid";
-    const groupId = await upsertGroupByWhatsappId(pool, { whatsappId: jid, name: jid, source: "live" });
+    const groupId = await upsertGroupByWhatsappId(pool, {
+      whatsappId: jid,
+      name: jid,
+      source: "live",
+    });
 
     // Insert a participant and a message referencing it
     const participantId = await upsertParticipant(pool, "Lid Person");
     await pool.query(
       `INSERT INTO messages (group_id, participant_id, import_id, source, external_id, message_type, text_content, media_filename, media_path, media_status, sent_at, dedupe_key, from_me)
        VALUES ($1, $2, NULL, 'live', 'lid-msg-001', 'text', 'hi from lid', NULL, NULL, NULL, NOW(), 'lid-dedupe-001', false)`,
-      [groupId, participantId]
+      [groupId, participantId],
     );
 
     // groupSubject should NOT be called for @lid groups
@@ -85,10 +83,7 @@ describe("resolveAllGroupNames", () => {
     expect(groupSubjectCalled).toBe(false);
     expect(result.resolved).toBeGreaterThanOrEqual(1);
 
-    const { rows } = await pool.query(
-      `SELECT name FROM groups WHERE whatsapp_id = $1`,
-      [jid]
-    );
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
     expect(rows[0]?.name).toBe("Lid Person");
   });
 
@@ -104,10 +99,7 @@ describe("resolveAllGroupNames", () => {
     const result = await resolveAllGroupNames(pool, { groupSubject });
     // resolved count may be 0 or refer to other groups; just confirm no throw
 
-    const { rows } = await pool.query(
-      `SELECT name FROM groups WHERE whatsapp_id = $1`,
-      [jid]
-    );
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
     expect(rows[0]?.name).toBe(jid); // still the raw JID
   });
 
@@ -125,10 +117,7 @@ describe("resolveAllGroupNames", () => {
 
     await resolveAllGroupNames(pool, { groupSubject });
     // groupSubject might be called for other groups, but this group's name must NOT change
-    const { rows } = await pool.query(
-      `SELECT name FROM groups WHERE whatsapp_id = $1`,
-      [jid]
-    );
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
     expect(rows[0]?.name).toBe("Already Resolved");
   });
 
@@ -141,7 +130,7 @@ describe("resolveAllGroupNames", () => {
     // jidB already has the name we'll try to give jidA
     await pool.query(
       `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (name) DO NOTHING`,
-      [jidB, "Collision Name"]
+      [jidB, "Collision Name"],
     );
 
     // Seed a third unrelated group that should succeed
@@ -159,11 +148,15 @@ describe("resolveAllGroupNames", () => {
     expect(result.resolved).toBeGreaterThanOrEqual(1); // at least jidC should succeed
 
     // jidA should stay as its JID (collision skipped)
-    const { rows: rowsA } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jidA]);
+    const { rows: rowsA } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [
+      jidA,
+    ]);
     expect(rowsA[0]?.name).toBe(jidA);
 
     // jidC should be resolved
-    const { rows: rowsC } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jidC]);
+    const { rows: rowsC } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [
+      jidC,
+    ]);
     expect(rowsC[0]?.name).toBe("Clean Group Name");
   });
 });

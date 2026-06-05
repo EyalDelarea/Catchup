@@ -26,7 +26,7 @@ export type Selection = { last: number } | { since: Date };
 export async function selectMessages(
   client: pg.Pool | pg.PoolClient,
   groupId: number,
-  selection: Selection
+  selection: Selection,
 ): Promise<SelectedMessage[]> {
   const base = `
     SELECT m.sent_at,
@@ -54,13 +54,13 @@ export async function selectMessages(
   if ("last" in selection) {
     const res = await client.query<{ sent_at: Date; sender: string; content: string }>(
       `${base} ORDER BY m.sent_at DESC, m.id DESC LIMIT $2`,
-      [groupId, selection.last]
+      [groupId, selection.last],
     );
     rows = res.rows.reverse(); // newest N -> chronological
   } else {
     const res = await client.query<{ sent_at: Date; sender: string; content: string }>(
       `${base} AND m.sent_at >= $2 ORDER BY m.sent_at ASC, m.id ASC`,
-      [groupId, selection.since]
+      [groupId, selection.since],
     );
     rows = res.rows;
   }
@@ -79,7 +79,7 @@ export async function selectMessages(
 export async function selectAfterCursor(
   client: pg.Pool | pg.PoolClient,
   groupId: number,
-  cursor: Cursor
+  cursor: Cursor,
 ): Promise<SelectedMessageWithCursor[]> {
   const { rows } = await client.query<{
     id: string;
@@ -110,7 +110,7 @@ export async function selectAfterCursor(
       AND (m.sent_at > $2 OR (m.sent_at = $2 AND m.id > $3))
     ORDER BY m.sent_at ASC, m.id ASC
     `,
-    [groupId, cursor.sentAt, cursor.messageId]
+    [groupId, cursor.sentAt, cursor.messageId],
   );
 
   return rows.map((r) => ({
@@ -135,7 +135,7 @@ export async function selectAfterCursor(
 export async function firstPendingVoiceNoteAfter(
   client: pg.Pool | pg.PoolClient,
   groupId: number,
-  cursor: Cursor
+  cursor: Cursor,
 ): Promise<Cursor | null> {
   const { rows } = await client.query<{ id: string; sent_at: Date }>(
     `
@@ -154,7 +154,7 @@ export async function firstPendingVoiceNoteAfter(
     ORDER BY m.sent_at ASC, m.id ASC
     LIMIT 1
     `,
-    [groupId, cursor.sentAt, cursor.messageId]
+    [groupId, cursor.sentAt, cursor.messageId],
   );
 
   if (rows.length === 0) return null;
@@ -185,7 +185,7 @@ export async function firstPendingVoiceNoteAfter(
 export async function firstPendingVisualMediaAfter(
   client: pg.Pool | pg.PoolClient,
   groupId: number,
-  cursor: Cursor
+  cursor: Cursor,
 ): Promise<Cursor | null> {
   const { rows } = await client.query<{ id: string; sent_at: Date }>(
     `
@@ -205,7 +205,7 @@ export async function firstPendingVisualMediaAfter(
     ORDER BY m.sent_at ASC, m.id ASC
     LIMIT 1
     `,
-    [groupId, cursor.sentAt, cursor.messageId]
+    [groupId, cursor.sentAt, cursor.messageId],
   );
 
   if (rows.length === 0) return null;

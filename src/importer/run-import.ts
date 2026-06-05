@@ -20,20 +20,19 @@ import path from "node:path";
 import pg from "pg";
 import { loadConfig } from "../config.js";
 import { upsertGroup } from "../db/repositories/groups.js";
-import { upsertParticipants } from "../db/repositories/participants.js";
-import { insertMessages } from "../db/repositories/messages.js";
 import {
   createImport,
   markImportCompleted,
   markImportFailed,
   updateImportFilePath,
 } from "../db/repositories/imports.js";
-import { parseWhatsAppTextExport } from "./parse-whatsapp-text.js";
+import { insertMessages } from "../db/repositories/messages.js";
+import { upsertParticipants } from "../db/repositories/participants.js";
+import type { JobBus } from "../jobs/job-bus.js";
 import { extractWhatsAppZip } from "./extract-whatsapp-zip.js";
 import { normalize } from "./normalize.js";
-import type { NormalizedMessage } from "./types.js";
-import type { JobBus } from "../jobs/job-bus.js";
-import { kindFromFilename, isSticker } from "../vision/media-kind.js";
+import { parseWhatsAppTextExport } from "./parse-whatsapp-text.js";
+import type { ImportedMessage, NormalizedMessage } from "./types.js";
 
 export type RunImportInput = {
   filePath: string;
@@ -64,7 +63,7 @@ type RunImportDeps = {
  */
 export async function runImport(
   input: RunImportInput,
-  deps?: Partial<RunImportDeps>
+  deps?: Partial<RunImportDeps>,
 ): Promise<RunImportResult> {
   const config = loadConfig();
   const databaseUrl = deps?.databaseUrl ?? config.databaseUrl;
@@ -83,7 +82,7 @@ async function _runImport(
   input: RunImportInput,
   dataDir: string,
   pool: pg.Pool,
-  bus?: JobBus
+  bus?: JobBus,
 ): Promise<RunImportResult> {
   const { filePath, name } = input;
 
@@ -124,7 +123,7 @@ async function _runImport(
     await updateImportFilePath(pool, importId, originalFilePath);
 
     // --- 6. Parse / extract ---
-    let rawMessages;
+    let rawMessages: ImportedMessage[];
     // Map of filename → buffer for media present in the zip
     const mediaMap = new Map<string, Buffer>();
 
@@ -171,11 +170,7 @@ async function _runImport(
 
     // --- 8. Resolve participant ids ---
     const senderNames = [
-      ...new Set(
-        normalized
-          .map((m) => m.senderName)
-          .filter((n): n is string => n !== null)
-      ),
+      ...new Set(normalized.map((m) => m.senderName).filter((n): n is string => n !== null)),
     ];
 
     const participantMap =
@@ -217,7 +212,7 @@ async function _runImport(
           AND m.media_filename NOT ILIKE 'STK-%'
         ORDER BY m.sent_at DESC, m.id DESC
         `,
-        [groupId, importId]
+        [groupId, importId],
       );
       for (const imgRow of imageRows) {
         await bus.enqueue("analyze.image", { messageId: String(imgRow.id) });
@@ -241,7 +236,7 @@ async function _runImport(
           AND m.media_filename NOT ILIKE 'STK-%'
         ORDER BY m.sent_at DESC, m.id DESC
         `,
-        [groupId, importId]
+        [groupId, importId],
       );
       for (const vidRow of videoRows) {
         await bus.enqueue("analyze.video", { messageId: String(vidRow.id) });

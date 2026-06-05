@@ -46,7 +46,7 @@ export type PruneMediaFileDeps = {
 export async function pruneMediaFile(
   client: pg.Pool | pg.PoolClient,
   messageId: number,
-  deps: PruneMediaFileDeps
+  deps: PruneMediaFileDeps,
 ): Promise<void> {
   // No-op when retention is requested.
   if (deps.retainMedia) {
@@ -58,7 +58,7 @@ export async function pruneMediaFile(
   // Read the current media_path for this message.
   const { rows } = await client.query<{ media_path: string | null; media_status: string | null }>(
     `SELECT media_path, media_status FROM messages WHERE id = $1`,
-    [messageId]
+    [messageId],
   );
 
   const row = rows[0];
@@ -75,7 +75,7 @@ export async function pruneMediaFile(
       if (code !== "ENOENT") {
         // Log the warning but continue — derived text is the source of truth.
         console.warn(
-          `[pruneMediaFile] failed to delete ${mediaPath} for message ${messageId}: ${String(err)}`
+          `[pruneMediaFile] failed to delete ${mediaPath} for message ${messageId}: ${String(err)}`,
         );
       }
       // ENOENT: file already gone — that's fine, still mark pruned.
@@ -85,6 +85,6 @@ export async function pruneMediaFile(
   // Update the DB — always mark pruned, regardless of whether unlink succeeded.
   await client.query(
     `UPDATE messages SET media_status = 'pruned', media_path = NULL WHERE id = $1`,
-    [messageId]
+    [messageId],
   );
 }

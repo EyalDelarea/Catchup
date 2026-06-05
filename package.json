@@ -14,7 +14,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate": "tsx src/db/migrate.ts up",
     "migrate:down": "tsx src/db/migrate.ts down",
-    "worker": "tsx src/workers/worker.ts"
+    "worker": "tsx src/workers/worker.ts",
+    "lint": "biome lint src",
+    "format": "biome format --write src",
+    "check": "biome check src"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc13",
@@ -28,6 +31,7 @@
     "unzipper": "^0.12.3"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.16",
     "@testcontainers/postgresql": "^12.0.1",
     "@testcontainers/rabbitmq": "^12.0.1",
     "@types/amqplib": "^0.10.7",

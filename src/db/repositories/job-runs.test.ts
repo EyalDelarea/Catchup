@@ -1,17 +1,14 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../migrate.js";
 import {
-  upsertJobRun,
-  setJobStatus,
   countJobsByStatus,
   resetStaleRunningJobs,
+  setJobStatus,
+  upsertJobRun,
 } from "./job-runs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -53,7 +50,7 @@ describe("job-runs repository", () => {
       maxAttempts: 3,
     });
     const { rows } = await pool.query<{ type: string }>(
-      `SELECT type FROM job_runs WHERE type IN ('analyze.image','analyze.video') ORDER BY type`
+      `SELECT type FROM job_runs WHERE type IN ('analyze.image','analyze.video') ORDER BY type`,
     );
     expect(rows.map((r) => r.type)).toEqual(["analyze.image", "analyze.video"]);
   });
@@ -76,10 +73,9 @@ describe("job-runs repository", () => {
         attempts: number;
         max_attempts: number;
         payload: { filePath: string };
-      }>(
-        `SELECT id, type, status, attempts, max_attempts, payload FROM job_runs WHERE id = $1`,
-        [JOB_ID_1]
-      );
+      }>(`SELECT id, type, status, attempts, max_attempts, payload FROM job_runs WHERE id = $1`, [
+        JOB_ID_1,
+      ]);
 
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({
@@ -105,13 +101,13 @@ describe("job-runs repository", () => {
 
       const { rows } = await pool.query<{ cnt: string }>(
         `SELECT count(*) AS cnt FROM job_runs WHERE id = $1`,
-        [JOB_ID_1]
+        [JOB_ID_1],
       );
       expect(Number(rows[0].cnt)).toBe(1);
 
       const { rows: updated } = await pool.query<{ status: string; attempts: number }>(
         `SELECT status, attempts FROM job_runs WHERE id = $1`,
-        [JOB_ID_1]
+        [JOB_ID_1],
       );
       expect(updated[0].status).toBe("running");
       expect(updated[0].attempts).toBe(1);
@@ -120,7 +116,7 @@ describe("job-runs repository", () => {
     it("touches updated_at on update", async () => {
       const { rows: before } = await pool.query<{ updated_at: Date }>(
         `SELECT updated_at FROM job_runs WHERE id = $1`,
-        [JOB_ID_1]
+        [JOB_ID_1],
       );
       const beforeTs = before[0].updated_at.getTime();
 
@@ -138,7 +134,7 @@ describe("job-runs repository", () => {
 
       const { rows: after } = await pool.query<{ updated_at: Date }>(
         `SELECT updated_at FROM job_runs WHERE id = $1`,
-        [JOB_ID_1]
+        [JOB_ID_1],
       );
       expect(after[0].updated_at.getTime()).toBeGreaterThanOrEqual(beforeTs);
     });
@@ -159,7 +155,7 @@ describe("job-runs repository", () => {
 
       const { rows } = await pool.query<{ status: string }>(
         `SELECT status FROM job_runs WHERE id = $1`,
-        [JOB_ID_2]
+        [JOB_ID_2],
       );
       expect(rows[0].status).toBe("running");
     });
@@ -169,7 +165,7 @@ describe("job-runs repository", () => {
 
       const { rows } = await pool.query<{ status: string; last_error: string }>(
         `SELECT status, last_error FROM job_runs WHERE id = $1`,
-        [JOB_ID_2]
+        [JOB_ID_2],
       );
       expect(rows[0].status).toBe("failed");
       expect(rows[0].last_error).toBe("something went wrong");
@@ -189,7 +185,7 @@ describe("job-runs repository", () => {
       // Pending: no start time yet.
       const pendingRow = await pool.query<{ started_at: Date | null }>(
         `SELECT started_at FROM job_runs WHERE id = $1`,
-        [jobId]
+        [jobId],
       );
       expect(pendingRow.rows[0].started_at).toBeNull();
 
@@ -197,7 +193,7 @@ describe("job-runs repository", () => {
       await setJobStatus(pool, jobId, "running");
       const firstRun = await pool.query<{ started_at: Date }>(
         `SELECT started_at FROM job_runs WHERE id = $1`,
-        [jobId]
+        [jobId],
       );
       expect(firstRun.rows[0].started_at).not.toBeNull();
       const firstStart = firstRun.rows[0].started_at.getTime();
@@ -206,7 +202,7 @@ describe("job-runs repository", () => {
       await setJobStatus(pool, jobId, "failed", "boom");
       const afterFail = await pool.query<{ started_at: Date }>(
         `SELECT started_at FROM job_runs WHERE id = $1`,
-        [jobId]
+        [jobId],
       );
       expect(afterFail.rows[0].started_at.getTime()).toBe(firstStart);
 
@@ -215,7 +211,7 @@ describe("job-runs repository", () => {
       await setJobStatus(pool, jobId, "running");
       const secondRun = await pool.query<{ started_at: Date }>(
         `SELECT started_at FROM job_runs WHERE id = $1`,
-        [jobId]
+        [jobId],
       );
       expect(secondRun.rows[0].started_at.getTime()).toBeGreaterThan(firstStart);
     });
@@ -237,7 +233,7 @@ describe("job-runs repository", () => {
         await setJobStatus(pool, jobId, status);
         const { rows } = await pool.query<{ status: string }>(
           `SELECT status FROM job_runs WHERE id = $1`,
-          [jobId]
+          [jobId],
         );
         expect(rows[0].status).toBe(status);
       }
@@ -296,9 +292,30 @@ describe("job-runs repository", () => {
       const doneId = "550e8400-e29b-41d4-a716-446655440032";
 
       // Insert two 'running' rows and one 'done' row
-      await upsertJobRun(pool, { id: runId1, type: "import.file", status: "running", payload: {}, attempts: 1, maxAttempts: 3 });
-      await upsertJobRun(pool, { id: runId2, type: "transcribe.voicenote", status: "running", payload: {}, attempts: 1, maxAttempts: 3 });
-      await upsertJobRun(pool, { id: doneId, type: "import.file", status: "done", payload: {}, attempts: 1, maxAttempts: 3 });
+      await upsertJobRun(pool, {
+        id: runId1,
+        type: "import.file",
+        status: "running",
+        payload: {},
+        attempts: 1,
+        maxAttempts: 3,
+      });
+      await upsertJobRun(pool, {
+        id: runId2,
+        type: "transcribe.voicenote",
+        status: "running",
+        payload: {},
+        attempts: 1,
+        maxAttempts: 3,
+      });
+      await upsertJobRun(pool, {
+        id: doneId,
+        type: "import.file",
+        status: "done",
+        payload: {},
+        attempts: 1,
+        maxAttempts: 3,
+      });
 
       const affected = await resetStaleRunningJobs(pool);
       expect(affected).toBeGreaterThanOrEqual(2);
@@ -306,7 +323,8 @@ describe("job-runs repository", () => {
       // Both running rows should now be 'failed' with the sentinel error
       for (const id of [runId1, runId2]) {
         const { rows } = await pool.query<{ status: string; last_error: string }>(
-          `SELECT status, last_error FROM job_runs WHERE id = $1`, [id]
+          `SELECT status, last_error FROM job_runs WHERE id = $1`,
+          [id],
         );
         expect(rows[0].status).toBe("failed");
         expect(rows[0].last_error).toBe("worker restarted");
@@ -314,7 +332,8 @@ describe("job-runs repository", () => {
 
       // 'done' row must be untouched
       const { rows: doneRows } = await pool.query<{ status: string }>(
-        `SELECT status FROM job_runs WHERE id = $1`, [doneId]
+        `SELECT status FROM job_runs WHERE id = $1`,
+        [doneId],
       );
       expect(doneRows[0].status).toBe("done");
     });
@@ -361,7 +380,7 @@ describe("job-runs repository", () => {
 
       const { rows } = await pool.query<{ attempts: number }>(
         `SELECT attempts FROM job_runs WHERE id = $1`,
-        [jobId]
+        [jobId],
       );
       expect(rows[0].attempts).toBe(2);
     });

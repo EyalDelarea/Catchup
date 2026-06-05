@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { buildPrompt, estimateTokens } from "./prompt.js";
 import type { SelectedMessage } from "./select.js";
 
@@ -47,7 +47,13 @@ describe("buildPrompt", () => {
       const { system } = buildPrompt(msgs);
       // Should mention omitting sections that have no content
       const lower = system.toLowerCase();
-      expect(lower.includes("omit") || lower.includes("only when") || lower.includes("no content") || lower.includes("has content") || lower.includes("relevant")).toBe(true);
+      expect(
+        lower.includes("omit") ||
+          lower.includes("only when") ||
+          lower.includes("no content") ||
+          lower.includes("has content") ||
+          lower.includes("relevant"),
+      ).toBe(true);
     });
 
     it("enforces the Hebrew same-language rule (R6)", () => {
@@ -59,7 +65,13 @@ describe("buildPrompt", () => {
       const { system } = buildPrompt(msgs);
       // Must mention naming the owner/responsible person
       const lower = system.toLowerCase();
-      expect(lower.includes("owner") || lower.includes("responsible") || lower.includes("stated") || system.includes("אחראי") || system.includes("בעל")).toBe(true);
+      expect(
+        lower.includes("owner") ||
+          lower.includes("responsible") ||
+          lower.includes("stated") ||
+          system.includes("אחראי") ||
+          system.includes("בעל"),
+      ).toBe(true);
     });
 
     it("enforces the no-invent / no-pad rule", () => {
@@ -76,7 +88,11 @@ describe("buildPrompt", () => {
     it("still instructs the model to reply with summary only (no preamble)", () => {
       const { system } = buildPrompt(msgs);
       const lower = system.toLowerCase();
-      expect(lower.includes("no preamble") || lower.includes("reply with") || lower.includes("summary only")).toBe(true);
+      expect(
+        lower.includes("no preamble") ||
+          lower.includes("reply with") ||
+          lower.includes("summary only"),
+      ).toBe(true);
     });
   });
 
@@ -84,7 +100,9 @@ describe("buildPrompt", () => {
     it("< 25 messages: brief / תקציר tier guidance", () => {
       const { system } = buildPrompt(makeMessages(10));
       const lower = system.toLowerCase();
-      expect(lower.includes("brief") || lower.includes("concise") || lower.includes("short")).toBe(true);
+      expect(lower.includes("brief") || lower.includes("concise") || lower.includes("short")).toBe(
+        true,
+      );
     });
 
     it("25–99 messages: several sections tier guidance", () => {
@@ -96,13 +114,19 @@ describe("buildPrompt", () => {
     it("100–299 messages: comprehensive / multiple sections tier guidance", () => {
       const { system } = buildPrompt(makeMessages(120));
       const lower = system.toLowerCase();
-      expect(lower.includes("comprehensive") || lower.includes("all relevant") || lower.includes("multiple")).toBe(true);
+      expect(
+        lower.includes("comprehensive") ||
+          lower.includes("all relevant") ||
+          lower.includes("multiple"),
+      ).toBe(true);
     });
 
     it(">= 300 messages: extensive / all sections in depth tier guidance", () => {
       const { system } = buildPrompt(makeMessages(350));
       const lower = system.toLowerCase();
-      expect(lower.includes("extensive") || lower.includes("in depth") || lower.includes("thorough")).toBe(true);
+      expect(
+        lower.includes("extensive") || lower.includes("in depth") || lower.includes("thorough"),
+      ).toBe(true);
     });
 
     it("boundary: exactly 25 messages uses the mid tier (not brief)", () => {

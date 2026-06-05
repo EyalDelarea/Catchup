@@ -1,19 +1,21 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroup } from "../db/repositories/groups.js";
-import { insertMessages } from "../db/repositories/messages.js";
-import { insertTranscript } from "../db/repositories/transcripts.js";
 import { insertMediaAnalysis } from "../db/repositories/media-analyses.js";
+import { insertMessages } from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
+import { insertTranscript } from "../db/repositories/transcripts.js";
 import type { NormalizedMessage } from "../importer/types.js";
-import { selectMessages, selectAfterCursor, firstPendingVoiceNoteAfter, firstPendingVisualMediaAfter } from "./select.js";
+import {
+  firstPendingVisualMediaAfter,
+  firstPendingVoiceNoteAfter,
+  selectAfterCursor,
+  selectMessages,
+} from "./select.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
@@ -33,16 +35,27 @@ describe("selectMessages", () => {
     await container?.stop();
   }, 30_000);
 
-  async function seed(groupId: number, m: Partial<NormalizedMessage> & { dedupeKey: string; sentAt: Date }): Promise<number> {
+  async function seed(
+    groupId: number,
+    m: Partial<NormalizedMessage> & { dedupeKey: string; sentAt: Date },
+  ): Promise<number> {
     const senderName = m.senderName !== undefined ? m.senderName : "Dana";
     let participantId: number | null = null;
     if (senderName != null) {
       participantId = await upsertParticipant(pool, senderName);
     }
     const row: NormalizedMessage & { participantId: number | null } = {
-      groupId, importId: null, source: "import", senderName,
-      messageType: "text", textContent: "hi", mediaFilename: null,
-      mediaPath: null, mediaStatus: null, externalId: null, participantId,
+      groupId,
+      importId: null,
+      source: "import",
+      senderName,
+      messageType: "text",
+      textContent: "hi",
+      mediaFilename: null,
+      mediaPath: null,
+      mediaStatus: null,
+      externalId: null,
+      participantId,
       ...m,
       // Re-apply participantId after spread so it reflects the resolved value
       // (unless caller explicitly overrides senderName to null above)
@@ -54,17 +67,51 @@ describe("selectMessages", () => {
       row.participantId = participantId;
     }
     await insertMessages(pool, [row]);
-    const { rows } = await pool.query<{ id: string }>(`SELECT id FROM messages WHERE dedupe_key=$1`, [row.dedupeKey]);
+    const { rows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages WHERE dedupe_key=$1`,
+      [row.dedupeKey],
+    );
     return Number(rows[0].id);
   }
 
   it("returns content-bearing messages chronologically, transcript substituting for a voice note, excluding system/empty", async () => {
     const g = await upsertGroup(pool, { name: "SEL-1", source: "import" });
-    await seed(g, { dedupeKey: "s1", sentAt: new Date("2026-01-01T10:00:00Z"), textContent: "first" });
-    const voiceId = await seed(g, { dedupeKey: "s2", sentAt: new Date("2026-01-01T11:00:00Z"), messageType: "media", textContent: null, mediaFilename: "a.opus", mediaPath: "/tmp/a.opus", mediaStatus: "present" });
-    await seed(g, { dedupeKey: "s3", sentAt: new Date("2026-01-01T12:00:00Z"), messageType: "system", senderName: null, textContent: "X added Y" });
-    await seed(g, { dedupeKey: "s4", sentAt: new Date("2026-01-01T13:00:00Z"), messageType: "media", textContent: null, mediaFilename: "b.opus", mediaPath: "/tmp/b.opus", mediaStatus: "present" });
-    await insertTranscript(pool, { messageId: voiceId, transcript: "שלום מהקול", engine: "t", status: "completed" });
+    await seed(g, {
+      dedupeKey: "s1",
+      sentAt: new Date("2026-01-01T10:00:00Z"),
+      textContent: "first",
+    });
+    const voiceId = await seed(g, {
+      dedupeKey: "s2",
+      sentAt: new Date("2026-01-01T11:00:00Z"),
+      messageType: "media",
+      textContent: null,
+      mediaFilename: "a.opus",
+      mediaPath: "/tmp/a.opus",
+      mediaStatus: "present",
+    });
+    await seed(g, {
+      dedupeKey: "s3",
+      sentAt: new Date("2026-01-01T12:00:00Z"),
+      messageType: "system",
+      senderName: null,
+      textContent: "X added Y",
+    });
+    await seed(g, {
+      dedupeKey: "s4",
+      sentAt: new Date("2026-01-01T13:00:00Z"),
+      messageType: "media",
+      textContent: null,
+      mediaFilename: "b.opus",
+      mediaPath: "/tmp/b.opus",
+      mediaStatus: "present",
+    });
+    await insertTranscript(pool, {
+      messageId: voiceId,
+      transcript: "שלום מהקול",
+      engine: "t",
+      status: "completed",
+    });
 
     const msgs = await selectMessages(pool, g, { last: 100 });
     expect(msgs.map((x) => x.content)).toEqual(["first", "שלום מהקול"]);
@@ -75,7 +122,11 @@ describe("selectMessages", () => {
   it("--last N returns the newest N in chronological order", async () => {
     const g = await upsertGroup(pool, { name: "SEL-2", source: "import" });
     for (let i = 0; i < 5; i++) {
-      await seed(g, { dedupeKey: `n${i}`, sentAt: new Date(`2026-02-0${i + 1}T10:00:00Z`), textContent: `m${i}` });
+      await seed(g, {
+        dedupeKey: `n${i}`,
+        sentAt: new Date(`2026-02-0${i + 1}T10:00:00Z`),
+        textContent: `m${i}`,
+      });
     }
     const msgs = await selectMessages(pool, g, { last: 2 });
     expect(msgs.map((x) => x.content)).toEqual(["m3", "m4"]);
@@ -83,8 +134,16 @@ describe("selectMessages", () => {
 
   it("--since returns only messages on/after the date", async () => {
     const g = await upsertGroup(pool, { name: "SEL-3", source: "import" });
-    await seed(g, { dedupeKey: "old", sentAt: new Date("2026-03-01T10:00:00Z"), textContent: "old" });
-    await seed(g, { dedupeKey: "new", sentAt: new Date("2026-03-10T10:00:00Z"), textContent: "new" });
+    await seed(g, {
+      dedupeKey: "old",
+      sentAt: new Date("2026-03-01T10:00:00Z"),
+      textContent: "old",
+    });
+    await seed(g, {
+      dedupeKey: "new",
+      sentAt: new Date("2026-03-10T10:00:00Z"),
+      textContent: "new",
+    });
     const msgs = await selectMessages(pool, g, { since: new Date("2026-03-05T00:00:00Z") });
     expect(msgs.map((x) => x.content)).toEqual(["new"]);
   });
@@ -113,7 +172,7 @@ describe("selectAfterCursor", () => {
 
   async function seed(
     groupId: number,
-    m: Partial<NormalizedMessage> & { dedupeKey: string; sentAt: Date }
+    m: Partial<NormalizedMessage> & { dedupeKey: string; sentAt: Date },
   ): Promise<number> {
     const senderName = m.senderName !== undefined ? m.senderName : "Dana";
     let participantId: number | null = null;
@@ -121,9 +180,17 @@ describe("selectAfterCursor", () => {
       participantId = await upsertParticipant(pool, senderName);
     }
     const row: NormalizedMessage & { participantId: number | null } = {
-      groupId, importId: null, source: "import", senderName,
-      messageType: "text", textContent: "hi", mediaFilename: null,
-      mediaPath: null, mediaStatus: null, externalId: null, participantId,
+      groupId,
+      importId: null,
+      source: "import",
+      senderName,
+      messageType: "text",
+      textContent: "hi",
+      mediaFilename: null,
+      mediaPath: null,
+      mediaStatus: null,
+      externalId: null,
+      participantId,
       ...m,
     };
     if (m.senderName === null) {
@@ -134,7 +201,7 @@ describe("selectAfterCursor", () => {
     await insertMessages(pool, [row]);
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM messages WHERE dedupe_key=$1`,
-      [row.dedupeKey]
+      [row.dedupeKey],
     );
     return Number(rows[0]!.id);
   }
@@ -226,7 +293,11 @@ describe("selectAfterCursor", () => {
     const sentAt0 = new Date("2026-04-01T10:00:00Z");
     const sentAt1 = new Date("2026-04-01T11:00:00Z");
 
-    const anchorId = await seed(g, { dedupeKey: "sac4-anchor", sentAt: sentAt0, textContent: "anchor" });
+    const anchorId = await seed(g, {
+      dedupeKey: "sac4-anchor",
+      sentAt: sentAt0,
+      textContent: "anchor",
+    });
     const msgId = await seed(g, { dedupeKey: "sac4-msg", sentAt: sentAt1, textContent: "after" });
 
     const results = await selectAfterCursor(pool, g, { sentAt: sentAt0, messageId: anchorId });
@@ -262,7 +333,7 @@ describe("firstPendingVoiceNoteAfter", () => {
 
   async function seed(
     groupId: number,
-    m: Partial<NormalizedMessage> & { dedupeKey: string; sentAt: Date }
+    m: Partial<NormalizedMessage> & { dedupeKey: string; sentAt: Date },
   ): Promise<number> {
     const senderName = m.senderName !== undefined ? m.senderName : "Dana";
     let participantId: number | null = null;
@@ -270,9 +341,17 @@ describe("firstPendingVoiceNoteAfter", () => {
       participantId = await upsertParticipant(pool, senderName);
     }
     const row: NormalizedMessage & { participantId: number | null } = {
-      groupId, importId: null, source: "import", senderName,
-      messageType: "text", textContent: "hi", mediaFilename: null,
-      mediaPath: null, mediaStatus: null, externalId: null, participantId,
+      groupId,
+      importId: null,
+      source: "import",
+      senderName,
+      messageType: "text",
+      textContent: "hi",
+      mediaFilename: null,
+      mediaPath: null,
+      mediaStatus: null,
+      externalId: null,
+      participantId,
       ...m,
     };
     if (m.senderName === null) {
@@ -283,7 +362,7 @@ describe("firstPendingVoiceNoteAfter", () => {
     await insertMessages(pool, [row]);
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM messages WHERE dedupe_key=$1`,
-      [row.dedupeKey]
+      [row.dedupeKey],
     );
     return Number(rows[0]!.id);
   }
@@ -459,7 +538,7 @@ describe("selectMessages with media_analyses", () => {
 
   async function seed(
     groupId: number,
-    m: Partial<NormalizedMessage> & { dedupeKey: string; sentAt: Date }
+    m: Partial<NormalizedMessage> & { dedupeKey: string; sentAt: Date },
   ): Promise<number> {
     const senderName = m.senderName !== undefined ? m.senderName : "Dana";
     let participantId: number | null = null;
@@ -467,9 +546,17 @@ describe("selectMessages with media_analyses", () => {
       participantId = await upsertParticipant(pool, senderName);
     }
     const row: NormalizedMessage & { participantId: number | null } = {
-      groupId, importId: null, source: "import", senderName,
-      messageType: "text", textContent: "hi", mediaFilename: null,
-      mediaPath: null, mediaStatus: null, externalId: null, participantId,
+      groupId,
+      importId: null,
+      source: "import",
+      senderName,
+      messageType: "text",
+      textContent: "hi",
+      mediaFilename: null,
+      mediaPath: null,
+      mediaStatus: null,
+      externalId: null,
+      participantId,
       ...m,
     };
     if (m.senderName === null) {
@@ -480,7 +567,7 @@ describe("selectMessages with media_analyses", () => {
     await insertMessages(pool, [row]);
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM messages WHERE dedupe_key=$1`,
-      [row.dedupeKey]
+      [row.dedupeKey],
     );
     return Number(rows[0]!.id);
   }
@@ -662,7 +749,7 @@ describe("firstPendingVisualMediaAfter", () => {
 
   async function seed(
     groupId: number,
-    m: Partial<NormalizedMessage> & { dedupeKey: string; sentAt: Date }
+    m: Partial<NormalizedMessage> & { dedupeKey: string; sentAt: Date },
   ): Promise<number> {
     const senderName = m.senderName !== undefined ? m.senderName : "Dana";
     let participantId: number | null = null;
@@ -670,9 +757,17 @@ describe("firstPendingVisualMediaAfter", () => {
       participantId = await upsertParticipant(pool, senderName);
     }
     const row: NormalizedMessage & { participantId: number | null } = {
-      groupId, importId: null, source: "import", senderName,
-      messageType: "text", textContent: "hi", mediaFilename: null,
-      mediaPath: null, mediaStatus: null, externalId: null, participantId,
+      groupId,
+      importId: null,
+      source: "import",
+      senderName,
+      messageType: "text",
+      textContent: "hi",
+      mediaFilename: null,
+      mediaPath: null,
+      mediaStatus: null,
+      externalId: null,
+      participantId,
       ...m,
     };
     if (m.senderName === null) {
@@ -683,7 +778,7 @@ describe("firstPendingVisualMediaAfter", () => {
     await insertMessages(pool, [row]);
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM messages WHERE dedupe_key=$1`,
-      [row.dedupeKey]
+      [row.dedupeKey],
     );
     return Number(rows[0]!.id);
   }
@@ -693,7 +788,11 @@ describe("firstPendingVisualMediaAfter", () => {
     const t0 = new Date("2026-06-01T10:00:00Z");
     const t1 = new Date("2026-06-01T11:00:00Z");
 
-    const anchorId = await seed(g, { dedupeKey: "fpvi1-anchor", sentAt: t0, textContent: "anchor" });
+    const anchorId = await seed(g, {
+      dedupeKey: "fpvi1-anchor",
+      sentAt: t0,
+      textContent: "anchor",
+    });
     const imgId = await seed(g, {
       dedupeKey: "fpvi1-img",
       sentAt: t1,
@@ -715,7 +814,11 @@ describe("firstPendingVisualMediaAfter", () => {
     const t0 = new Date("2026-06-02T10:00:00Z");
     const t1 = new Date("2026-06-02T11:00:00Z");
 
-    const anchorId = await seed(g, { dedupeKey: "fpvi2-anchor", sentAt: t0, textContent: "anchor" });
+    const anchorId = await seed(g, {
+      dedupeKey: "fpvi2-anchor",
+      sentAt: t0,
+      textContent: "anchor",
+    });
     const imgId = await seed(g, {
       dedupeKey: "fpvi2-img",
       sentAt: t1,
@@ -742,7 +845,11 @@ describe("firstPendingVisualMediaAfter", () => {
     const t0 = new Date("2026-06-03T10:00:00Z");
     const t1 = new Date("2026-06-03T11:00:00Z");
 
-    const anchorId = await seed(g, { dedupeKey: "fpvi3-anchor", sentAt: t0, textContent: "anchor" });
+    const anchorId = await seed(g, {
+      dedupeKey: "fpvi3-anchor",
+      sentAt: t0,
+      textContent: "anchor",
+    });
     const imgId = await seed(g, {
       dedupeKey: "fpvi3-img",
       sentAt: t1,
@@ -771,7 +878,11 @@ describe("firstPendingVisualMediaAfter", () => {
     const t0 = new Date("2026-06-04T10:00:00Z");
     const t1 = new Date("2026-06-04T11:00:00Z");
 
-    const anchorId = await seed(g, { dedupeKey: "fpvi4-anchor", sentAt: t0, textContent: "anchor" });
+    const anchorId = await seed(g, {
+      dedupeKey: "fpvi4-anchor",
+      sentAt: t0,
+      textContent: "anchor",
+    });
     await seed(g, {
       dedupeKey: "fpvi4-img",
       sentAt: t1,
@@ -791,7 +902,11 @@ describe("firstPendingVisualMediaAfter", () => {
     const t0 = new Date("2026-06-05T10:00:00Z");
     const t1 = new Date("2026-06-05T11:00:00Z");
 
-    const anchorId = await seed(g, { dedupeKey: "fpvi5-anchor", sentAt: t0, textContent: "anchor" });
+    const anchorId = await seed(g, {
+      dedupeKey: "fpvi5-anchor",
+      sentAt: t0,
+      textContent: "anchor",
+    });
     await seed(g, {
       dedupeKey: "fpvi5-sticker",
       sentAt: t1,
@@ -811,7 +926,11 @@ describe("firstPendingVisualMediaAfter", () => {
     const t0 = new Date("2026-06-06T10:00:00Z");
     const t1 = new Date("2026-06-06T11:00:00Z");
 
-    const anchorId = await seed(g, { dedupeKey: "fpvi6-anchor", sentAt: t0, textContent: "anchor" });
+    const anchorId = await seed(g, {
+      dedupeKey: "fpvi6-anchor",
+      sentAt: t0,
+      textContent: "anchor",
+    });
     const videoId = await seed(g, {
       dedupeKey: "fpvi6-video",
       sentAt: t1,
@@ -833,7 +952,11 @@ describe("firstPendingVisualMediaAfter", () => {
     const t1 = new Date("2026-06-07T11:00:00Z");
     const t2 = new Date("2026-06-07T12:00:00Z");
 
-    const anchorId = await seed(g, { dedupeKey: "fpvi7-anchor", sentAt: t0, textContent: "anchor" });
+    const anchorId = await seed(g, {
+      dedupeKey: "fpvi7-anchor",
+      sentAt: t0,
+      textContent: "anchor",
+    });
     // Image AT the cursor time/id — should not be returned (strictly after)
     const imgAtCursor = await seed(g, {
       dedupeKey: "fpvi7-at",
@@ -856,7 +979,10 @@ describe("firstPendingVisualMediaAfter", () => {
     });
 
     // Cursor at t1 / imgAtCursor — the image at cursor should NOT be included
-    const result = await firstPendingVisualMediaAfter(pool, g, { sentAt: t1, messageId: imgAtCursor });
+    const result = await firstPendingVisualMediaAfter(pool, g, {
+      sentAt: t1,
+      messageId: imgAtCursor,
+    });
     expect(result).not.toBeNull();
     expect(result!.messageId).toBe(imgAfter);
   });
@@ -864,7 +990,11 @@ describe("firstPendingVisualMediaAfter", () => {
   it("T021-8: returns null when no pending visual media exists after cursor", async () => {
     const g = await upsertGroup(pool, { name: "FPV-IMG-8", source: "import" });
     const t0 = new Date("2026-06-08T10:00:00Z");
-    const anchorId = await seed(g, { dedupeKey: "fpvi8-anchor", sentAt: t0, textContent: "anchor" });
+    const anchorId = await seed(g, {
+      dedupeKey: "fpvi8-anchor",
+      sentAt: t0,
+      textContent: "anchor",
+    });
 
     // Only text message after cursor
     await seed(g, {

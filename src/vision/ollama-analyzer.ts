@@ -25,7 +25,7 @@ type HttpResponseLike = { ok: boolean; status: number; json: () => Promise<unkno
 
 type FetchFn = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string }
+  init: { method: string; headers: Record<string, string>; body: string },
 ) => Promise<HttpResponseLike>;
 
 export type OllamaVisionAnalyzerOptions = {
@@ -77,7 +77,7 @@ function nodeHttpTransport(timeoutMs: number): FetchFn {
               json: async () => JSON.parse(data),
             });
           });
-        }
+        },
       );
       req.on("error", reject);
       req.setTimeout(timeoutMs, () => {

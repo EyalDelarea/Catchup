@@ -15,11 +15,11 @@
  * Engine label: `<visionEngine>+<transcriberEngine|none>`
  */
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { statSync } from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import fsp from "node:fs/promises";
-import { statSync } from "node:fs";
+import { promisify } from "node:util";
 import type { VisionAnalyzer } from "./analyzer.js";
 
 const execFileAsync = promisify(execFile);
@@ -80,9 +80,10 @@ export type AnalyzeVideoInput = {
  */
 export async function analyzeVideo(
   deps: AnalyzeVideoDeps,
-  input: AnalyzeVideoInput
+  input: AnalyzeVideoInput,
 ): Promise<{ description: string; engine: string }> {
-  const { visionAnalyzer, transcribeAudio, extractFrames, extractAudio, maxVideoMb, fileSizeMb } = deps;
+  const { visionAnalyzer, transcribeAudio, extractFrames, extractAudio, maxVideoMb, fileSizeMb } =
+    deps;
   const { mediaPath, thumbnailPath } = input;
 
   const useFullVideo = mediaPath !== null && fileSizeMb(mediaPath) <= maxVideoMb;
@@ -139,9 +140,7 @@ export async function analyzeVideo(
     visionEngine = described.engine;
     speech = null;
   } else {
-    throw new Error(
-      "analyzeVideo: no mediaPath and no thumbnailPath — nothing describable"
-    );
+    throw new Error("analyzeVideo: no mediaPath and no thumbnailPath — nothing describable");
   }
 
   // Compose description
@@ -177,16 +176,19 @@ export async function analyzeVideo(
 export async function extractFramesWithFfmpeg(
   ffmpegPath: string,
   videoPath: string,
-  opts: { fps: number; maxFrames: number }
+  opts: { fps: number; maxFrames: number },
 ): Promise<{ frames: string[]; dir: string }> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "wsum-frames-"));
   const pattern = path.join(dir, "frame-%04d.jpg");
   await execFileAsync(ffmpegPath, [
     "-y",
     "-autorotate",
-    "-i", videoPath,
-    "-vf", `fps=${opts.fps}`,
-    "-frames:v", String(opts.maxFrames),
+    "-i",
+    videoPath,
+    "-vf",
+    `fps=${opts.fps}`,
+    "-frames:v",
+    String(opts.maxFrames),
     pattern,
   ]);
   let files = (await fsp.readdir(dir))
@@ -197,9 +199,9 @@ export async function extractFramesWithFfmpeg(
   // Fallback for sub-1-second videos: fps=1 produces 0 frames, grab one frame.
   if (files.length === 0) {
     const fallbackPath = path.join(dir, "frame-0001.jpg");
-    await execFileAsync(ffmpegPath, [
-      "-y", "-i", videoPath, "-frames:v", "1", fallbackPath,
-    ]).catch(() => {});
+    await execFileAsync(ffmpegPath, ["-y", "-i", videoPath, "-frames:v", "1", fallbackPath]).catch(
+      () => {},
+    );
     const stat = await fsp.stat(fallbackPath).catch(() => null);
     if (stat && stat.size > 0) {
       files = [fallbackPath];
@@ -217,20 +219,21 @@ export async function extractFramesWithFfmpeg(
  */
 export async function extractAudioWithFfmpeg(
   ffmpegPath: string,
-  videoPath: string
+  videoPath: string,
 ): Promise<string | null> {
-  const outPath = path.join(
-    os.tmpdir(),
-    `wsum-va-${crypto.randomUUID()}.wav`
-  );
+  const outPath = path.join(os.tmpdir(), `wsum-va-${crypto.randomUUID()}.wav`);
   try {
     await execFileAsync(ffmpegPath, [
       "-y",
-      "-i", videoPath,
-      "-vn",          // skip video stream
-      "-ar", "16000",
-      "-ac", "1",
-      "-f", "wav",
+      "-i",
+      videoPath,
+      "-vn", // skip video stream
+      "-ar",
+      "16000",
+      "-ac",
+      "1",
+      "-f",
+      "wav",
       outPath,
     ]);
     // Verify the output file was actually created and has non-zero size

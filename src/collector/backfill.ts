@@ -6,13 +6,11 @@
  *
  * T009 — implementation for backfill-orchestrator slice.
  */
-import type pg from "pg";
+
 import type { WAMessage } from "@whiskeysockets/baileys";
+import type pg from "pg";
+import { countReadableByGroup, getNewestAnchor } from "../db/repositories/messages.js";
 import { handleIncomingMessage } from "./collector.js";
-import {
-  countReadableByGroup,
-  getNewestAnchor,
-} from "../db/repositories/messages.js";
 
 export type AnchorKey = { remoteJid: string; id: string; fromMe: boolean };
 
@@ -101,11 +99,7 @@ export async function backfillGroup(deps: BackfillDeps): Promise<BackfillResult>
     };
     let anchorTsMs = anchor.sentAt.getTime();
 
-    while (
-      held < targetWindow &&
-      totalFetched < maxFetch &&
-      (now() - start) < timeoutMs
-    ) {
+    while (held < targetWindow && totalFetched < maxFetch && now() - start < timeoutMs) {
       const want = Math.max(1, Math.min(targetWindow - held, maxFetch - totalFetched));
 
       const remaining = timeoutMs - (now() - start);
@@ -154,7 +148,7 @@ export async function backfillGroup(deps: BackfillDeps): Promise<BackfillResult>
       } catch (err) {
         // Fetch/await failure: best-effort stop with partial
         process.stderr.write(
-          `[backfillGroup] fetch error for groupId=${groupId}: ${err instanceof Error ? err.message : String(err)}\n`
+          `[backfillGroup] fetch error for groupId=${groupId}: ${err instanceof Error ? err.message : String(err)}\n`,
         );
         return { fetched: totalFetched, durationMs: now() - start, partial: true };
       }
@@ -165,7 +159,7 @@ export async function backfillGroup(deps: BackfillDeps): Promise<BackfillResult>
   } catch (err) {
     // Outer catch: DB errors or unexpected failures — never throw to caller
     process.stderr.write(
-      `[backfillGroup] unexpected error for groupId=${groupId}: ${err instanceof Error ? err.message : String(err)}\n`
+      `[backfillGroup] unexpected error for groupId=${groupId}: ${err instanceof Error ? err.message : String(err)}\n`,
     );
     return { fetched: 0, durationMs: now() - start, partial: true };
   }

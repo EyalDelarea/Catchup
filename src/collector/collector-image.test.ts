@@ -7,20 +7,18 @@
  * - Image download failure: media 'missing', NOT enqueued
  * - No downloadImage provided: NOT enqueued
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
+
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runMigrationsUp } from "../db/migrate.js";
-import { handleIncomingMessage } from "./collector.js";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { WAMessage } from "@whiskeysockets/baileys";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { runMigrationsUp } from "../db/migrate.js";
 import { InMemoryJobBus } from "../jobs/in-memory-bus.js";
 import { InMemoryJobRunRecorder } from "../jobs/job-run-recorder.js";
+import { handleIncomingMessage } from "./collector.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
@@ -29,13 +27,15 @@ const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
 // Fake WAMessage factories
 // ---------------------------------------------------------------------------
 
-function makeFakeWAImageMessage(overrides: Partial<{
-  id: string;
-  remoteJid: string;
-  pushName: string;
-  timestampSeconds: number;
-  caption: string | null;
-}> = {}): WAMessage {
+function makeFakeWAImageMessage(
+  overrides: Partial<{
+    id: string;
+    remoteJid: string;
+    pushName: string;
+    timestampSeconds: number;
+    caption: string | null;
+  }> = {},
+): WAMessage {
   const {
     id = "LIVE_IMG_001",
     remoteJid = "img-group@g.us",
@@ -56,11 +56,13 @@ function makeFakeWAImageMessage(overrides: Partial<{
   } as unknown as WAMessage;
 }
 
-function makeFakeWAStickerMessage(overrides: Partial<{
-  id: string;
-  remoteJid: string;
-  timestampSeconds: number;
-}> = {}): WAMessage {
+function makeFakeWAStickerMessage(
+  overrides: Partial<{
+    id: string;
+    remoteJid: string;
+    timestampSeconds: number;
+  }> = {},
+): WAMessage {
   const {
     id = "LIVE_STICKER_001",
     remoteJid = "sticker-group@g.us",
@@ -127,10 +129,9 @@ describe("collector image enqueue (T016)", () => {
     expect(messageId.length).toBeGreaterThan(0);
 
     // Verify the DB row has media_status='present'
-    const { rows } = await pool.query(
-      `SELECT media_status FROM messages WHERE external_id = $1`,
-      ["IMG_ENQUEUE_001"]
-    );
+    const { rows } = await pool.query(`SELECT media_status FROM messages WHERE external_id = $1`, [
+      "IMG_ENQUEUE_001",
+    ]);
     expect(rows[0]!.media_status).toBe("present");
   });
 
@@ -158,7 +159,9 @@ describe("collector image enqueue (T016)", () => {
   it("marks media 'missing' and does NOT enqueue when image download fails", async () => {
     const recorder = new InMemoryJobRunRecorder();
     const bus = new InMemoryJobBus(recorder);
-    const failingDownloader = async () => { throw new Error("download boom"); };
+    const failingDownloader = async () => {
+      throw new Error("download boom");
+    };
 
     const waMsg = makeFakeWAImageMessage({
       id: "IMG_DLFAIL_001",
@@ -176,10 +179,9 @@ describe("collector image enqueue (T016)", () => {
     const imageJobs = recorder.enqueuedJobs.filter((j) => j.job.type === "analyze.image");
     expect(imageJobs).toHaveLength(0);
 
-    const { rows } = await pool.query(
-      `SELECT media_status FROM messages WHERE external_id = $1`,
-      ["IMG_DLFAIL_001"]
-    );
+    const { rows } = await pool.query(`SELECT media_status FROM messages WHERE external_id = $1`, [
+      "IMG_DLFAIL_001",
+    ]);
     expect(rows[0]!.media_status).toBe("missing");
   });
 
@@ -211,12 +213,16 @@ describe("collector image enqueue (T016)", () => {
     });
 
     const first = await handleIncomingMessage(pool, waMsg, {
-      dataDir, bus, downloadImage: fakeImageDownloader,
+      dataDir,
+      bus,
+      downloadImage: fakeImageDownloader,
     });
     expect(first).toBe(true);
 
     const second = await handleIncomingMessage(pool, waMsg, {
-      dataDir, bus, downloadImage: fakeImageDownloader,
+      dataDir,
+      bus,
+      downloadImage: fakeImageDownloader,
     });
     expect(second).toBe(false);
 

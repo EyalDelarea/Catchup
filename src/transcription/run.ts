@@ -2,10 +2,10 @@ import fsp from "node:fs/promises";
 import pg from "pg";
 import { loadConfig } from "../config.js";
 import {
-  selectPendingVoiceNotes,
   countTranscribedVoiceNotes,
-  insertTranscript,
   getVoiceNoteMediaPath,
+  insertTranscript,
+  selectPendingVoiceNotes,
 } from "../db/repositories/transcripts.js";
 import { convertToWav, IvritWhisperTranscriber } from "./ivrit-whisper.js";
 import type { Transcriber } from "./transcriber.js";
@@ -42,14 +42,14 @@ export type TranscribeOneNoteDeps = {
  */
 export async function transcribeOneNote(
   messageId: string,
-  deps: TranscribeOneNoteDeps
+  deps: TranscribeOneNoteDeps,
 ): Promise<void> {
   const pool = new pg.Pool({ connectionString: deps.databaseUrl });
   try {
     const mediaPath = await getVoiceNoteMediaPath(pool, messageId);
     if (!mediaPath) {
       throw new Error(
-        `transcribeOneNote: message ${messageId} not found or not a present voice note`
+        `transcribeOneNote: message ${messageId} not found or not a present voice note`,
       );
     }
 
@@ -121,7 +121,7 @@ type RunTranscriptionDeps = {
 
 export async function runTranscription(
   input: RunTranscriptionInput,
-  deps?: Partial<RunTranscriptionDeps>
+  deps?: Partial<RunTranscriptionDeps>,
 ): Promise<RunTranscriptionResult> {
   const config = loadConfig();
   const databaseUrl = deps?.databaseUrl ?? config.databaseUrl;

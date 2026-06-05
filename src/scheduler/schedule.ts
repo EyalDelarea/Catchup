@@ -79,11 +79,7 @@ export function nextRun(now: Date, times: TimeSlot[]): Date {
  * - lastRun == null (first ever start) → always true (warm on startup).
  * - Guarantees at-most-once when caller records the run before restarting.
  */
-export function dueCatchup(
-  now: Date,
-  lastRun: Date | null,
-  times: TimeSlot[]
-): boolean {
+export function dueCatchup(now: Date, lastRun: Date | null, times: TimeSlot[]): boolean {
   if (lastRun === null) {
     return true;
   }

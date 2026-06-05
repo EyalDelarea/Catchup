@@ -1,15 +1,19 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runMigrationsUp } from "../migrate.js";
-import { upsertGroup, upsertGroupByWhatsappId, listGroups, updateDisplayName, isDisplayNameUnresolved, listUnresolvedGroups } from "./groups.js";
-import { insertMessages } from "./messages.js";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { NormalizedMessage } from "../../importer/types.js";
+import { runMigrationsUp } from "../migrate.js";
+import {
+  isDisplayNameUnresolved,
+  listGroups,
+  listUnresolvedGroups,
+  updateDisplayName,
+  upsertGroup,
+  upsertGroupByWhatsappId,
+} from "./groups.js";
+import { insertMessages } from "./messages.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "..", "migrations");
@@ -18,7 +22,7 @@ function makeMsg(
   groupId: number,
   dedupeKey: string,
   sentAt: Date,
-  overrides: Partial<NormalizedMessage> = {}
+  overrides: Partial<NormalizedMessage> = {},
 ): NormalizedMessage & { participantId: number | null } {
   return {
     groupId,

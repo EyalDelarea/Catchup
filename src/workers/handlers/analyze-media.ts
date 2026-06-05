@@ -32,7 +32,7 @@ export type AnalyzeMediaHandlerDeps = {
 export function makeAnalyzeMediaHandler(deps: AnalyzeMediaHandlerDeps) {
   return async function analyzeMediaHandler(
     job: { payload: { messageId: string } },
-    type: "analyze.image" | "analyze.video"
+    type: "analyze.image" | "analyze.video",
   ): Promise<void> {
     const messageId = Number(job.payload.messageId);
     const kind: "image" | "video" = type === "analyze.video" ? "video" : "image";

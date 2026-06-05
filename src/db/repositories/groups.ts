@@ -19,7 +19,7 @@ type UpsertGroupInput = {
  */
 export async function upsertGroup(
   client: pg.Pool | pg.PoolClient,
-  input: UpsertGroupInput
+  input: UpsertGroupInput,
 ): Promise<number> {
   const result = await client.query<{ id: string }>(
     `
@@ -28,7 +28,7 @@ export async function upsertGroup(
     ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
     RETURNING id
     `,
-    [input.name, input.source]
+    [input.name, input.source],
   );
 
   const row = result.rows[0];
@@ -54,12 +54,12 @@ export async function upsertGroup(
  */
 export async function upsertGroupByWhatsappId(
   client: pg.Pool | pg.PoolClient,
-  input: UpsertGroupByWhatsappIdInput
+  input: UpsertGroupByWhatsappIdInput,
 ): Promise<number> {
   // Check for existing group with this whatsapp_id
   const existing = await client.query<{ id: string; source: string }>(
     `SELECT id, source FROM groups WHERE whatsapp_id = $1 LIMIT 1`,
-    [input.whatsappId]
+    [input.whatsappId],
   );
 
   if (existing.rows.length > 0) {
@@ -68,10 +68,7 @@ export async function upsertGroupByWhatsappId(
 
     // If currently 'import', upgrade to 'mixed'
     if (existingRow.source === "import") {
-      await client.query(
-        `UPDATE groups SET source = 'mixed' WHERE id = $1`,
-        [existingId]
-      );
+      await client.query(`UPDATE groups SET source = 'mixed' WHERE id = $1`, [existingId]);
     }
 
     return existingId;
@@ -92,13 +89,13 @@ export async function upsertGroupByWhatsappId(
           END
     RETURNING id
     `,
-    [input.whatsappId, input.name, "live"]
+    [input.whatsappId, input.name, "live"],
   );
 
   const row = inserted.rows[0];
   if (!row) {
     throw new Error(
-      `upsertGroupByWhatsappId: no row returned for whatsapp_id="${input.whatsappId}"`
+      `upsertGroupByWhatsappId: no row returned for whatsapp_id="${input.whatsappId}"`,
     );
   }
   return Number(row.id);
@@ -106,7 +103,7 @@ export async function upsertGroupByWhatsappId(
 
 /** All stored chats with their source, message count, and last message timestamp, ordered by name. */
 export async function listGroups(
-  client: pg.Pool | pg.PoolClient
+  client: pg.Pool | pg.PoolClient,
 ): Promise<{ name: string; source: string; messageCount: number; lastMessageAt: Date | null }[]> {
   const { rows } = await client.query<{
     name: string;
@@ -120,7 +117,7 @@ export async function listGroups(
     LEFT JOIN messages m ON m.group_id = g.id
     GROUP BY g.id, g.name, g.source
     ORDER BY g.name ASC
-    `
+    `,
   );
   return rows.map((r) => ({
     name: r.name,
@@ -142,11 +139,11 @@ export async function listGroups(
 export async function updateDisplayName(
   client: pg.Pool | pg.PoolClient,
   whatsappId: string,
-  displayName: string
+  displayName: string,
 ): Promise<boolean> {
   const result = await client.query(
     `UPDATE groups SET name = $2 WHERE whatsapp_id = $1 AND name = $1`,
-    [whatsappId, displayName]
+    [whatsappId, displayName],
   );
   return (result.rowCount ?? 0) > 0;
 }
@@ -158,11 +155,11 @@ export async function updateDisplayName(
  */
 export async function isDisplayNameUnresolved(
   client: pg.Pool | pg.PoolClient,
-  whatsappId: string
+  whatsappId: string,
 ): Promise<boolean> {
   const { rows } = await client.query<{ found: boolean }>(
     `SELECT true AS found FROM groups WHERE whatsapp_id = $1 AND name = $1 LIMIT 1`,
-    [whatsappId]
+    [whatsappId],
   );
   return rows.length > 0;
 }
@@ -173,10 +170,10 @@ export async function isDisplayNameUnresolved(
  * Used by the proactive name-resolver to drive a bulk-resolve pass.
  */
 export async function listUnresolvedGroups(
-  client: pg.Pool | pg.PoolClient
+  client: pg.Pool | pg.PoolClient,
 ): Promise<{ id: number; whatsappId: string }[]> {
   const { rows } = await client.query<{ id: string; whatsapp_id: string }>(
-    `SELECT id, whatsapp_id FROM groups WHERE whatsapp_id IS NOT NULL AND name = whatsapp_id`
+    `SELECT id, whatsapp_id FROM groups WHERE whatsapp_id IS NOT NULL AND name = whatsapp_id`,
   );
   return rows.map((r) => ({ id: Number(r.id), whatsappId: r.whatsapp_id }));
 }
@@ -189,7 +186,7 @@ export async function listUnresolvedGroups(
  */
 export async function representativeSenderName(
   client: pg.Pool | pg.PoolClient,
-  groupId: number
+  groupId: number,
 ): Promise<string | null> {
   const { rows } = await client.query<{ display_name: string }>(
     `SELECT p.display_name
@@ -199,7 +196,7 @@ export async function representativeSenderName(
        AND p.display_name IS NOT NULL
      ORDER BY m.sent_at DESC
      LIMIT 1`,
-    [groupId]
+    [groupId],
   );
   return rows[0]?.display_name ?? null;
 }
@@ -207,11 +204,11 @@ export async function representativeSenderName(
 /** Look up a group by its unique name. Returns null if not found. */
 export async function findGroupByName(
   client: pg.Pool | pg.PoolClient,
-  name: string
+  name: string,
 ): Promise<{ id: number; name: string } | null> {
   const { rows } = await client.query<{ id: string; name: string }>(
     `SELECT id, name FROM groups WHERE name = $1 LIMIT 1`,
-    [name]
+    [name],
   );
   if (rows.length === 0) return null;
   return { id: Number(rows[0].id), name: rows[0].name };

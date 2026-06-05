@@ -1,7 +1,7 @@
 import type pg from "pg";
-import type { JobType } from "../jobs/job-types.js";
-import { getServiceStatus, isStale } from "../db/repositories/service-status.js";
 import { countJobsByStatus } from "../db/repositories/job-runs.js";
+import { getServiceStatus, isStale } from "../db/repositories/service-status.js";
+import type { JobType } from "../jobs/job-types.js";
 
 export type QueueDepthEntry = { depth: number | null };
 

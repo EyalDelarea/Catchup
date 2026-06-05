@@ -1,6 +1,6 @@
-import { runner } from "node-pg-migrate";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { runner } from "node-pg-migrate";
 import { loadConfig } from "../config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -13,7 +13,7 @@ export const DEFAULT_MIGRATIONS_DIR = path.resolve(__dirname, "migrations");
  */
 export async function runMigrationsUp(
   databaseUrl?: string,
-  migrationsDir: string = DEFAULT_MIGRATIONS_DIR
+  migrationsDir: string = DEFAULT_MIGRATIONS_DIR,
 ): Promise<void> {
   const url = databaseUrl ?? loadConfig().databaseUrl;
   await runner({
@@ -35,7 +35,7 @@ export async function runMigrationsUp(
  */
 export async function runMigrationsDown(
   databaseUrl?: string,
-  migrationsDir: string = DEFAULT_MIGRATIONS_DIR
+  migrationsDir: string = DEFAULT_MIGRATIONS_DIR,
 ): Promise<void> {
   const url = databaseUrl ?? loadConfig().databaseUrl;
   // Roll back one at a time until none remain

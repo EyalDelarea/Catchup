@@ -6,12 +6,13 @@
  * - InMemoryJobBus (no real broker)
  * - Injected fake pool and service-status functions
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+
 import { EventEmitter } from "node:events";
+import { describe, expect, it, vi } from "vitest";
+import type { CollectorSession } from "../collector/session.js";
 import { InMemoryJobBus } from "../jobs/in-memory-bus.js";
 import { InMemoryJobRunRecorder } from "../jobs/job-run-recorder.js";
 import { attachCollector } from "./live-service.js";
-import type { CollectorSession } from "../collector/session.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,15 +45,11 @@ function makeFakeDeps() {
 
   // Fake handleMessage: by default stores a voice note (returns true) and
   // enqueues the transcription job via the bus.
-  const handleMessage = vi.fn().mockImplementation(
-    async (
-      _pool: unknown,
-      _msg: unknown,
-      _opts: unknown
-    ): Promise<boolean> => {
+  const handleMessage = vi
+    .fn()
+    .mockImplementation(async (_pool: unknown, _msg: unknown, _opts: unknown): Promise<boolean> => {
       return true;
-    }
-  );
+    });
 
   return { session, bus, setConnected, recordHeartbeat, handleMessage };
 }
@@ -63,8 +60,7 @@ function makeFakeDeps() {
 
 describe("attachCollector", () => {
   it("sets connected + starts heartbeat on 'connected' event", async () => {
-    const { session, bus, setConnected, recordHeartbeat, handleMessage } =
-      makeFakeDeps();
+    const { session, bus, setConnected, recordHeartbeat, handleMessage } = makeFakeDeps();
 
     attachCollector({
       session: session as unknown as CollectorSession,
@@ -88,8 +84,7 @@ describe("attachCollector", () => {
   });
 
   it("sets disconnected on 'disconnected' event", async () => {
-    const { session, bus, setConnected, recordHeartbeat, handleMessage } =
-      makeFakeDeps();
+    const { session, bus, setConnected, recordHeartbeat, handleMessage } = makeFakeDeps();
 
     attachCollector({
       session: session as unknown as CollectorSession,
@@ -111,8 +106,7 @@ describe("attachCollector", () => {
   });
 
   it("calls handleMessage on 'message' event and passes bus", async () => {
-    const { session, bus, setConnected, recordHeartbeat, handleMessage } =
-      makeFakeDeps();
+    const { session, bus, setConnected, recordHeartbeat, handleMessage } = makeFakeDeps();
 
     attachCollector({
       session: session as unknown as CollectorSession,
@@ -147,9 +141,7 @@ describe("attachCollector", () => {
   it("crash-isolation: a throwing handleMessage does NOT propagate (no unhandled rejection), and onError is called", async () => {
     const { session, bus, setConnected, recordHeartbeat } = makeFakeDeps();
 
-    const throwingHandleMessage = vi
-      .fn()
-      .mockRejectedValue(new Error("handler exploded"));
+    const throwingHandleMessage = vi.fn().mockRejectedValue(new Error("handler exploded"));
     const onError = vi.fn();
 
     attachCollector({
@@ -174,14 +166,11 @@ describe("attachCollector", () => {
     // onError was called with the error
     expect(onError).toHaveBeenCalledOnce();
     expect(onError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-    expect((onError.mock.calls[0]?.[0] as Error).message).toBe(
-      "handler exploded"
-    );
+    expect((onError.mock.calls[0]?.[0] as Error).message).toBe("handler exploded");
   });
 
   it("stop() stops the heartbeat and calls session.stop()", async () => {
-    const { session, bus, setConnected, recordHeartbeat, handleMessage } =
-      makeFakeDeps();
+    const { session, bus, setConnected, recordHeartbeat, handleMessage } = makeFakeDeps();
 
     const handle = attachCollector({
       session: session as unknown as CollectorSession,
@@ -218,8 +207,7 @@ describe("attachCollector", () => {
   });
 
   it("stop() before any connection does not throw", () => {
-    const { session, bus, setConnected, recordHeartbeat, handleMessage } =
-      makeFakeDeps();
+    const { session, bus, setConnected, recordHeartbeat, handleMessage } = makeFakeDeps();
 
     const handle = attachCollector({
       session: session as unknown as CollectorSession,

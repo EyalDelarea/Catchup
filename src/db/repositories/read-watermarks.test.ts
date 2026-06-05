@@ -1,16 +1,13 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { NormalizedMessage } from "../../importer/types.js";
 import { runMigrationsUp } from "../migrate.js";
 import { upsertGroup } from "./groups.js";
 import { insertMessages } from "./messages.js";
 import { upsertParticipant } from "./participants.js";
-import type { NormalizedMessage } from "../../importer/types.js";
 import { getWatermark, upsertWatermark } from "./read-watermarks.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,11 +29,7 @@ describe("read-watermarks repository", () => {
   }, 30_000);
 
   /** Insert a single message and return its id. */
-  async function seedMessage(
-    groupId: number,
-    dedupeKey: string,
-    sentAt: Date
-  ): Promise<number> {
+  async function seedMessage(groupId: number, dedupeKey: string, sentAt: Date): Promise<number> {
     const participantId = await upsertParticipant(pool, "WM-Sender");
     const row: NormalizedMessage & { participantId: number | null } = {
       groupId,
@@ -56,7 +49,7 @@ describe("read-watermarks repository", () => {
     await insertMessages(pool, [row]);
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM messages WHERE dedupe_key = $1`,
-      [dedupeKey]
+      [dedupeKey],
     );
     return Number(rows[0]!.id);
   }
@@ -164,10 +157,9 @@ describe("read-watermarks repository", () => {
     await pool.query(`DELETE FROM messages WHERE id = $1`, [msgId]);
 
     // Watermark row must be gone (CASCADE)
-    const { rows } = await pool.query(
-      `SELECT 1 FROM read_watermarks WHERE group_id = $1`,
-      [groupId]
-    );
+    const { rows } = await pool.query(`SELECT 1 FROM read_watermarks WHERE group_id = $1`, [
+      groupId,
+    ]);
     expect(rows).toHaveLength(0);
   });
 });

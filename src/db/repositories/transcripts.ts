@@ -35,7 +35,7 @@ function groupFilter(groupName: string | undefined, params: unknown[]): string {
 /** Media messages that are audio, present on disk, and not yet transcribed. */
 export async function selectPendingVoiceNotes(
   client: pg.Pool | pg.PoolClient,
-  groupName?: string
+  groupName?: string,
 ): Promise<PendingVoiceNote[]> {
   const params: unknown[] = [];
   const filter = groupFilter(groupName, params);
@@ -53,7 +53,7 @@ export async function selectPendingVoiceNotes(
       ${filter}
     ORDER BY m.sent_at ASC
     `,
-    params
+    params,
   );
   return rows.map((r) => ({ messageId: Number(r.id), mediaPath: r.media_path }));
 }
@@ -61,7 +61,7 @@ export async function selectPendingVoiceNotes(
 /** Count of audio media messages that already have a transcript (any status). */
 export async function countTranscribedVoiceNotes(
   client: pg.Pool | pg.PoolClient,
-  groupName?: string
+  groupName?: string,
 ): Promise<number> {
   const params: unknown[] = [];
   const filter = groupFilter(groupName, params);
@@ -75,7 +75,7 @@ export async function countTranscribedVoiceNotes(
       AND ${AUDIO_PREDICATE}
       ${filter}
     `,
-    params
+    params,
   );
   return Number(rows[0].cnt);
 }
@@ -90,7 +90,7 @@ export async function countTranscribedVoiceNotes(
  */
 export async function listUntranscribedVoiceNoteIdsByGroup(
   client: pg.Pool | pg.PoolClient,
-  groupName: string
+  groupName: string,
 ): Promise<string[]> {
   const { rows } = await client.query<{ id: string }>(
     `
@@ -106,7 +106,7 @@ export async function listUntranscribedVoiceNoteIdsByGroup(
       AND t.id IS NULL
     ORDER BY m.sent_at ASC
     `,
-    [groupName]
+    [groupName],
   );
   return rows.map((r) => r.id);
 }
@@ -121,7 +121,7 @@ export async function listUntranscribedVoiceNoteIdsByGroup(
  */
 export async function getVoiceNoteMediaPath(
   client: pg.Pool | pg.PoolClient,
-  messageId: string
+  messageId: string,
 ): Promise<string | null> {
   const { rows } = await client.query<{ media_path: string }>(
     `
@@ -133,7 +133,7 @@ export async function getVoiceNoteMediaPath(
       AND m.media_path IS NOT NULL
       AND ${AUDIO_PREDICATE}
     `,
-    [messageId]
+    [messageId],
   );
   return rows[0]?.media_path ?? null;
 }
@@ -144,11 +144,11 @@ export async function getVoiceNoteMediaPath(
  */
 export async function hasTranscript(
   client: pg.Pool | pg.PoolClient,
-  messageId: string
+  messageId: string,
 ): Promise<boolean> {
   const { rows } = await client.query<{ cnt: string }>(
     `SELECT COUNT(*) AS cnt FROM transcripts WHERE message_id = $1`,
-    [messageId]
+    [messageId],
   );
   return Number(rows[0].cnt) > 0;
 }
@@ -156,7 +156,7 @@ export async function hasTranscript(
 /** Insert a transcript row; idempotent via ON CONFLICT (message_id) DO NOTHING (FR-012). */
 export async function insertTranscript(
   client: pg.Pool | pg.PoolClient,
-  input: InsertTranscriptInput
+  input: InsertTranscriptInput,
 ): Promise<void> {
   await client.query(
     `
@@ -171,6 +171,6 @@ export async function insertTranscript(
       input.engine,
       input.status,
       input.errorMessage ?? null,
-    ]
+    ],
   );
 }

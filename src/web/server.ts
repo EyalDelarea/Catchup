@@ -1,20 +1,20 @@
-import http from "node:http";
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type pg from "pg";
-import { listGroups, findGroupByName } from "../db/repositories/groups.js";
+import { findGroupByName, listGroups } from "../db/repositories/groups.js";
+import { countReadableByGroup, getOldestSentAt } from "../db/repositories/messages.js";
+import { upsertWatermark } from "../db/repositories/read-watermarks.js";
 import { insertSummary, listSummariesByGroup } from "../db/repositories/summaries.js";
+import type { JobType } from "../jobs/job-types.js";
+import { buildStatusReport } from "../service/status.js";
 import { prepareSummary } from "../summarization/prepare.js";
 import { prepareCatchup } from "../summarization/prepare-catchup.js";
-import { upsertWatermark } from "../db/repositories/read-watermarks.js";
 import { persistCatchupResult } from "../summarization/run-summary.js";
-import { countReadableByGroup, getOldestSentAt } from "../db/repositories/messages.js";
 import type { Selection } from "../summarization/select.js";
 import type { StreamingSummarizer } from "../summarization/summarizer.js";
 import { sseFrame } from "./sse.js";
-import type { JobType } from "../jobs/job-types.js";
-import { buildStatusReport } from "../service/status.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const INDEX_HTML = path.join(__dirname, "public", "index.html");
@@ -34,7 +34,9 @@ export type ServerDeps = {
   /** Optional: current collector liveness. When absent, stale defaults to false. */
   getLiveness?: () => { healthy: boolean; lastHeartbeatAt: Date | null };
   /** Optional: run a bounded backfill for a group before summarizing. */
-  backfill?: (groupId: number) => Promise<{ fetched: number; durationMs: number; partial: boolean }>;
+  backfill?: (
+    groupId: number,
+  ) => Promise<{ fetched: number; durationMs: number; partial: boolean }>;
   /** Target window for backfill (default 25). */
   backfillTargetWindow?: number;
   /** Optional structured logger (pino). Used to record backfill outcomes for the trace/dashboard. */
@@ -132,7 +134,11 @@ async function handleStatic(pathname: string, res: http.ServerResponse): Promise
   res.end(fs.readFileSync(resolved));
 }
 
-async function handleSummaries(url: URL, res: http.ServerResponse, deps: ServerDeps): Promise<void> {
+async function handleSummaries(
+  url: URL,
+  res: http.ServerResponse,
+  deps: ServerDeps,
+): Promise<void> {
   const group = url.searchParams.get("group");
   if (!group) {
     res.writeHead(400, { "content-type": "application/json" });
@@ -190,7 +196,12 @@ async function handleStatus(res: http.ServerResponse, deps: ServerDeps): Promise
   }
 }
 
-async function handleSummarize(url: URL, req: http.IncomingMessage, res: http.ServerResponse, deps: ServerDeps): Promise<void> {
+async function handleSummarize(
+  url: URL,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: ServerDeps,
+): Promise<void> {
   const ac = new AbortController();
   const abortOnClose = () => ac.abort();
   req.on("close", abortOnClose);
@@ -207,7 +218,11 @@ async function handleSummarize(url: URL, req: http.IncomingMessage, res: http.Se
     const last = url.searchParams.get("last");
     const sinceRaw = url.searchParams.get("since");
     const mode = url.searchParams.get("mode");
-    if (!group) { send("error", { message: "Missing group." }); res.end(); return; }
+    if (!group) {
+      send("error", { message: "Missing group." });
+      res.end();
+      return;
+    }
 
     // Parse since early so the backfill step can use it.
     let sinceDate: Date | null = null;
@@ -221,7 +236,9 @@ async function handleSummarize(url: URL, req: http.IncomingMessage, res: http.Se
     // --- backfill step (runs before any mode branch) ---
     const liveness = deps.getLiveness?.();
     const stale = liveness ? !liveness.healthy : false;
-    let fetchMs = 0, fetched = 0, backfillPartial = false;
+    let fetchMs = 0,
+      fetched = 0,
+      backfillPartial = false;
     if (deps.backfill && deps.getLiveness && liveness?.healthy) {
       const grp = await findGroupByName(deps.pool, group);
       if (grp) {
@@ -237,11 +254,13 @@ async function handleSummarize(url: URL, req: http.IncomingMessage, res: http.Se
         if (underWindow || sinceOutrangesHistory) {
           send("syncing", { phase: "start" });
           const r = await deps.backfill(grp.id);
-          fetchMs = r.durationMs; fetched = r.fetched; backfillPartial = r.partial;
+          fetchMs = r.durationMs;
+          fetched = r.fetched;
+          backfillPartial = r.partial;
           send("syncing", { phase: "done", fetched, fetchMs, partial: backfillPartial });
           deps.logger?.info(
             { evt: "backfill", group, groupId: grp.id, fetched, fetchMs, partial: backfillPartial },
-            "backfill"
+            "backfill",
           );
         }
       }
@@ -255,17 +274,30 @@ async function handleSummarize(url: URL, req: http.IncomingMessage, res: http.Se
         return;
       }
       const prepared = await prepareCatchup(deps.pool, group, CATCHUP_FALLBACK_N, deps.tokenBudget);
-      if (prepared.kind === "empty") { send("empty", {}); res.end(); return; }
+      if (prepared.kind === "empty") {
+        send("empty", {});
+        res.end();
+        return;
+      }
       if (prepared.kind === "cache-hit") {
-        send("cached", { summary: prepared.summary, generatedAt: prepared.generatedAt.toISOString() });
+        send("cached", {
+          summary: prepared.summary,
+          generatedAt: prepared.generatedAt.toISOString(),
+        });
         res.end();
         return;
       }
       // kind === "ready"
-      send("status", { messages: prepared.messageCount, usedFallback: prepared.usedFallback, stale });
+      send("status", {
+        messages: prepared.messageCount,
+        usedFallback: prepared.usedFallback,
+        stale,
+      });
       const start = Date.now();
       let full = "";
-      for await (const delta of deps.summarizer.summarizeStream(prepared.prompt, { signal: ac.signal })) {
+      for await (const delta of deps.summarizer.summarizeStream(prepared.prompt, {
+        signal: ac.signal,
+      })) {
         full += delta;
         send("token", { delta });
       }
@@ -285,8 +317,14 @@ async function handleSummarize(url: URL, req: http.IncomingMessage, res: http.Se
         updateWatermark: upsertWatermark,
       });
       deps.logger?.info(
-        { evt: "summarize", op: "summary", durationMs: Date.now() - start, messages: prepared.messageCount, mode: "catchup" },
-        "summary done"
+        {
+          evt: "summarize",
+          op: "summary",
+          durationMs: Date.now() - start,
+          messages: prepared.messageCount,
+          mode: "catchup",
+        },
+        "summary done",
       );
       send("done", {
         summaryId,
@@ -304,26 +342,44 @@ async function handleSummarize(url: URL, req: http.IncomingMessage, res: http.Se
     }
 
     // --- existing last/since path ---
-    if (last && since) { send("error", { message: "Use only one of last or since." }); res.end(); return; }
+    if (last && since) {
+      send("error", { message: "Use only one of last or since." });
+      res.end();
+      return;
+    }
 
     let selection: Selection;
     if (since) {
       const d = new Date(since);
-      if (Number.isNaN(d.getTime())) { send("error", { message: `Invalid since date "${since}".` }); res.end(); return; }
+      if (Number.isNaN(d.getTime())) {
+        send("error", { message: `Invalid since date "${since}".` });
+        res.end();
+        return;
+      }
       selection = { since: d };
     } else {
       const n = last ? Number(last) : 25;
-      if (!Number.isInteger(n) || n <= 0) { send("error", { message: "last must be a positive integer." }); res.end(); return; }
+      if (!Number.isInteger(n) || n <= 0) {
+        send("error", { message: "last must be a positive integer." });
+        res.end();
+        return;
+      }
       selection = { last: n };
     }
 
     const prepared = await prepareSummary(deps.pool, group, selection, deps.tokenBudget);
-    if (prepared.kind === "empty") { send("empty", {}); res.end(); return; }
+    if (prepared.kind === "empty") {
+      send("empty", {});
+      res.end();
+      return;
+    }
 
     send("status", { messages: prepared.messageCount, stale });
     const start = Date.now();
     let full = "";
-    for await (const delta of deps.summarizer.summarizeStream(prepared.prompt, { signal: ac.signal })) {
+    for await (const delta of deps.summarizer.summarizeStream(prepared.prompt, {
+      signal: ac.signal,
+    })) {
       full += delta;
       send("token", { delta });
     }
@@ -337,8 +393,14 @@ async function handleSummarize(url: URL, req: http.IncomingMessage, res: http.Se
       model: deps.model,
     });
     deps.logger?.info(
-      { evt: "summarize", op: "summary", durationMs: Date.now() - start, messages: prepared.messageCount, mode: since ? "since" : "last" },
-      "summary done"
+      {
+        evt: "summarize",
+        op: "summary",
+        durationMs: Date.now() - start,
+        messages: prepared.messageCount,
+        mode: since ? "since" : "last",
+      },
+      "summary done",
     );
     send("done", {
       summaryId,

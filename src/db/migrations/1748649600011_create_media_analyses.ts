@@ -42,16 +42,12 @@ export const up = (pgm: MigrationBuilder): void => {
     },
   });
 
-  pgm.addConstraint(
-    "media_analyses",
-    "media_analyses_message_id_unique",
-    "UNIQUE (message_id)"
-  );
+  pgm.addConstraint("media_analyses", "media_analyses_message_id_unique", "UNIQUE (message_id)");
 
   pgm.addConstraint(
     "media_analyses",
     "media_analyses_completed_has_description",
-    "CHECK ((status = 'completed' AND description IS NOT NULL) OR status = 'failed')"
+    "CHECK ((status = 'completed' AND description IS NOT NULL) OR status = 'failed')",
   );
 };
 

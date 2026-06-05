@@ -1,14 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  checkDocker,
-  checkComposeServices,
-  checkPostgres,
-  checkRabbitMQ,
-  checkOllama,
-  checkPython,
-  checkFfmpeg,
-  runChecks,
   type CheckResult,
+  checkComposeServices,
+  checkDocker,
+  checkFfmpeg,
+  checkOllama,
+  checkPostgres,
+  checkPython,
+  checkRabbitMQ,
+  runChecks,
 } from "./checks.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -169,11 +169,7 @@ describe("checkFfmpeg", () => {
 
 describe("runChecks", () => {
   it("runs all checks and returns one result per check", async () => {
-    const checks = [
-      () => checkDocker(ok),
-      () => checkComposeServices(ok),
-      () => checkPostgres(ok),
-    ];
+    const checks = [() => checkDocker(ok), () => checkComposeServices(ok), () => checkPostgres(ok)];
     const results = await runChecks(checks);
     expect(results).toHaveLength(3);
   });
@@ -192,10 +188,7 @@ describe("runChecks", () => {
   });
 
   it("does not throw when a check probe throws — still returns a result", async () => {
-    const checks = [
-      () => checkDocker(throws),
-      () => checkComposeServices(ok),
-    ];
+    const checks = [() => checkDocker(throws), () => checkComposeServices(ok)];
     // runChecks must never throw; each check catches its own errors
     const results = await runChecks(checks);
     expect(results).toHaveLength(2);

@@ -1,8 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
-import { makeImportFileHandler } from "./import-file.js";
+import { describe, expect, it, vi } from "vitest";
 import { InMemoryJobBus } from "../../jobs/in-memory-bus.js";
 import { InMemoryJobRunRecorder } from "../../jobs/job-run-recorder.js";
 import type { Job } from "../../jobs/job-types.js";
+import { makeImportFileHandler } from "./import-file.js";
 
 function makeBus() {
   const recorder = new InMemoryJobRunRecorder();
@@ -22,7 +22,9 @@ function makeJob(filePath: string, name?: string): Job<"import.file"> {
 describe("makeImportFileHandler", () => {
   it("calls runImport with job payload's filePath and name", async () => {
     const bus = makeBus();
-    const runImport = vi.fn().mockResolvedValue({ groupName: "Test", inserted: 5, skipped: 0, mediaFiles: 0 });
+    const runImport = vi
+      .fn()
+      .mockResolvedValue({ groupName: "Test", inserted: 5, skipped: 0, mediaFiles: 0 });
     const listUntranscribed = vi.fn().mockResolvedValue([]);
 
     const handler = makeImportFileHandler({ runImport, listUntranscribed, bus });
@@ -33,7 +35,9 @@ describe("makeImportFileHandler", () => {
 
   it("enqueues one transcribe.voicenote job per untranscribed voice note", async () => {
     const bus = makeBus();
-    const runImport = vi.fn().mockResolvedValue({ groupName: "Test", inserted: 10, skipped: 0, mediaFiles: 3 });
+    const runImport = vi
+      .fn()
+      .mockResolvedValue({ groupName: "Test", inserted: 10, skipped: 0, mediaFiles: 3 });
     const messageIds = ["101", "102", "103"];
     const listUntranscribed = vi.fn().mockResolvedValue(messageIds);
 
@@ -47,7 +51,9 @@ describe("makeImportFileHandler", () => {
   it("enqueues jobs with the correct messageId payloads", async () => {
     const recorder = new InMemoryJobRunRecorder();
     const bus = new InMemoryJobBus(recorder);
-    const runImport = vi.fn().mockResolvedValue({ groupName: "Test", inserted: 2, skipped: 0, mediaFiles: 2 });
+    const runImport = vi
+      .fn()
+      .mockResolvedValue({ groupName: "Test", inserted: 2, skipped: 0, mediaFiles: 2 });
     const listUntranscribed = vi.fn().mockResolvedValue(["42", "99"]);
 
     const handler = makeImportFileHandler({ runImport, listUntranscribed, bus });
@@ -60,7 +66,7 @@ describe("makeImportFileHandler", () => {
       async (job) => {
         enqueuedPayloads.push(job.payload);
       },
-      { prefetch: 10 }
+      { prefetch: 10 },
     );
 
     expect(enqueuedPayloads).toHaveLength(2);
@@ -69,7 +75,9 @@ describe("makeImportFileHandler", () => {
 
   it("enqueues zero jobs when there are no untranscribed voice notes", async () => {
     const bus = makeBus();
-    const runImport = vi.fn().mockResolvedValue({ groupName: "Test", inserted: 5, skipped: 0, mediaFiles: 0 });
+    const runImport = vi
+      .fn()
+      .mockResolvedValue({ groupName: "Test", inserted: 5, skipped: 0, mediaFiles: 0 });
     const listUntranscribed = vi.fn().mockResolvedValue([]);
 
     const handler = makeImportFileHandler({ runImport, listUntranscribed, bus });
@@ -98,7 +106,7 @@ describe("makeImportFileHandler", () => {
     const handler = makeImportFileHandler({ runImport, listUntranscribed, bus });
 
     await expect(handler(makeJob("/path/to/bad.zip", "BadGroup"))).rejects.toThrow(
-      "import failed: corrupt file"
+      "import failed: corrupt file",
     );
   });
 

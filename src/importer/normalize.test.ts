@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
 import crypto from "node:crypto";
-import type { ImportedMessage } from "./types.js";
+import { describe, expect, it } from "vitest";
 import { normalize } from "./normalize.js";
+import type { ImportedMessage } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -42,7 +42,7 @@ describe("normalize()", () => {
     const mediaFilename = msg.mediaFilename ?? "";
 
     const expected = sha256(
-      `${GROUP_ID} ${sentAtIso} ${senderName} ${normalizedText} ${mediaFilename}`
+      `${GROUP_ID} ${sentAtIso} ${senderName} ${normalizedText} ${mediaFilename}`,
     );
 
     expect(row?.dedupeKey).toBe(expected);
@@ -73,9 +73,7 @@ describe("normalize()", () => {
     // The key is built with empty string for senderName (not the literal 'null')
     const sentAtIso = msg.sentAt.toISOString();
     const normalizedText = (msg.textContent ?? "").trim().replace(/\s+/g, " ");
-    const expected = sha256(
-      `${GROUP_ID} ${sentAtIso}  ${normalizedText} `
-    );
+    const expected = sha256(`${GROUP_ID} ${sentAtIso}  ${normalizedText} `);
     expect(row?.dedupeKey).toBe(expected);
   });
 

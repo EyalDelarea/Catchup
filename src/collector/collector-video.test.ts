@@ -8,20 +8,18 @@
  * - No thumbnail either: NOT enqueued
  * - No downloadVideo provided: NOT enqueued
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
+
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runMigrationsUp } from "../db/migrate.js";
-import { handleIncomingMessage } from "./collector.js";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { WAMessage } from "@whiskeysockets/baileys";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { runMigrationsUp } from "../db/migrate.js";
 import { InMemoryJobBus } from "../jobs/in-memory-bus.js";
 import { InMemoryJobRunRecorder } from "../jobs/job-run-recorder.js";
+import { handleIncomingMessage } from "./collector.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
@@ -32,14 +30,16 @@ const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
 
 const FAKE_THUMBNAIL = Buffer.from("fake-jpeg-thumbnail-bytes");
 
-function makeFakeWAVideoMessage(overrides: Partial<{
-  id: string;
-  remoteJid: string;
-  pushName: string;
-  timestampSeconds: number;
-  caption: string | null;
-  jpegThumbnail: Buffer | null;
-}> = {}): WAMessage {
+function makeFakeWAVideoMessage(
+  overrides: Partial<{
+    id: string;
+    remoteJid: string;
+    pushName: string;
+    timestampSeconds: number;
+    caption: string | null;
+    jpegThumbnail: Buffer | null;
+  }> = {},
+): WAMessage {
   const {
     id = "LIVE_VID_001",
     remoteJid = "vid-group@g.us",
@@ -110,10 +110,9 @@ describe("collector video enqueue (T020)", () => {
     expect(messageId.length).toBeGreaterThan(0);
 
     // Verify the DB row has media_status='present'
-    const { rows } = await pool.query(
-      `SELECT media_status FROM messages WHERE external_id = $1`,
-      ["VID_ENQUEUE_001"]
-    );
+    const { rows } = await pool.query(`SELECT media_status FROM messages WHERE external_id = $1`, [
+      "VID_ENQUEUE_001",
+    ]);
     expect(rows[0]!.media_status).toBe("present");
   });
 
@@ -148,7 +147,9 @@ describe("collector video enqueue (T020)", () => {
   it("marks media 'missing' and does NOT enqueue when video download fails (no thumbnail fallback path)", async () => {
     const recorder = new InMemoryJobRunRecorder();
     const bus = new InMemoryJobBus(recorder);
-    const failingDownloader = async () => { throw new Error("download boom"); };
+    const failingDownloader = async () => {
+      throw new Error("download boom");
+    };
 
     const waMsg = makeFakeWAVideoMessage({
       id: "VID_DLFAIL_001",
@@ -167,10 +168,9 @@ describe("collector video enqueue (T020)", () => {
     const videoJobs = recorder.enqueuedJobs.filter((j) => j.job.type === "analyze.video");
     expect(videoJobs).toHaveLength(0);
 
-    const { rows } = await pool.query(
-      `SELECT media_status FROM messages WHERE external_id = $1`,
-      ["VID_DLFAIL_001"]
-    );
+    const { rows } = await pool.query(`SELECT media_status FROM messages WHERE external_id = $1`, [
+      "VID_DLFAIL_001",
+    ]);
     expect(rows[0]!.media_status).toBe("missing");
   });
 
@@ -202,12 +202,16 @@ describe("collector video enqueue (T020)", () => {
     });
 
     const first = await handleIncomingMessage(pool, waMsg, {
-      dataDir, bus, downloadVideo: fakeVideoDownloader,
+      dataDir,
+      bus,
+      downloadVideo: fakeVideoDownloader,
     });
     expect(first).toBe(true);
 
     const second = await handleIncomingMessage(pool, waMsg, {
-      dataDir, bus, downloadVideo: fakeVideoDownloader,
+      dataDir,
+      bus,
+      downloadVideo: fakeVideoDownloader,
     });
     expect(second).toBe(false);
 
@@ -218,7 +222,9 @@ describe("collector video enqueue (T020)", () => {
   it("enqueues analyze.video with thumbnail path when download fails but jpegThumbnail exists", async () => {
     const recorder = new InMemoryJobRunRecorder();
     const bus = new InMemoryJobBus(recorder);
-    const failingDownloader = async () => { throw new Error("download boom"); };
+    const failingDownloader = async () => {
+      throw new Error("download boom");
+    };
 
     const waMsg = makeFakeWAVideoMessage({
       id: "VID_THUMB_001",

@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
-import { makeTranscribeVoicenoteHandler } from "./transcribe-voicenote.js";
+import { describe, expect, it, vi } from "vitest";
 import type { Job } from "../../jobs/job-types.js";
+import { makeTranscribeVoicenoteHandler } from "./transcribe-voicenote.js";
 
 function makeJob(messageId: string): Job<"transcribe.voicenote"> {
   return {

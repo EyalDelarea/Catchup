@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { applyOutboundGuard, HARD_BLOCKED, SILENCED } from "./outbound-guard.js";
 
 /** A minimal fake Baileys socket exposing the methods the guard touches. */
@@ -18,7 +18,9 @@ describe("applyOutboundGuard", () => {
       applyOutboundGuard(sock as never, false);
 
       for (const m of HARD_BLOCKED) {
-        await expect(sock[m]("jid", { text: "hi" })).rejects.toThrow(/disabled|blocked|WHATSAPP_ALLOW_SEND/i);
+        await expect(sock[m]("jid", { text: "hi" })).rejects.toThrow(
+          /disabled|blocked|WHATSAPP_ALLOW_SEND/i,
+        );
       }
       // the real implementation was replaced, never invoked
       expect(original).not.toHaveBeenCalled();

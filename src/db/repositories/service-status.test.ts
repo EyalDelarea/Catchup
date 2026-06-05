@@ -1,18 +1,15 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../migrate.js";
 import {
   getServiceStatus,
-  setCollectorConnected,
+  isStale,
   recordHeartbeat,
   recordQr,
-  isStale,
+  setCollectorConnected,
 } from "./service-status.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

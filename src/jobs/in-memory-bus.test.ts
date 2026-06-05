@@ -1,16 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { InMemoryJobBus } from "./in-memory-bus.js";
-import { InMemoryJobRunRecorder } from "./job-run-recorder.js";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../db/migrate.js";
-import { PostgresJobRunRecorder } from "./job-run-recorder.js";
 import { upsertJobRun } from "../db/repositories/job-runs.js";
+import { InMemoryJobBus } from "./in-memory-bus.js";
+import { InMemoryJobRunRecorder, PostgresJobRunRecorder } from "./job-run-recorder.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
@@ -26,9 +22,7 @@ describe("InMemoryJobBus — unit tests (InMemoryJobRunRecorder)", () => {
       const { id } = await bus.enqueue("import.file", { filePath: "/a/b.zip" });
 
       expect(typeof id).toBe("string");
-      expect(id).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-      );
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     });
 
     it("records 'pending' status on enqueue", async () => {
@@ -72,7 +66,7 @@ describe("InMemoryJobBus — unit tests (InMemoryJobRunRecorder)", () => {
         async (job) => {
           handledJobs.push(job.id);
         },
-        { prefetch: 1 }
+        { prefetch: 1 },
       );
 
       expect(handledJobs).toEqual([id]);
@@ -99,7 +93,7 @@ describe("InMemoryJobBus — unit tests (InMemoryJobRunRecorder)", () => {
         async (job) => {
           handled.push(job.id);
         },
-        { prefetch: 1 }
+        { prefetch: 1 },
       );
 
       expect(handled).toHaveLength(3);
@@ -121,7 +115,7 @@ describe("InMemoryJobBus — unit tests (InMemoryJobRunRecorder)", () => {
       const { id } = await bus.enqueue(
         "import.file",
         { filePath: "/fail.zip" },
-        { maxAttempts: MAX }
+        { maxAttempts: MAX },
       );
 
       let callCount = 0;
@@ -131,7 +125,7 @@ describe("InMemoryJobBus — unit tests (InMemoryJobRunRecorder)", () => {
           callCount++;
           throw new Error("always fails");
         },
-        { prefetch: 1 }
+        { prefetch: 1 },
       );
 
       // Handler called exactly maxAttempts times
@@ -165,7 +159,7 @@ describe("InMemoryJobBus — unit tests (InMemoryJobRunRecorder)", () => {
       const { id } = await bus.enqueue(
         "import.file",
         { filePath: "/fail.zip" },
-        { maxAttempts: 2 }
+        { maxAttempts: 2 },
       );
 
       await bus.consume(
@@ -173,7 +167,7 @@ describe("InMemoryJobBus — unit tests (InMemoryJobRunRecorder)", () => {
         async () => {
           throw new Error("boom");
         },
-        { prefetch: 1 }
+        { prefetch: 1 },
       );
 
       const failedEntries = recorder
@@ -195,7 +189,7 @@ describe("InMemoryJobBus — unit tests (InMemoryJobRunRecorder)", () => {
       const { id } = await bus.enqueue(
         "transcribe.voicenote",
         { messageId: "msg-1" },
-        { maxAttempts: MAX }
+        { maxAttempts: MAX },
       );
 
       await bus.consume(
@@ -204,7 +198,7 @@ describe("InMemoryJobBus — unit tests (InMemoryJobRunRecorder)", () => {
           callCount++;
           throw new Error("nope");
         },
-        { prefetch: 1 }
+        { prefetch: 1 },
       );
 
       // Call consume a second time — dead job should NOT be re-processed
@@ -214,7 +208,7 @@ describe("InMemoryJobBus — unit tests (InMemoryJobRunRecorder)", () => {
           callCount++;
           throw new Error("should not reach");
         },
-        { prefetch: 1 }
+        { prefetch: 1 },
       );
 
       expect(callCount).toBe(MAX);
@@ -230,7 +224,7 @@ describe("InMemoryJobBus — unit tests (InMemoryJobRunRecorder)", () => {
       const { id } = await bus.enqueue(
         "import.file",
         { filePath: "/transient.zip" },
-        { maxAttempts: 3 }
+        { maxAttempts: 3 },
       );
 
       let attempts = 0;
@@ -240,7 +234,7 @@ describe("InMemoryJobBus — unit tests (InMemoryJobRunRecorder)", () => {
           attempts++;
           if (attempts === 1) throw new Error("transient");
         },
-        { prefetch: 1 }
+        { prefetch: 1 },
       );
 
       expect(attempts).toBe(2);
@@ -316,10 +310,7 @@ describe("PostgresJobRunRecorder — integration (testcontainers)", () => {
       status: string;
       attempts: number;
       max_attempts: number;
-    }>(
-      `SELECT id, type, status, attempts, max_attempts FROM job_runs WHERE id = $1`,
-      [jobId]
-    );
+    }>(`SELECT id, type, status, attempts, max_attempts FROM job_runs WHERE id = $1`, [jobId]);
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
@@ -349,7 +340,7 @@ describe("PostgresJobRunRecorder — integration (testcontainers)", () => {
 
     const { rows: runningRows } = await pool.query<{ status: string }>(
       `SELECT status FROM job_runs WHERE id = $1`,
-      [jobId]
+      [jobId],
     );
     expect(runningRows[0].status).toBe("running");
 
@@ -357,7 +348,7 @@ describe("PostgresJobRunRecorder — integration (testcontainers)", () => {
 
     const { rows: doneRows } = await pool.query<{ status: string }>(
       `SELECT status FROM job_runs WHERE id = $1`,
-      [jobId]
+      [jobId],
     );
     expect(doneRows[0].status).toBe("done");
   });
@@ -379,7 +370,7 @@ describe("PostgresJobRunRecorder — integration (testcontainers)", () => {
 
     const { rows } = await pool.query<{ status: string; last_error: string }>(
       `SELECT status, last_error FROM job_runs WHERE id = $1`,
-      [jobId]
+      [jobId],
     );
     expect(rows[0].status).toBe("failed");
     expect(rows[0].last_error).toBe("something exploded");

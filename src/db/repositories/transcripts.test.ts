@@ -1,20 +1,17 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { NormalizedMessage } from "../../importer/types.js";
 import { runMigrationsUp } from "../migrate.js";
 import { upsertGroup } from "./groups.js";
 import { insertMessages } from "./messages.js";
-import type { NormalizedMessage } from "../../importer/types.js";
 import {
-  selectPendingVoiceNotes,
   countTranscribedVoiceNotes,
   insertTranscript,
   listUntranscribedVoiceNoteIdsByGroup,
+  selectPendingVoiceNotes,
 } from "./transcripts.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -37,7 +34,7 @@ describe("transcripts", () => {
 
   async function seedMediaMessage(
     groupId: number,
-    overrides: Partial<NormalizedMessage> = {}
+    overrides: Partial<NormalizedMessage> = {},
   ): Promise<number> {
     const row: NormalizedMessage & { participantId: number | null } = {
       groupId,
@@ -58,7 +55,7 @@ describe("transcripts", () => {
     await insertMessages(pool, [row]);
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM messages WHERE dedupe_key = $1`,
-      [row.dedupeKey]
+      [row.dedupeKey],
     );
     return Number(rows[0].id);
   }
@@ -71,15 +68,15 @@ describe("transcripts", () => {
       await pool.query(
         `INSERT INTO transcripts (message_id, transcript, engine, status)
          VALUES ($1, 'שלום', 'test-engine', 'completed')`,
-        [messageId]
+        [messageId],
       );
 
       await expect(
         pool.query(
           `INSERT INTO transcripts (message_id, transcript, engine, status)
            VALUES ($1, 'שלום שוב', 'test-engine', 'completed')`,
-          [messageId]
-        )
+          [messageId],
+        ),
       ).rejects.toMatchObject({ code: "23505" });
     });
 
@@ -91,8 +88,8 @@ describe("transcripts", () => {
         pool.query(
           `INSERT INTO transcripts (message_id, transcript, engine, status, error_message)
            VALUES ($1, NULL, 'test-engine', 'failed', 'corrupt audio')`,
-          [messageId]
-        )
+          [messageId],
+        ),
       ).resolves.toBeDefined();
     });
   });

@@ -42,16 +42,12 @@ export const up = (pgm: MigrationBuilder): void => {
     },
   });
 
-  pgm.addConstraint(
-    "transcripts",
-    "transcripts_message_id_unique",
-    "UNIQUE (message_id)"
-  );
+  pgm.addConstraint("transcripts", "transcripts_message_id_unique", "UNIQUE (message_id)");
 
   pgm.addConstraint(
     "transcripts",
     "transcripts_completed_has_text",
-    "CHECK ((status = 'completed' AND transcript IS NOT NULL) OR status = 'failed')"
+    "CHECK ((status = 'completed' AND transcript IS NOT NULL) OR status = 'failed')",
   );
 };
 

@@ -20,14 +20,16 @@
  */
 import fsp from "node:fs/promises";
 import type pg from "pg";
-import type { VisionAnalyzer } from "./analyzer.js";
 import type { InsertMediaAnalysisInput } from "../db/repositories/media-analyses.js";
 import type { AnalyzeVideoInput } from "./analyze-video.js";
+import type { VisionAnalyzer } from "./analyzer.js";
 
 export type AnalyzeMediaOneDeps = {
   pool: pg.Pool | pg.PoolClient;
   /** Resolves to { path, kind } for a present visual media row, or null if not found. */
-  getVisualMediaPath: (messageId: number) => Promise<{ path: string; kind: "image" | "video" } | null>;
+  getVisualMediaPath: (
+    messageId: number,
+  ) => Promise<{ path: string; kind: "image" | "video" } | null>;
   visionAnalyzer: VisionAnalyzer;
   /**
    * Orientation-normalize the image at `inputPath`; returns the path to the
@@ -70,7 +72,7 @@ export type AnalyzeMediaOneDeps = {
 export async function analyzeMediaOne(
   messageId: number,
   kind: "image" | "video",
-  deps: AnalyzeMediaOneDeps
+  deps: AnalyzeMediaOneDeps,
 ): Promise<void> {
   if (kind === "video") {
     // ── Video branch (T019) ────────────────────────────────────────────────
@@ -80,7 +82,7 @@ export async function analyzeMediaOne(
       const resolved = await deps.getVisualMediaPath(messageId);
       if (!resolved) {
         throw new Error(
-          `analyzeMediaOne: message ${messageId} not found or not a present visual media file`
+          `analyzeMediaOne: message ${messageId} not found or not a present visual media file`,
         );
       }
       videoMediaPath = resolved.path;
@@ -130,7 +132,7 @@ export async function analyzeMediaOne(
     const resolved = await deps.getVisualMediaPath(messageId);
     if (!resolved) {
       throw new Error(
-        `analyzeMediaOne: message ${messageId} not found or not a present visual media file`
+        `analyzeMediaOne: message ${messageId} not found or not a present visual media file`,
       );
     }
     mediaPath = resolved.path;
@@ -183,9 +185,9 @@ export async function analyzeMediaOne(
 // ---------------------------------------------------------------------------
 
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
@@ -198,14 +200,16 @@ const execFileAsync = promisify(execFile);
  */
 export async function normalizeImageWithFfmpeg(
   ffmpegPath: string,
-  inputPath: string
+  inputPath: string,
 ): Promise<string> {
   const tmpFile = path.join(os.tmpdir(), `normalized-${Date.now()}-${path.basename(inputPath)}`);
   await execFileAsync(ffmpegPath, [
     "-y",
     "-autorotate",
-    "-i", inputPath,
-    "-frames:v", "1",
+    "-i",
+    inputPath,
+    "-frames:v",
+    "1",
     tmpFile,
   ]);
   return tmpFile;

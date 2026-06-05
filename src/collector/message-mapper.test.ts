@@ -2,9 +2,10 @@
  * Unit tests for message-mapper.ts (no DB required).
  * Tests the mapping from Baileys WAMessage objects to our domain shape.
  */
-import { describe, it, expect } from "vitest";
-import { mapWaMessage } from "./message-mapper.js";
+
 import type { proto } from "@whiskeysockets/baileys";
+import { describe, expect, it } from "vitest";
+import { mapWaMessage } from "./message-mapper.js";
 
 // ---------------------------------------------------------------------------
 // Helpers to build minimal fake Baileys WAMessage objects

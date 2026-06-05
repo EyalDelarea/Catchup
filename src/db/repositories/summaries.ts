@@ -15,7 +15,7 @@ export type InsertSummaryInput = {
  */
 export async function getLatestCatchupSummary(
   client: pg.Pool | pg.PoolClient,
-  groupId: number
+  groupId: number,
 ): Promise<{ overview: string; createdAt: Date } | null> {
   const { rows } = await client.query<{ output: { overview: string }; created_at: Date }>(
     `
@@ -26,7 +26,7 @@ export async function getLatestCatchupSummary(
     ORDER BY created_at DESC, id DESC
     LIMIT 1
     `,
-    [groupId]
+    [groupId],
   );
   if (rows.length === 0) return null;
   const row = rows[0]!;
@@ -48,7 +48,7 @@ export type SummaryRow = {
 export async function listSummariesByGroup(
   client: pg.Pool | pg.PoolClient,
   groupId: number,
-  limit: number
+  limit: number,
 ): Promise<SummaryRow[]> {
   const { rows } = await client.query<{
     id: string;
@@ -65,7 +65,7 @@ export async function listSummariesByGroup(
     ORDER BY created_at DESC, id DESC
     LIMIT $2
     `,
-    [groupId, limit]
+    [groupId, limit],
   );
   return rows.map((row) => ({
     id: Number(row.id),
@@ -80,7 +80,7 @@ export async function listSummariesByGroup(
 /** Persist a generated summary; returns the new row id (FR-018). */
 export async function insertSummary(
   client: pg.Pool | pg.PoolClient,
-  input: InsertSummaryInput
+  input: InsertSummaryInput,
 ): Promise<number> {
   const { rows } = await client.query<{ id: string }>(
     `
@@ -94,7 +94,7 @@ export async function insertSummary(
       JSON.stringify(input.parameters),
       JSON.stringify(input.output),
       input.model,
-    ]
+    ],
   );
   return Number(rows[0].id);
 }

@@ -74,7 +74,7 @@ export const up = (pgm: MigrationBuilder): void => {
   pgm.addConstraint(
     "messages",
     "messages_group_dedupe_key_unique",
-    "UNIQUE (group_id, dedupe_key)"
+    "UNIQUE (group_id, dedupe_key)",
   );
 
   // Secondary partial unique index for live messages with external_id

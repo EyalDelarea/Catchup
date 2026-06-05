@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
-import { enqueueFolder } from "./bulk-import.js";
+import { describe, expect, it } from "vitest";
 import { InMemoryJobBus } from "../jobs/in-memory-bus.js";
 import { InMemoryJobRunRecorder } from "../jobs/job-run-recorder.js";
+import { enqueueFolder } from "./bulk-import.js";
 
 function makeBus() {
   const recorder = new InMemoryJobRunRecorder();
@@ -33,10 +33,10 @@ describe("enqueueFolder", () => {
     const files = [
       "/dir/chat1.txt",
       "/dir/export.zip",
-      "/dir/image.jpg",     // ignored
-      "/dir/notes.pdf",     // ignored
-      "/dir/readme.md",     // ignored
-      "/dir/data.csv",      // ignored
+      "/dir/image.jpg", // ignored
+      "/dir/notes.pdf", // ignored
+      "/dir/readme.md", // ignored
+      "/dir/data.csv", // ignored
     ];
 
     const result = await enqueueFolder(bus, "/dir", files);

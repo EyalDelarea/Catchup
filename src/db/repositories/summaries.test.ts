@@ -1,11 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../migrate.js";
 import { upsertGroup } from "./groups.js";
 import { insertSummary, listSummariesByGroup } from "./summaries.js";
@@ -35,16 +32,20 @@ describe("summaries schema", () => {
       pool.query(
         `INSERT INTO summaries (group_id, summary_type, parameters, output, model)
          VALUES ($1, 'last_n', $2, $3, 'gemma4:26b')`,
-        [groupId, JSON.stringify({ n: 100 }), JSON.stringify({ overview: "x", decisions: [], open_questions: [], action_items: [] })]
-      )
+        [
+          groupId,
+          JSON.stringify({ n: 100 }),
+          JSON.stringify({ overview: "x", decisions: [], open_questions: [], action_items: [] }),
+        ],
+      ),
     ).resolves.toBeDefined();
 
     await expect(
       pool.query(
         `INSERT INTO summaries (group_id, summary_type, parameters, output, model)
          VALUES ($1, 'bogus', '{}', '{}', 'gemma4:26b')`,
-        [groupId]
-      )
+        [groupId],
+      ),
     ).rejects.toMatchObject({ code: "23514" }); // check_violation
   });
 
@@ -87,7 +88,9 @@ describe("summaries schema", () => {
       model: "gemma4:26b",
     });
     expect(typeof id).toBe("number");
-    const { rows } = await pool.query(`SELECT output, summary_type FROM summaries WHERE id = $1`, [id]);
+    const { rows } = await pool.query(`SELECT output, summary_type FROM summaries WHERE id = $1`, [
+      id,
+    ]);
     expect(rows[0].summary_type).toBe("watermark");
     expect(rows[0].output).toMatchObject({ overview: "catchup overview" });
   });
@@ -122,7 +125,12 @@ describe("summaries schema", () => {
     await insertSummary(pool, {
       groupId,
       summaryType: "watermark",
-      parameters: { fromExclusive: null, toInclusive: { sentAt: "2026-01-01T10:00:00.000Z", messageId: 1 }, messageCount: 3, usedFallback: true },
+      parameters: {
+        fromExclusive: null,
+        toInclusive: { sentAt: "2026-01-01T10:00:00.000Z", messageId: 1 },
+        messageCount: 3,
+        usedFallback: true,
+      },
       output: { overview: "older overview" },
       model: "gemma4:26b",
     });
@@ -134,7 +142,12 @@ describe("summaries schema", () => {
     await insertSummary(pool, {
       groupId,
       summaryType: "watermark",
-      parameters: { fromExclusive: { sentAt: "2026-01-01T10:00:00.000Z", messageId: 1 }, toInclusive: { sentAt: "2026-01-02T10:00:00.000Z", messageId: 10 }, messageCount: 5, usedFallback: false },
+      parameters: {
+        fromExclusive: { sentAt: "2026-01-01T10:00:00.000Z", messageId: 1 },
+        toInclusive: { sentAt: "2026-01-02T10:00:00.000Z", messageId: 10 },
+        messageCount: 5,
+        usedFallback: false,
+      },
       output: { overview: "newer overview" },
       model: "gemma4:26b",
     });
@@ -168,17 +181,17 @@ describe("listSummariesByGroup", () => {
     await pool.query(
       `INSERT INTO summaries (group_id, summary_type, parameters, output, model, created_at)
        VALUES ($1, 'last_n', '{"n":10}', '{"overview":"oldest"}', 'modelA', '2026-01-01T10:00:00Z')`,
-      [groupId]
+      [groupId],
     );
     await pool.query(
       `INSERT INTO summaries (group_id, summary_type, parameters, output, model, created_at)
        VALUES ($1, 'since', '{"since":"2026-01-01"}', '{"overview":"middle"}', 'modelB', '2026-01-02T10:00:00Z')`,
-      [groupId]
+      [groupId],
     );
     await pool.query(
       `INSERT INTO summaries (group_id, summary_type, parameters, output, model, created_at)
        VALUES ($1, 'watermark', '{"fromWatermark":"abc","messageCount":5}', '{"overview":"newest"}', 'modelC', '2026-01-03T10:00:00Z')`,
-      [groupId]
+      [groupId],
     );
 
     const results = await listSummariesByGroup(pool, groupId, 10);

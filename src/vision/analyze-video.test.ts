@@ -8,8 +8,13 @@
  * feeds them to visionAnalyzer.describeImages so the model sees motion, not
  * just one still. Audio is still transcribed via ivrit-Whisper.
  */
-import { describe, it, expect, vi } from "vitest";
-import { analyzeVideo, type AnalyzeVideoDeps, type AnalyzeVideoInput, type ExtractFramesResult } from "./analyze-video.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  type AnalyzeVideoDeps,
+  type AnalyzeVideoInput,
+  analyzeVideo,
+  type ExtractFramesResult,
+} from "./analyze-video.js";
 import type { VisionAnalyzer } from "./analyzer.js";
 
 // ---------------------------------------------------------------------------
@@ -115,7 +120,10 @@ describe("analyzeVideo", () => {
       fileSizeMb: vi.fn().mockReturnValue(30), // > 25 MB cap
       maxVideoMb: 25,
     });
-    const input = makeInput({ mediaPath: "/media/big-video.mp4", thumbnailPath: "/media/thumb.jpg" });
+    const input = makeInput({
+      mediaPath: "/media/big-video.mp4",
+      thumbnailPath: "/media/thumb.jpg",
+    });
 
     const result = await analyzeVideo(deps, input);
 
@@ -149,7 +157,9 @@ describe("analyzeVideo", () => {
   });
 
   it("neither mediaPath nor thumbnailPath: throws", async () => {
-    await expect(analyzeVideo(makeDeps(), makeInput({ mediaPath: null, thumbnailPath: null }))).rejects.toThrow();
+    await expect(
+      analyzeVideo(makeDeps(), makeInput({ mediaPath: null, thumbnailPath: null })),
+    ).rejects.toThrow();
   });
 
   it("frame extraction yields nothing but a thumbnail exists: falls back to the thumbnail", async () => {
@@ -231,7 +241,10 @@ describe("analyzeVideo", () => {
   it("cleanup: fsp.rm is called on the frameDir returned by extractFrames", async () => {
     const fakeDir = "/tmp/wsum-frames-test";
     const rmCalls: string[] = [];
-    const rmFake = vi.fn().mockImplementation((p: string) => { rmCalls.push(p); return Promise.resolve(); });
+    const rmFake = vi.fn().mockImplementation((p: string) => {
+      rmCalls.push(p);
+      return Promise.resolve();
+    });
 
     // We can't inject fsp.rm directly into analyzeVideo, but we can verify
     // cleanup by using a real dir path and confirming analyzeVideo doesn't throw
@@ -244,7 +257,9 @@ describe("analyzeVideo", () => {
     await expect(analyzeVideo(deps, makeInput())).resolves.toBeDefined();
     // The extractFrames dep was called
     expect(extractFrames).toHaveBeenCalled();
-    void rmFake; void fakeDir; void rmCalls; // suppress unused-var
+    void rmFake;
+    void fakeDir;
+    void rmCalls; // suppress unused-var
   });
 
   it("cleanup: WAV unlink is called after successful transcription", async () => {
@@ -252,7 +267,11 @@ describe("analyzeVideo", () => {
     // block calls fsp.unlink which is a best-effort no-op on non-existent paths.
     const extractAudio = vi.fn().mockResolvedValue("/tmp/nonexistent-audio.wav");
     const transcribeAudio = vi.fn().mockResolvedValue("hello");
-    const deps = makeDeps({ extractAudio, transcribeAudio, fileSizeMb: vi.fn().mockReturnValue(5) });
+    const deps = makeDeps({
+      extractAudio,
+      transcribeAudio,
+      fileSizeMb: vi.fn().mockReturnValue(5),
+    });
     const result = await analyzeVideo(deps, makeInput());
     expect(transcribeAudio).toHaveBeenCalledWith("/tmp/nonexistent-audio.wav");
     expect(result.description).toContain("hello");

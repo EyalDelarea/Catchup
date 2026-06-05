@@ -22,10 +22,7 @@ type NormalizeContext = {
  *   - normalized_text = textContent trimmed and whitespace-collapsed
  *   - media_filename  = mediaFilename or '' when none
  */
-export function normalize(
-  messages: ImportedMessage[],
-  ctx: NormalizeContext
-): NormalizedMessage[] {
+export function normalize(messages: ImportedMessage[], ctx: NormalizeContext): NormalizedMessage[] {
   return messages.map((msg, idx) => {
     const senderName = msg.senderName; // null for system messages
     const normalizedText = normalizeText(msg.textContent);
@@ -36,7 +33,7 @@ export function normalize(
       msg.sentAt,
       senderName,
       normalizedText,
-      mediaFilename
+      mediaFilename,
     );
 
     // textContent: trimmed non-empty string, or null for pure-media rows with no body
@@ -83,7 +80,7 @@ function computeDedupeKey(
   sentAt: Date,
   senderName: string | null,
   normalizedText: string,
-  mediaFilename: string | null
+  mediaFilename: string | null,
 ): string {
   const sentAtIso = sentAt.toISOString();
   const sender = senderName ?? "";

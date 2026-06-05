@@ -1,11 +1,11 @@
-import { createReadStream } from "node:fs";
 import path from "node:path";
 import unzipper from "unzipper";
 import { parseWhatsAppTextExport } from "./parse-whatsapp-text.js";
 import type { ImportedMessage } from "./types.js";
 
 const CHAT_TXT_PATTERN = /^_?chat\.txt$/i;
-const MEDIA_EXTENSIONS = /\.(opus|ogg|m4a|mp3|wav|jpg|jpeg|png|gif|webp|mp4|mov|pdf|docx?|xlsx?|pptx?)$/i;
+const MEDIA_EXTENSIONS =
+  /\.(opus|ogg|m4a|mp3|wav|jpg|jpeg|png|gif|webp|mp4|mov|pdf|docx?|xlsx?|pptx?)$/i;
 
 export type ZipMediaFile = {
   filename: string;

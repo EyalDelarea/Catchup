@@ -11,7 +11,7 @@ import type { NormalizedMessage } from "../../importer/types.js";
  */
 export async function countReadableByGroup(
   client: pg.Pool | pg.PoolClient,
-  groupId: number
+  groupId: number,
 ): Promise<number> {
   const { rows } = await client.query<{ count: string }>(
     `
@@ -23,7 +23,7 @@ export async function countReadableByGroup(
       AND COALESCE(t.transcript, m.text_content) IS NOT NULL
       AND length(trim(COALESCE(t.transcript, m.text_content))) > 0
     `,
-    [groupId]
+    [groupId],
   );
   return Number(rows[0]?.count ?? 0);
 }
@@ -48,7 +48,7 @@ export type Anchor = {
  */
 export async function getOldestSentAt(
   client: pg.Pool | pg.PoolClient,
-  groupId: number
+  groupId: number,
 ): Promise<Date | null> {
   const { rows } = await client.query<{ oldest: Date | null }>(
     `
@@ -60,14 +60,14 @@ export async function getOldestSentAt(
       AND COALESCE(t.transcript, m.text_content) IS NOT NULL
       AND length(trim(COALESCE(t.transcript, m.text_content))) > 0
     `,
-    [groupId]
+    [groupId],
   );
   return rows[0]?.oldest ?? null;
 }
 
 export async function getNewestAnchor(
   client: pg.Pool | pg.PoolClient,
-  groupId: number
+  groupId: number,
 ): Promise<Anchor | null> {
   const { rows } = await client.query<{
     external_id: string;
@@ -88,7 +88,7 @@ export async function getNewestAnchor(
     ORDER BY m.sent_at DESC, m.id DESC
     LIMIT 1
     `,
-    [groupId]
+    [groupId],
   );
 
   if (rows.length === 0) return null;
@@ -121,7 +121,7 @@ type InsertResult = {
  */
 export async function insertMessages(
   client: pg.Pool | pg.PoolClient,
-  rows: MessageRow[]
+  rows: MessageRow[],
 ): Promise<InsertResult> {
   if (rows.length === 0) {
     return { inserted: 0, skipped: 0, ids: [] };
@@ -160,7 +160,7 @@ export async function insertMessages(
           row.sentAt,
           row.dedupeKey,
           row.fromMe ?? null,
-        ]
+        ],
       );
       const count = result.rowCount ?? 0;
       insertedTotal += count;
@@ -176,7 +176,7 @@ export async function insertMessages(
       if (pgErr.code === "23505") {
         // Unique violation — treat as a skipped duplicate, do not crash the process.
         console.warn(
-          `[insertMessages] skipped duplicate row (unique violation): external_id=${row.externalId ?? "null"}`
+          `[insertMessages] skipped duplicate row (unique violation): external_id=${row.externalId ?? "null"}`,
         );
       } else {
         throw err;

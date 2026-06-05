@@ -2,9 +2,9 @@
  * Unit tests for heartbeat.ts — uses vitest fake timers and a spy-based fake
  * pool so no real database is required.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { startHeartbeat, markConnected } from "./heartbeat.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RecordHeartbeatFn, SetConnectedFn } from "./heartbeat.js";
+import { markConnected, startHeartbeat } from "./heartbeat.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

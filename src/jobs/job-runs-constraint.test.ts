@@ -7,12 +7,13 @@
  * If you add a new JobType, you MUST also add a migration that ALTERs
  * job_runs to include that type in the CHECK constraint.
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import pg from "pg";
+
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../db/migrate.js";
 import { ALL_JOB_TYPES } from "./job-types.js";
 
@@ -54,8 +55,8 @@ describe("job_runs type constraint covers ALL_JOB_TYPES", () => {
         pool.query(
           `INSERT INTO job_runs (id, type, status, payload, attempts, max_attempts)
            VALUES ($1, $2, 'pending', $3, 0, 3)`,
-          [id, jobType, JSON.stringify(payload)]
-        )
+          [id, jobType, JSON.stringify(payload)],
+        ),
       ).resolves.toBeDefined();
     });
   }

@@ -1,16 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroup } from "../db/repositories/groups.js";
-import { insertMessages } from "../db/repositories/messages.js";
-import { insertTranscript } from "../db/repositories/transcripts.js";
 import { insertMediaAnalysis } from "../db/repositories/media-analyses.js";
+import { insertMessages } from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
 import { upsertWatermark } from "../db/repositories/read-watermarks.js";
 import { insertSummary } from "../db/repositories/summaries.js";
@@ -38,7 +34,7 @@ describe("prepareCatchup", () => {
   /** Seed a single message and return its database id. */
   async function seed(
     groupId: number,
-    m: Partial<NormalizedMessage> & { dedupeKey: string; sentAt: Date }
+    m: Partial<NormalizedMessage> & { dedupeKey: string; sentAt: Date },
   ): Promise<number> {
     const senderName = m.senderName !== undefined ? m.senderName : "Dana";
     let participantId: number | null = null;
@@ -67,15 +63,15 @@ describe("prepareCatchup", () => {
     await insertMessages(pool, [row]);
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM messages WHERE dedupe_key=$1`,
-      [row.dedupeKey]
+      [row.dedupeKey],
     );
     return Number(rows[0]!.id);
   }
 
   it("throws Unknown chat error for a non-existent group name", async () => {
-    await expect(
-      prepareCatchup(pool, "no-such-group", 100, 999_999)
-    ).rejects.toThrow('Unknown chat "no-such-group"');
+    await expect(prepareCatchup(pool, "no-such-group", 100, 999_999)).rejects.toThrow(
+      'Unknown chat "no-such-group"',
+    );
   });
 
   it("first-run fallback: no watermark → usedFallback=true, fromExclusive=null, newWatermark = newest message cursor", async () => {
@@ -249,9 +245,7 @@ describe("prepareCatchup", () => {
     const t1 = new Date("2026-06-01T10:00:00Z");
     await seed(g, { dedupeKey: "pc-ob-1", sentAt: t1, textContent: "some message content" });
 
-    await expect(
-      prepareCatchup(pool, "PC-overbudget", 100, 5)
-    ).rejects.toThrow(/narrow it/);
+    await expect(prepareCatchup(pool, "PC-overbudget", 100, 5)).rejects.toThrow(/narrow it/);
   });
 
   it("no-writes: prepareCatchup does not insert into summaries or read_watermarks", async () => {
@@ -267,11 +261,11 @@ describe("prepareCatchup", () => {
     // Count rows before
     const { rows: sumBefore } = await pool.query<{ count: string }>(
       `SELECT COUNT(*) AS count FROM summaries WHERE group_id = $1`,
-      [g]
+      [g],
     );
     const { rows: wmBefore } = await pool.query<{ watermark_message_id: string }>(
       `SELECT watermark_message_id FROM read_watermarks WHERE group_id = $1`,
-      [g]
+      [g],
     );
 
     const result = await prepareCatchup(pool, "PC-nowrites", 100, 999_999);
@@ -280,11 +274,11 @@ describe("prepareCatchup", () => {
     // Count rows after — should be unchanged
     const { rows: sumAfter } = await pool.query<{ count: string }>(
       `SELECT COUNT(*) AS count FROM summaries WHERE group_id = $1`,
-      [g]
+      [g],
     );
     const { rows: wmAfter } = await pool.query<{ watermark_message_id: string }>(
       `SELECT watermark_message_id FROM read_watermarks WHERE group_id = $1`,
-      [g]
+      [g],
     );
 
     expect(Number(sumAfter[0]!.count)).toBe(Number(sumBefore[0]!.count));

@@ -4,20 +4,22 @@
  *   - getNewestAnchor
  * Also covers the from_me column persistence for T003.
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
+
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { NormalizedMessage } from "../../importer/types.js";
 import { runMigrationsUp } from "../migrate.js";
 import { upsertGroup } from "./groups.js";
+import {
+  countReadableByGroup,
+  getNewestAnchor,
+  getOldestSentAt,
+  insertMessages,
+} from "./messages.js";
 import { upsertParticipant } from "./participants.js";
-import { insertMessages } from "./messages.js";
-import { countReadableByGroup, getNewestAnchor, getOldestSentAt } from "./messages.js";
-import type { NormalizedMessage } from "../../importer/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "..", "migrations");
@@ -85,10 +87,9 @@ describe("messages read queries", () => {
         },
       ]);
 
-      const { rows } = await pool.query(
-        `SELECT from_me FROM messages WHERE external_id = $1`,
-        ["ext-fromme-true"]
-      );
+      const { rows } = await pool.query(`SELECT from_me FROM messages WHERE external_id = $1`, [
+        "ext-fromme-true",
+      ]);
       expect(rows.length).toBe(1);
       expect(rows[0].from_me).toBe(true);
     });
@@ -110,7 +111,7 @@ describe("messages read queries", () => {
       ]);
 
       const { rows } = await pool.query(
-        `SELECT from_me FROM messages WHERE dedupe_key = 'fromme-null-001'`
+        `SELECT from_me FROM messages WHERE dedupe_key = 'fromme-null-001'`,
       );
       expect(rows.length).toBe(1);
       expect(rows[0].from_me).toBeNull();
@@ -159,7 +160,10 @@ describe("messages read queries", () => {
     });
 
     it("excludes messages with null or empty text_content (and no completed transcript)", async () => {
-      const groupId = await upsertGroup(pool, { name: "count-empty-content-group", source: "import" });
+      const groupId = await upsertGroup(pool, {
+        name: "count-empty-content-group",
+        source: "import",
+      });
       const participantId = await upsertParticipant(pool, "count-empty-sender");
 
       await insertMessages(pool, [
@@ -224,7 +228,7 @@ describe("messages read queries", () => {
       // Insert a completed transcript for the voice note
       await pool.query(
         `INSERT INTO transcripts (message_id, status, engine, transcript) VALUES ($1, 'completed', 'whisper', 'This is the transcript')`,
-        [messageId]
+        [messageId],
       );
 
       const count = await countReadableByGroup(pool, groupId);
@@ -255,7 +259,7 @@ describe("messages read queries", () => {
       // Insert a failed transcript — NOT completed, so not substituted
       await pool.query(
         `INSERT INTO transcripts (message_id, status, engine, error_message) VALUES ($1, 'failed', 'whisper', 'transcription error')`,
-        [messageId]
+        [messageId],
       );
 
       const count = await countReadableByGroup(pool, groupId);
@@ -275,7 +279,10 @@ describe("messages read queries", () => {
     });
 
     it("returns null for a group with only import rows (external_id null)", async () => {
-      const groupId = await upsertGroup(pool, { name: "anchor-import-only-group", source: "import" });
+      const groupId = await upsertGroup(pool, {
+        name: "anchor-import-only-group",
+        source: "import",
+      });
       const participantId = await upsertParticipant(pool, "anchor-import-sender");
 
       await insertMessages(pool, [
@@ -320,12 +327,11 @@ describe("messages read queries", () => {
       const groupJid = "anchor-test-group@g.us";
       await pool.query(
         `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (name) DO NOTHING`,
-        [groupJid, "anchor-live-group"]
+        [groupJid, "anchor-live-group"],
       );
-      const { rows: gRows } = await pool.query(
-        `SELECT id FROM groups WHERE whatsapp_id = $1`,
-        [groupJid]
-      );
+      const { rows: gRows } = await pool.query(`SELECT id FROM groups WHERE whatsapp_id = $1`, [
+        groupJid,
+      ]);
       const groupId = Number(gRows[0]!.id);
 
       const participantId = await upsertParticipant(pool, "anchor-live-sender");
@@ -378,12 +384,11 @@ describe("messages read queries", () => {
       const groupJid = "anchor-fromme-null@g.us";
       await pool.query(
         `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (name) DO NOTHING`,
-        [groupJid, "anchor-fromme-null-group"]
+        [groupJid, "anchor-fromme-null-group"],
       );
-      const { rows: gRows } = await pool.query(
-        `SELECT id FROM groups WHERE whatsapp_id = $1`,
-        [groupJid]
-      );
+      const { rows: gRows } = await pool.query(`SELECT id FROM groups WHERE whatsapp_id = $1`, [
+        groupJid,
+      ]);
       const groupId = Number(gRows[0]!.id);
       const participantId = await upsertParticipant(pool, "anchor-null-fromme-sender");
 
@@ -409,12 +414,11 @@ describe("messages read queries", () => {
       const groupJid = "anchor-order@g.us";
       await pool.query(
         `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (name) DO NOTHING`,
-        [groupJid, "anchor-order-group"]
+        [groupJid, "anchor-order-group"],
       );
-      const { rows: gRows } = await pool.query(
-        `SELECT id FROM groups WHERE whatsapp_id = $1`,
-        [groupJid]
-      );
+      const { rows: gRows } = await pool.query(`SELECT id FROM groups WHERE whatsapp_id = $1`, [
+        groupJid,
+      ]);
       const groupId = Number(gRows[0]!.id);
       const participantId = await upsertParticipant(pool, "anchor-order-sender");
 
@@ -467,11 +471,22 @@ describe("messages read queries", () => {
       const participantId = await upsertParticipant(pool, "oldest-sender");
 
       const early = new Date("2024-01-05T08:00:00.000Z");
-      const late  = new Date("2024-06-20T18:00:00.000Z");
+      const late = new Date("2024-06-20T18:00:00.000Z");
 
       await insertMessages(pool, [
-        { ...makeMsg({ groupId, dedupeKey: "oldest-late-001",  sentAt: late,  textContent: "later" }),  participantId },
-        { ...makeMsg({ groupId, dedupeKey: "oldest-early-001", sentAt: early, textContent: "earlier" }), participantId },
+        {
+          ...makeMsg({ groupId, dedupeKey: "oldest-late-001", sentAt: late, textContent: "later" }),
+          participantId,
+        },
+        {
+          ...makeMsg({
+            groupId,
+            dedupeKey: "oldest-early-001",
+            sentAt: early,
+            textContent: "earlier",
+          }),
+          participantId,
+        },
       ]);
 
       const oldest = await getOldestSentAt(pool, groupId);
@@ -483,15 +498,31 @@ describe("messages read queries", () => {
       const groupId = await upsertGroup(pool, { name: "oldest-system-group", source: "import" });
       const participantId = await upsertParticipant(pool, "oldest-sys-sender");
 
-      const sysDate  = new Date("2020-01-01T00:00:00.000Z"); // very old system message
+      const sysDate = new Date("2020-01-01T00:00:00.000Z"); // very old system message
       const textDate = new Date("2024-03-15T12:00:00.000Z");
 
       await insertMessages(pool, [
         {
-          ...makeMsg({ groupId, dedupeKey: "oldest-sys-001", messageType: "system", senderName: null, textContent: "You were added", sentAt: sysDate }),
+          ...makeMsg({
+            groupId,
+            dedupeKey: "oldest-sys-001",
+            messageType: "system",
+            senderName: null,
+            textContent: "You were added",
+            sentAt: sysDate,
+          }),
           participantId: null,
         },
-        { ...makeMsg({ groupId, dedupeKey: "oldest-text-001", messageType: "text", textContent: "Hello", sentAt: textDate }), participantId },
+        {
+          ...makeMsg({
+            groupId,
+            dedupeKey: "oldest-text-001",
+            messageType: "text",
+            textContent: "Hello",
+            sentAt: textDate,
+          }),
+          participantId,
+        },
       ]);
 
       const oldest = await getOldestSentAt(pool, groupId);
@@ -501,18 +532,36 @@ describe("messages read queries", () => {
     });
 
     it("ignores messages with null/empty content", async () => {
-      const groupId = await upsertGroup(pool, { name: "oldest-nullcontent-group", source: "import" });
+      const groupId = await upsertGroup(pool, {
+        name: "oldest-nullcontent-group",
+        source: "import",
+      });
       const participantId = await upsertParticipant(pool, "oldest-nullcontent-sender");
 
       const mediaDate = new Date("2022-05-01T10:00:00.000Z"); // media with no content
-      const textDate  = new Date("2024-08-10T14:00:00.000Z");
+      const textDate = new Date("2024-08-10T14:00:00.000Z");
 
       await insertMessages(pool, [
         {
-          ...makeMsg({ groupId, dedupeKey: "oldest-media-001", messageType: "media", textContent: null, mediaFilename: "img.jpg", sentAt: mediaDate }),
+          ...makeMsg({
+            groupId,
+            dedupeKey: "oldest-media-001",
+            messageType: "media",
+            textContent: null,
+            mediaFilename: "img.jpg",
+            sentAt: mediaDate,
+          }),
           participantId,
         },
-        { ...makeMsg({ groupId, dedupeKey: "oldest-hastext-001", textContent: "Hi", sentAt: textDate }), participantId },
+        {
+          ...makeMsg({
+            groupId,
+            dedupeKey: "oldest-hastext-001",
+            textContent: "Hi",
+            sentAt: textDate,
+          }),
+          participantId,
+        },
       ]);
 
       const oldest = await getOldestSentAt(pool, groupId);

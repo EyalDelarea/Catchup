@@ -6,21 +6,19 @@
  * The `unlink` dep is injectable so we can also test the no-ENOENT path
  * without touching disk.
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
+
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroup } from "../db/repositories/groups.js";
 import { insertMessages } from "../db/repositories/messages.js";
-import { pruneMediaFile } from "./prune.js";
 import type { NormalizedMessage } from "../importer/types.js";
+import { pruneMediaFile } from "./prune.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
@@ -29,7 +27,9 @@ const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeMediaMsg(overrides: Partial<NormalizedMessage> = {}): NormalizedMessage & { participantId: null } {
+function makeMediaMsg(
+  overrides: Partial<NormalizedMessage> = {},
+): NormalizedMessage & { participantId: null } {
   return {
     groupId: 0,
     importId: null,
@@ -49,7 +49,12 @@ function makeMediaMsg(overrides: Partial<NormalizedMessage> = {}): NormalizedMes
   };
 }
 
-async function insertMediaMessage(pool: pg.Pool, groupId: number, mediaPath: string, dedupeKey?: string): Promise<number> {
+async function insertMediaMessage(
+  pool: pg.Pool,
+  groupId: number,
+  mediaPath: string,
+  dedupeKey?: string,
+): Promise<number> {
   const result = await insertMessages(pool, [
     makeMediaMsg({ groupId, mediaPath, dedupeKey: dedupeKey ?? `prune-msg-${Math.random()}` }),
   ]);
@@ -97,7 +102,7 @@ describe("pruneMediaFile", () => {
     // DB should reflect pruned state
     const { rows } = await pool.query(
       `SELECT media_status, media_path FROM messages WHERE id = $1`,
-      [messageId]
+      [messageId],
     );
     expect(rows[0]?.media_status).toBe("pruned");
     expect(rows[0]?.media_path).toBeNull();
@@ -105,12 +110,17 @@ describe("pruneMediaFile", () => {
 
   it("is idempotent: calling prune on an already-pruned row does not throw", async () => {
     const groupId = await upsertGroup(pool, { name: "prune-idempotent-group", source: "import" });
-    const messageId = await insertMediaMessage(pool, groupId, "/tmp/already-gone.opus", "prune-idempotent-001");
+    const messageId = await insertMediaMessage(
+      pool,
+      groupId,
+      "/tmp/already-gone.opus",
+      "prune-idempotent-001",
+    );
 
     // Manually set to pruned state (simulating a prior prune)
     await pool.query(
       `UPDATE messages SET media_status = 'pruned', media_path = NULL WHERE id = $1`,
-      [messageId]
+      [messageId],
     );
 
     // Calling again should not throw
@@ -119,7 +129,7 @@ describe("pruneMediaFile", () => {
     // State stays pruned
     const { rows } = await pool.query(
       `SELECT media_status, media_path FROM messages WHERE id = $1`,
-      [messageId]
+      [messageId],
     );
     expect(rows[0]?.media_status).toBe("pruned");
   });
@@ -134,7 +144,7 @@ describe("pruneMediaFile", () => {
       pool,
       groupId,
       "/tmp/definitely-not-there-xyzzy.opus",
-      "prune-enoent-001"
+      "prune-enoent-001",
     );
 
     // Should not throw (ENOENT is swallowed)
@@ -143,7 +153,7 @@ describe("pruneMediaFile", () => {
     // DB should be updated
     const { rows } = await pool.query(
       `SELECT media_status, media_path FROM messages WHERE id = $1`,
-      [messageId]
+      [messageId],
     );
     expect(rows[0]?.media_status).toBe("pruned");
     expect(rows[0]?.media_path).toBeNull();
@@ -170,7 +180,7 @@ describe("pruneMediaFile", () => {
     // DB status unchanged
     const { rows } = await pool.query(
       `SELECT media_status, media_path FROM messages WHERE id = $1`,
-      [messageId]
+      [messageId],
     );
     expect(rows[0]?.media_status).toBe("present");
     expect(rows[0]?.media_path).toBe(tmpFile);
@@ -186,7 +196,9 @@ describe("pruneMediaFile", () => {
     const messageId = await insertMediaMessage(pool, groupId, fakeFile, "prune-inject-001");
 
     const unlinkedPaths: string[] = [];
-    const fakeUnlink = (p: string) => { unlinkedPaths.push(p); };
+    const fakeUnlink = (p: string) => {
+      unlinkedPaths.push(p);
+    };
 
     await pruneMediaFile(pool, messageId, { retainMedia: false, unlink: fakeUnlink });
 
@@ -194,7 +206,7 @@ describe("pruneMediaFile", () => {
 
     const { rows } = await pool.query(
       `SELECT media_status, media_path FROM messages WHERE id = $1`,
-      [messageId]
+      [messageId],
     );
     expect(rows[0]?.media_status).toBe("pruned");
     expect(rows[0]?.media_path).toBeNull();
@@ -206,7 +218,12 @@ describe("pruneMediaFile", () => {
 
   it("marks status 'pruned' even when unlink throws a non-ENOENT error (best-effort FS)", async () => {
     const groupId = await upsertGroup(pool, { name: "prune-unlink-err-group", source: "import" });
-    const messageId = await insertMediaMessage(pool, groupId, "/tmp/perm-denied.opus", "prune-unlink-err-001");
+    const messageId = await insertMediaMessage(
+      pool,
+      groupId,
+      "/tmp/perm-denied.opus",
+      "prune-unlink-err-001",
+    );
 
     const failingUnlink = (_p: string) => {
       const err = new Error("EACCES: permission denied");
@@ -216,13 +233,13 @@ describe("pruneMediaFile", () => {
 
     // Must NOT throw even though unlink failed
     await expect(
-      pruneMediaFile(pool, messageId, { retainMedia: false, unlink: failingUnlink })
+      pruneMediaFile(pool, messageId, { retainMedia: false, unlink: failingUnlink }),
     ).resolves.not.toThrow();
 
     // DB must still be updated to pruned
     const { rows } = await pool.query(
       `SELECT media_status, media_path FROM messages WHERE id = $1`,
-      [messageId]
+      [messageId],
     );
     expect(rows[0]?.media_status).toBe("pruned");
     expect(rows[0]?.media_path).toBeNull();

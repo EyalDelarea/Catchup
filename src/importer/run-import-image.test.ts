@@ -8,20 +8,18 @@
  *
  * Uses a real Postgres container (testcontainers) + InMemoryJobBus.
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
-import path from "node:path";
+
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../db/migrate.js";
-import { runImport } from "./run-import.js";
 import { InMemoryJobBus } from "../jobs/in-memory-bus.js";
 import { InMemoryJobRunRecorder } from "../jobs/job-run-recorder.js";
+import { runImport } from "./run-import.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "../db/migrations");
@@ -56,7 +54,7 @@ describe("runImport image enqueue (T016)", () => {
 
     await runImport(
       { filePath, name: "Zip Image Enqueue Test" },
-      { databaseUrl: connectionString, dataDir, bus }
+      { databaseUrl: connectionString, dataDir, bus },
     );
 
     const imageJobs = recorder.enqueuedJobs.filter((j) => j.job.type === "analyze.image");
@@ -68,7 +66,7 @@ describe("runImport image enqueue (T016)", () => {
       const { messageId } = job.job.payload as { messageId: string };
       const { rows } = await pool.query(
         `SELECT media_status, media_filename FROM messages WHERE id = $1`,
-        [Number(messageId)]
+        [Number(messageId)],
       );
       expect(rows.length).toBe(1);
       expect(rows[0]!.media_status).toBe("present");
@@ -86,7 +84,7 @@ describe("runImport image enqueue (T016)", () => {
 
     await runImport(
       { filePath, name: "Txt No Image Enqueue" },
-      { databaseUrl: connectionString, dataDir, bus }
+      { databaseUrl: connectionString, dataDir, bus },
     );
 
     const imageJobs = recorder.enqueuedJobs.filter((j) => j.job.type === "analyze.image");

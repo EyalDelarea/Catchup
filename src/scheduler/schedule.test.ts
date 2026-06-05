@@ -3,8 +3,8 @@
  *
  * parseTimes, nextRun, dueCatchup — all pure, no DB, no Date.now().
  */
-import { describe, it, expect } from "vitest";
-import { parseTimes, nextRun, dueCatchup } from "./schedule.js";
+import { describe, expect, it } from "vitest";
+import { dueCatchup, nextRun, parseTimes } from "./schedule.js";
 
 // ---------------------------------------------------------------------------
 // parseTimes
@@ -19,7 +19,10 @@ describe("parseTimes", () => {
   it("parses two slots and returns them sorted", () => {
     // 18:00 before 08:00 in the string, should be sorted
     const result = parseTimes("18:00,08:00");
-    expect(result).toEqual([{ h: 8, m: 0 }, { h: 18, m: 0 }]);
+    expect(result).toEqual([
+      { h: 8, m: 0 },
+      { h: 18, m: 0 },
+    ]);
   });
 
   it("deduplicates identical slots", () => {
@@ -30,12 +33,19 @@ describe("parseTimes", () => {
 
   it("deduplicates and sorts combined", () => {
     const result = parseTimes("18:00,08:00,18:00");
-    expect(result).toEqual([{ h: 8, m: 0 }, { h: 18, m: 0 }]);
+    expect(result).toEqual([
+      { h: 8, m: 0 },
+      { h: 18, m: 0 },
+    ]);
   });
 
   it("parses three distinct slots in sorted order", () => {
     const result = parseTimes("22:30,06:00,12:15");
-    expect(result).toEqual([{ h: 6, m: 0 }, { h: 12, m: 15 }, { h: 22, m: 30 }]);
+    expect(result).toEqual([
+      { h: 6, m: 0 },
+      { h: 12, m: 15 },
+      { h: 22, m: 30 },
+    ]);
   });
 
   it("throws on non HH:MM format", () => {
@@ -60,7 +70,10 @@ describe("parseTimes", () => {
 
   it("trims whitespace around entries", () => {
     const result = parseTimes(" 08:00 , 18:00 ");
-    expect(result).toEqual([{ h: 8, m: 0 }, { h: 18, m: 0 }]);
+    expect(result).toEqual([
+      { h: 8, m: 0 },
+      { h: 18, m: 0 },
+    ]);
   });
 });
 
@@ -69,7 +82,10 @@ describe("parseTimes", () => {
 // ---------------------------------------------------------------------------
 
 describe("nextRun", () => {
-  const times = [{ h: 8, m: 0 }, { h: 18, m: 0 }];
+  const times = [
+    { h: 8, m: 0 },
+    { h: 18, m: 0 },
+  ];
 
   it("returns the first slot today when now is before both slots", () => {
     // 07:00 today → next is 08:00 today
@@ -134,7 +150,10 @@ describe("nextRun", () => {
 // ---------------------------------------------------------------------------
 
 describe("dueCatchup", () => {
-  const times = [{ h: 8, m: 0 }, { h: 18, m: 0 }];
+  const times = [
+    { h: 8, m: 0 },
+    { h: 18, m: 0 },
+  ];
 
   it("returns true when lastRun is null (first ever start)", () => {
     const now = new Date(2026, 5, 4, 9, 0, 0);
@@ -181,7 +200,7 @@ describe("dueCatchup", () => {
     // yesterday 08:00 was already covered (before lastRun), but yesterday 18:00
     // was covered too (before lastRun). Today 08:00 is in range.
     const lastRun = new Date(2026, 5, 3, 19, 0, 0); // June 3, 19:00
-    const now = new Date(2026, 5, 4, 9, 0, 0);       // June 4, 09:00
+    const now = new Date(2026, 5, 4, 9, 0, 0); // June 4, 09:00
     expect(dueCatchup(now, lastRun, times)).toBe(true);
   });
 

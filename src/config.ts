@@ -105,8 +105,7 @@ export type AppConfig = {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
-    databaseUrl:
-      env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/whatsapp_sum",
+    databaseUrl: env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/whatsapp_sum",
     dataDir: path.resolve(env.DATA_DIR ?? "./data"),
     transcription: {
       pythonPath: env.TRANSCRIPTION_PYTHON ?? "python3",
