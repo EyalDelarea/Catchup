@@ -1,0 +1,92 @@
+{
+  "title": "Pipeline Logs",
+  "uid": "catchup-pipeline",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "logs",
+      "title": "All pipeline logs",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{service=\"catchup\"}",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showLabels": true,
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 2,
+      "type": "logs",
+      "title": "Filter by jobId (use variable $jobId)",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{service=\"catchup\"} | json | jobId=`$jobId`",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showLabels": true,
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 3,
+      "type": "logs",
+      "title": "Filter by groupId (use variable $groupId)",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{service=\"catchup\"} | json | groupId=`$groupId`",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showLabels": true,
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "jobId",
+        "type": "textbox",
+        "label": "Job ID",
+        "current": { "value": "" }
+      },
+      {
+        "name": "groupId",
+        "type": "textbox",
+        "label": "Group ID",
+        "current": { "value": "" }
+      },
+      {
+        "name": "messageId",
+        "type": "textbox",
+        "label": "Message ID",
+        "current": { "value": "" }
+      }
+    ]
+  }
+}

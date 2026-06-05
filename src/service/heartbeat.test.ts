@@ -1,0 +1,118 @@
+/**
+ * Unit tests for heartbeat.ts — uses vitest fake timers and a spy-based fake
+ * pool so no real database is required.
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { startHeartbeat, markConnected } from "./heartbeat.js";
+import type { RecordHeartbeatFn, SetConnectedFn } from "./heartbeat.js";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makePool() {
+  // Minimal pool stub — not used directly but passed through
+  return {} as import("pg").Pool;
+}
+
+/**
+ * Flush the microtask / promise queue.
+ * Used after `startHeartbeat` to let the initial `void record(...)` settle.
+ */
+async function flushPromises() {
+  // Schedule a microtask that resolves after all currently-queued microtasks
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+// ---------------------------------------------------------------------------
+// Tests: startHeartbeat
+// ---------------------------------------------------------------------------
+
+describe("startHeartbeat", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fires one immediate heartbeat on start", async () => {
+    const recordHeartbeat = vi.fn().mockResolvedValue(undefined) as RecordHeartbeatFn;
+    const pool = makePool();
+
+    startHeartbeat({ pool, intervalMs: 5000, recordHeartbeat });
+
+    // Flush the microtask queue for the immediate async call
+    await flushPromises();
+
+    expect(recordHeartbeat).toHaveBeenCalledTimes(1);
+    expect(recordHeartbeat).toHaveBeenCalledWith(pool);
+  });
+
+  it("fires additional heartbeats on each interval tick", async () => {
+    const recordHeartbeat = vi.fn().mockResolvedValue(undefined) as RecordHeartbeatFn;
+    const pool = makePool();
+
+    startHeartbeat({ pool, intervalMs: 5000, recordHeartbeat });
+
+    // Immediate tick
+    await flushPromises();
+    expect(recordHeartbeat).toHaveBeenCalledTimes(1);
+
+    // Advance one interval
+    await vi.advanceTimersByTimeAsync(5000);
+    await flushPromises();
+    expect(recordHeartbeat).toHaveBeenCalledTimes(2);
+
+    // Advance another interval
+    await vi.advanceTimersByTimeAsync(5000);
+    await flushPromises();
+    expect(recordHeartbeat).toHaveBeenCalledTimes(3);
+  });
+
+  it("stop() halts further heartbeats", async () => {
+    const recordHeartbeat = vi.fn().mockResolvedValue(undefined) as RecordHeartbeatFn;
+    const pool = makePool();
+
+    const { stop } = startHeartbeat({ pool, intervalMs: 5000, recordHeartbeat });
+
+    // Immediate tick
+    await flushPromises();
+    expect(recordHeartbeat).toHaveBeenCalledTimes(1);
+
+    // Stop before any interval fires
+    stop();
+
+    // Advance well past the interval — no more calls
+    await vi.advanceTimersByTimeAsync(20000);
+    await flushPromises();
+    expect(recordHeartbeat).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: markConnected
+// ---------------------------------------------------------------------------
+
+describe("markConnected", () => {
+  it("calls setCollectorConnected with pool and connected=true", async () => {
+    const setConnected = vi.fn().mockResolvedValue(undefined) as SetConnectedFn;
+    const pool = makePool();
+
+    await markConnected(pool, true, setConnected);
+
+    expect(setConnected).toHaveBeenCalledTimes(1);
+    expect(setConnected).toHaveBeenCalledWith(pool, true);
+  });
+
+  it("calls setCollectorConnected with pool and connected=false", async () => {
+    const setConnected = vi.fn().mockResolvedValue(undefined) as SetConnectedFn;
+    const pool = makePool();
+
+    await markConnected(pool, false, setConnected);
+
+    expect(setConnected).toHaveBeenCalledTimes(1);
+    expect(setConnected).toHaveBeenCalledWith(pool, false);
+  });
+});

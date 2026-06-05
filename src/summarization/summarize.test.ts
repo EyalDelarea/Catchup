@@ -1,0 +1,99 @@
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import {
+  PostgreSqlContainer,
+  type StartedPostgreSqlContainer,
+} from "@testcontainers/postgresql";
+import pg from "pg";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { runMigrationsUp } from "../db/migrate.js";
+import { upsertGroup } from "../db/repositories/groups.js";
+import { insertMessages } from "../db/repositories/messages.js";
+import type { NormalizedMessage } from "../importer/types.js";
+import { runSummarize } from "./summarize.js";
+import type { Summarizer, SummaryOutput, SummaryPrompt } from "./summarizer.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
+
+class FakeSummarizer implements Summarizer {
+  public calls = 0;
+  constructor(private out: SummaryOutput) {}
+  async summarize(_p: SummaryPrompt): Promise<SummaryOutput> {
+    this.calls++;
+    return this.out;
+  }
+}
+
+const FAKE_OUT: SummaryOutput = { overview: "o" };
+
+describe("runSummarize", () => {
+  let container: StartedPostgreSqlContainer;
+  let pool: pg.Pool;
+  let uri: string;
+
+  beforeAll(async () => {
+    container = await new PostgreSqlContainer("postgres:16-alpine").start();
+    uri = container.getConnectionUri();
+    pool = new pg.Pool({ connectionString: uri });
+    await runMigrationsUp(uri, MIGRATIONS_DIR);
+  }, 120_000);
+
+  afterAll(async () => {
+    await pool?.end();
+    await container?.stop();
+  }, 30_000);
+
+  async function seedText(groupId: number, content: string, dedupeKey: string, sentAt = new Date()): Promise<void> {
+    const row: NormalizedMessage & { participantId: number | null } = {
+      groupId, importId: null, source: "import", senderName: "Dana",
+      messageType: "text", textContent: content, mediaFilename: null, mediaPath: null,
+      mediaStatus: null, externalId: null, participantId: null, sentAt, dedupeKey,
+    };
+    await insertMessages(pool, [row]);
+  }
+
+  it("persists a summary row and returns ok with the output", async () => {
+    const g = await upsertGroup(pool, { name: "SUM-ok", source: "import" });
+    await seedText(g, "hello", "ok1");
+    const fake = new FakeSummarizer(FAKE_OUT);
+
+    const result = await runSummarize(
+      { groupName: "SUM-ok", selection: { last: 100 } },
+      { databaseUrl: uri, summarizer: fake, model: "fake", tokenBudget: 24000 }
+    );
+
+    expect(result).toMatchObject({ kind: "ok", output: FAKE_OUT });
+    const { rows } = await pool.query(`SELECT summary_type, parameters, model FROM summaries WHERE group_id=$1`, [g]);
+    expect(rows[0]).toMatchObject({ summary_type: "last_n", model: "fake" });
+    expect(rows[0].parameters).toMatchObject({ n: 100 });
+  });
+
+  it("returns empty without calling the engine when nothing is selected (FR-019)", async () => {
+    await upsertGroup(pool, { name: "SUM-empty", source: "import" });
+    const fake = new FakeSummarizer(FAKE_OUT);
+    const result = await runSummarize(
+      { groupName: "SUM-empty", selection: { last: 100 } },
+      { databaseUrl: uri, summarizer: fake, model: "fake", tokenBudget: 24000 }
+    );
+    expect(result).toEqual({ kind: "empty" });
+    expect(fake.calls).toBe(0);
+  });
+
+  it("throws for an unknown chat", async () => {
+    const fake = new FakeSummarizer(FAKE_OUT);
+    await expect(
+      runSummarize({ groupName: "nope", selection: { last: 100 } }, { databaseUrl: uri, summarizer: fake, model: "fake", tokenBudget: 24000 })
+    ).rejects.toThrow(/Unknown chat "nope"/);
+  });
+
+  it("throws over-budget before calling the engine", async () => {
+    const g = await upsertGroup(pool, { name: "SUM-big", source: "import" });
+    await seedText(g, "x".repeat(500), "big1");
+    const fake = new FakeSummarizer(FAKE_OUT);
+    await expect(
+      runSummarize({ groupName: "SUM-big", selection: { last: 100 } }, { databaseUrl: uri, summarizer: fake, model: "fake", tokenBudget: 10 })
+    ).rejects.toThrow(/too large/i);
+    expect(fake.calls).toBe(0);
+  });
+});

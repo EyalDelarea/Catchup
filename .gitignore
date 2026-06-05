@@ -1,0 +1,31 @@
+.DS_Store
+node_modules/
+.venv/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+data/
+*.log
+
+# superpowers brainstorming scratch
+.superpowers/
+
+# DB backups (contain real data)
+backups/
+
+# WhatsApp session/auth + media + imports (defensive — normally under data/)
+baileys-auth/
+imports/
+media/
+
+# Local dev / tooling artifacts
+.playwright-mcp/
+
+# Internal AI-assisted build process & planning — kept locally, excluded from the public repo
+CLAUDE.md
+.claude/
+.specify/
+specs/
+docs/

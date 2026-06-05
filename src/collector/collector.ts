@@ -1,0 +1,337 @@
+/**
+ * collector.ts — Map incoming Baileys messages → normalize → persist.
+ *
+ * Core function: handleIncomingMessage
+ * - Maps the WAMessage using message-mapper (pure, no DB)
+ * - Upserts the group by JID (source='live'; upgrades to 'mixed' if it was 'import')
+ * - Upserts the participant
+ * - Normalizes the message (source='live', externalId set)
+ * - Inserts into messages table
+ * - Returns true if a new row was stored, false if it was a duplicate
+ */
+import fs from "node:fs";
+import path from "node:path";
+import type pg from "pg";
+import type { WAMessage } from "@whiskeysockets/baileys";
+import { mapWaMessage } from "./message-mapper.js";
+import { upsertGroupByWhatsappId, updateDisplayName, isDisplayNameUnresolved } from "../db/repositories/groups.js";
+import { upsertParticipant } from "../db/repositories/participants.js";
+import { insertMessages } from "../db/repositories/messages.js";
+import { normalize } from "../importer/normalize.js";
+import type { ImportedMessage } from "../importer/types.js";
+import type { JobBus } from "../jobs/job-bus.js";
+
+export type CollectorOptions = {
+  /** Root data directory (from config.dataDir). Live voice-note media is written
+   *  under `<dataDir>/media/live/`. */
+  dataDir: string;
+  /**
+   * Optional job bus. When provided, a `transcribe.voicenote` job is enqueued
+   * for each newly-stored voice note **whose media was downloaded** (so the
+   * worker always has a file to transcribe). When absent (the legacy `collect`
+   * CLI path), the collector stores only.
+   */
+  bus?: JobBus;
+  /**
+   * Optional media downloader. When provided, voice-note audio is downloaded
+   * and written to disk so it becomes transcribable (sets media_path +
+   * media_status='present'). Injected so the collector stays testable without a
+   * real Baileys socket; production wires this to the session's media download.
+   * When absent, voice notes are stored without media (legacy behavior).
+   */
+  downloadVoiceNote?: (waMessage: WAMessage) => Promise<Buffer>;
+  /**
+   * Optional image downloader. When provided, non-sticker images are downloaded
+   * and written to disk so they become analyzable (sets media_path +
+   * media_status='present'). Injected so the collector stays testable without a
+   * real Baileys socket; production wires this to the session's media download.
+   * When absent, images are stored without media (not enqueued for analysis).
+   */
+  downloadImage?: (waMessage: WAMessage) => Promise<Buffer>;
+  /**
+   * Optional video downloader. When provided, non-sticker videos are downloaded
+   * and written to disk so they become analyzable (sets media_path +
+   * media_status='present'). When absent (or when download fails but a
+   * jpegThumbnail is present), the thumbnail is persisted instead and
+   * analyze.video is still enqueued. Injected for testability.
+   */
+  downloadVideo?: (waMessage: WAMessage) => Promise<Buffer>;
+  /**
+   * Optional group subject fetcher. When provided, the display name of a group
+   * chat is resolved from WhatsApp on first sight (while the stored name is
+   * still the raw JID). Injected so the collector stays testable without a real
+   * Baileys socket; production wires this to session.groupSubject(jid).
+   * When absent, display-name resolution for groups is skipped (legacy behavior).
+   */
+  groupSubject?: (jid: string) => Promise<string>;
+};
+
+/** Deterministic, filesystem-safe filename for a live voice note (keyed by the
+ *  Baileys message id so re-delivery overwrites the same file). `.opus` so it
+ *  matches the audio predicate the transcriber selects on. */
+function liveVoiceNoteFilename(externalId: string | null): string {
+  const safe = (externalId ?? `unknown-${Date.now()}`).replace(/[^A-Za-z0-9_-]/g, "_");
+  return `live-${safe}.opus`;
+}
+
+/** Deterministic, filesystem-safe filename for a live image (keyed by the
+ *  Baileys message id so re-delivery overwrites the same file). `.jpg` so it
+ *  matches the IMAGE_PREDICATE the vision worker selects on. */
+function liveImageFilename(externalId: string | null): string {
+  const safe = (externalId ?? `unknown-${Date.now()}`).replace(/[^A-Za-z0-9_-]/g, "_");
+  return `live-img-${safe}.jpg`;
+}
+
+/** Deterministic, filesystem-safe filename for a downloaded live video. `.mp4`
+ *  matches the VIDEO_PREDICATE the vision worker selects on. */
+function liveVideoFilename(externalId: string | null): string {
+  const safe = (externalId ?? `unknown-${Date.now()}`).replace(/[^A-Za-z0-9_-]/g, "_");
+  return `live-vid-${safe}.mp4`;
+}
+
+/** Deterministic, filesystem-safe filename for a video thumbnail (fallback when
+ *  the video itself is oversized or cannot be downloaded). `.jpg` extension so
+ *  it can be passed directly to the vision analyzer. */
+function liveVideoThumbnailFilename(externalId: string | null): string {
+  const safe = (externalId ?? `unknown-${Date.now()}`).replace(/[^A-Za-z0-9_-]/g, "_");
+  return `live-vid-thumb-${safe}.jpg`;
+}
+
+/**
+ * Handle a single incoming Baileys WAMessage:
+ * 1. Map the Baileys message → our domain shape (returns null → ignore).
+ * 2. Upsert the group by JID.
+ * 3. Upsert the participant.
+ * 4. Normalize (source='live', externalId set).
+ * 5. Insert into DB (ON CONFLICT dedupe_key → DO NOTHING).
+ *
+ * Returns true if a new row was stored, false if it was a duplicate or ignored.
+ */
+export async function handleIncomingMessage(
+  client: pg.Pool | pg.PoolClient,
+  waMessage: WAMessage,
+  opts: CollectorOptions
+): Promise<boolean> {
+  // --- Map ---
+  const mapped = mapWaMessage(waMessage);
+  if (!mapped) {
+    // Message type not supported / should be ignored
+    return false;
+  }
+
+  // --- Upsert group ---
+  const groupId = await upsertGroupByWhatsappId(client, {
+    whatsappId: mapped.remoteJid,
+    name: mapped.remoteJid, // Use JID as name fallback; can be renamed via CLI later
+    source: "live",
+  });
+
+  // --- Resolve display name (idempotent: no-op once resolved) ---
+  // Gate on "still unresolved" to avoid repeat network calls.
+  // Errors are caught and non-fatal — the JID stays as the name.
+  try {
+    const jid = mapped.remoteJid;
+    if (await isDisplayNameUnresolved(client, jid)) {
+      if (jid.endsWith("@g.us")) {
+        if (opts.groupSubject) {
+          try {
+            const subj = await opts.groupSubject(jid);
+            if (subj && subj.trim()) {
+              await updateDisplayName(client, jid, subj.trim());
+            }
+          } catch (e) {
+            const message = e instanceof Error ? e.message : String(e);
+            process.stderr.write(
+              `Warning: failed to resolve group subject for jid=${jid}: ${message}\n`
+            );
+          }
+        }
+      } else {
+        // @s.whatsapp.net, @lid, and any other non-@g.us JID:
+        // resolve from the message pushName (senderName).
+        if (mapped.senderName && mapped.senderName.trim()) {
+          await updateDisplayName(client, jid, mapped.senderName.trim());
+        }
+      }
+    }
+  } catch (e) {
+    // Resolution failure must never break message storage
+    const message = e instanceof Error ? e.message : String(e);
+    process.stderr.write(`Warning: display-name resolution error: ${message}\n`);
+  }
+
+  // --- Upsert participant ---
+  const participantId = await upsertParticipant(client, mapped.senderName);
+
+  // For a voice note we intend to download, give it a deterministic `.opus`
+  // filename up front so the dedupe key is stable across re-deliveries.
+  const willDownload = mapped.isVoiceNote && typeof opts.downloadVoiceNote === "function";
+  // For a non-sticker image we intend to download, give it a deterministic `.jpg`
+  // filename up front so the dedupe key is stable across re-deliveries.
+  const willDownloadImage =
+    mapped.isImage && !mapped.isSticker && typeof opts.downloadImage === "function";
+  // For a non-sticker video we intend to download, give it a deterministic `.mp4`
+  // filename up front. If download is not provided (or fails) but a jpegThumbnail
+  // is present, we still persist the thumbnail and enqueue analyze.video.
+  const willDownloadVideo =
+    mapped.isVideo && !mapped.isSticker && typeof opts.downloadVideo === "function";
+  const mediaFilename = willDownload
+    ? liveVoiceNoteFilename(mapped.externalId)
+    : willDownloadImage
+    ? liveImageFilename(mapped.externalId)
+    : willDownloadVideo
+    ? liveVideoFilename(mapped.externalId)
+    : mapped.mediaFilename;
+
+  // --- Normalize ---
+  const importedMsg: ImportedMessage = {
+    senderName: mapped.senderName,
+    sentAt: mapped.sentAt,
+    messageType: mapped.messageType,
+    textContent: mapped.textContent ?? "",
+    mediaFilename,
+    fromMe: mapped.fromMe,
+  };
+
+  const [normalized] = normalize([importedMsg], {
+    groupId,
+    importId: null,
+    source: "live",
+    externalIds: [mapped.externalId],
+  });
+
+  if (!normalized) {
+    return false;
+  }
+
+  // --- Download voice-note media (so it becomes transcribable) ---
+  // Sets media_path + media_status='present' on success; 'missing' on failure.
+  // A failed/absent download leaves the note non-transcribable (and un-enqueued)
+  // rather than silently dropping it — the row is still recorded.
+  if (willDownload) {
+    try {
+      const buf = await opts.downloadVoiceNote!(waMessage);
+      const mediaDir = path.join(opts.dataDir, "media", "live");
+      fs.mkdirSync(mediaDir, { recursive: true });
+      const filePath = path.join(mediaDir, mediaFilename!);
+      fs.writeFileSync(filePath, buf);
+      normalized.mediaPath = filePath;
+      normalized.mediaStatus = "present";
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `Warning: failed to download voice-note media (external_id=${mapped.externalId ?? "null"}): ${message}\n`
+      );
+      normalized.mediaPath = null;
+      normalized.mediaStatus = "missing";
+    }
+  }
+
+  // --- Download image media (so it becomes analyzable) ---
+  // Sets media_path + media_status='present' on success; 'missing' on failure.
+  // Skip stickers — they are not enqueued for visual analysis.
+  if (willDownloadImage) {
+    try {
+      const buf = await opts.downloadImage!(waMessage);
+      const mediaDir = path.join(opts.dataDir, "media", "live");
+      fs.mkdirSync(mediaDir, { recursive: true });
+      const filePath = path.join(mediaDir, mediaFilename!);
+      fs.writeFileSync(filePath, buf);
+      normalized.mediaPath = filePath;
+      normalized.mediaStatus = "present";
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `Warning: failed to download image media (external_id=${mapped.externalId ?? "null"}): ${message}\n`
+      );
+      normalized.mediaPath = null;
+      normalized.mediaStatus = "missing";
+    }
+  }
+
+  // --- Download video media (so it becomes analyzable) ---
+  // Only active when a downloadVideo downloader is provided (opt-in).
+  // On success: sets media_path + media_status='present'.
+  // On failure: if jpegThumbnail is present, persist it as a fallback so
+  //   analyzeVideo can still describe the video without the full file.
+  // Stickers are excluded by willDownloadVideo (isSticker guard above).
+  let videoThumbnailPath: string | null = null;
+  if (willDownloadVideo) {
+    const mediaDir = path.join(opts.dataDir, "media", "live");
+    let downloadSucceeded = false;
+    try {
+      const buf = await opts.downloadVideo!(waMessage);
+      fs.mkdirSync(mediaDir, { recursive: true });
+      const filePath = path.join(mediaDir, mediaFilename!);
+      fs.writeFileSync(filePath, buf);
+      normalized.mediaPath = filePath;
+      normalized.mediaStatus = "present";
+      downloadSucceeded = true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `Warning: failed to download video media (external_id=${mapped.externalId ?? "null"}): ${message}\n`
+      );
+      normalized.mediaPath = null;
+      normalized.mediaStatus = "missing";
+    }
+    // Persist embedded thumbnail as fallback when download failed but thumbnail is available
+    if (!downloadSucceeded && mapped.jpegThumbnail && mapped.jpegThumbnail.length > 0) {
+      try {
+        fs.mkdirSync(mediaDir, { recursive: true });
+        const thumbFilename = liveVideoThumbnailFilename(mapped.externalId);
+        const thumbPath = path.join(mediaDir, thumbFilename);
+        fs.writeFileSync(thumbPath, mapped.jpegThumbnail);
+        videoThumbnailPath = thumbPath;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        process.stderr.write(
+          `Warning: failed to persist video thumbnail (external_id=${mapped.externalId ?? "null"}): ${message}\n`
+        );
+      }
+    }
+  }
+
+  // --- Insert ---
+  const result = await insertMessages(client, [
+    { ...normalized, participantId },
+  ]);
+
+  const isNew = result.inserted > 0;
+
+  // --- Enqueue transcription for new, downloaded voice notes ---
+  // Only enqueue when the media is actually present on disk, so the worker
+  // always has a file to transcribe (no dead jobs).
+  if (isNew && mapped.isVoiceNote && opts.bus && normalized.mediaStatus === "present") {
+    const messageId = result.ids[0];
+    if (messageId !== undefined) {
+      await opts.bus.enqueue("transcribe.voicenote", { messageId: String(messageId) });
+    }
+  }
+
+  // --- Enqueue analysis for new, downloaded non-sticker images ---
+  // Only enqueue when the media is actually present on disk.
+  // Stickers are already excluded by willDownloadImage (isSticker guard above).
+  if (isNew && willDownloadImage && opts.bus && normalized.mediaStatus === "present") {
+    const messageId = result.ids[0];
+    if (messageId !== undefined) {
+      await opts.bus.enqueue("analyze.image", { messageId: String(messageId) });
+    }
+  }
+
+  // --- Enqueue analysis for new non-sticker videos ---
+  // Enqueue when: media is present (downloaded) OR a thumbnail was persisted.
+  // Never enqueue when neither is available (nothing to describe).
+  if (isNew && mapped.isVideo && !mapped.isSticker && opts.bus) {
+    const hasMedia = normalized.mediaStatus === "present";
+    const hasThumbnail = videoThumbnailPath !== null;
+    if (hasMedia || hasThumbnail) {
+      const messageId = result.ids[0];
+      if (messageId !== undefined) {
+        await opts.bus.enqueue("analyze.video", { messageId: String(messageId) });
+      }
+    }
+  }
+
+  return isNew;
+}

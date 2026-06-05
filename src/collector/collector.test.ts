@@ -1,0 +1,543 @@
+/**
+ * Integration tests for collector.ts (uses testcontainers PostgreSQL).
+ * Tests that handleIncomingMessage persists live messages correctly,
+ * including deduplication.
+ */
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import {
+  PostgreSqlContainer,
+  type StartedPostgreSqlContainer,
+} from "@testcontainers/postgresql";
+import pg from "pg";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
+import { runMigrationsUp } from "../db/migrate.js";
+import { handleIncomingMessage } from "./collector.js";
+import type { WAMessage } from "@whiskeysockets/baileys";
+import { InMemoryJobBus } from "../jobs/in-memory-bus.js";
+import { InMemoryJobRunRecorder } from "../jobs/job-run-recorder.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
+
+// ---------------------------------------------------------------------------
+// Fake Baileys message factories
+// ---------------------------------------------------------------------------
+
+function makeFakeWATextMessage(overrides: Partial<{
+  id: string;
+  remoteJid: string;
+  fromMe: boolean;
+  participant: string;
+  pushName: string;
+  timestampSeconds: number;
+  text: string;
+}> = {}): WAMessage {
+  const {
+    id = "LIVE_MSG_001",
+    remoteJid = "111222333-444555666@g.us",
+    fromMe = false,
+    pushName = "TestSender",
+    timestampSeconds = 1700001000,
+    text = "Live text message",
+  } = overrides;
+
+  return {
+    key: {
+      id,
+      remoteJid,
+      fromMe,
+    },
+    messageTimestamp: timestampSeconds,
+    pushName,
+    message: {
+      conversation: text,
+    },
+  } as unknown as WAMessage;
+}
+
+function makeFakeWAVoiceNoteMessage(overrides: Partial<{
+  id: string;
+  remoteJid: string;
+  pushName: string;
+  timestampSeconds: number;
+}> = {}): WAMessage {
+  const {
+    id = "LIVE_VOICE_001",
+    remoteJid = "111222333-444555666@g.us",
+    pushName = "VoiceSender",
+    timestampSeconds = 1700007000,
+  } = overrides;
+
+  return {
+    key: {
+      id,
+      remoteJid,
+      fromMe: false,
+    },
+    messageTimestamp: timestampSeconds,
+    pushName,
+    message: {
+      audioMessage: {
+        seconds: 15,
+        ptt: true,
+      },
+    },
+  } as unknown as WAMessage;
+}
+
+/** A fake voice-note media downloader (returns deterministic bytes). */
+const FAKE_AUDIO = Buffer.from("fake-opus-audio-bytes");
+const fakeDownloader = async () => FAKE_AUDIO;
+
+// ---------------------------------------------------------------------------
+// Test suite
+// ---------------------------------------------------------------------------
+
+describe("collector integration", () => {
+  let container: StartedPostgreSqlContainer;
+  let connectionString: string;
+  let pool: pg.Pool;
+  let dataDir: string;
+
+  beforeAll(async () => {
+    container = await new PostgreSqlContainer("postgres:16-alpine").start();
+    connectionString = container.getConnectionUri();
+    pool = new pg.Pool({ connectionString });
+    await runMigrationsUp(connectionString, MIGRATIONS_DIR);
+    dataDir = os.tmpdir();
+  }, 120_000);
+
+  afterAll(async () => {
+    await pool?.end();
+    await container?.stop();
+  }, 30_000);
+
+  it("stores a live text message with source='live' and external_id set", async () => {
+    const waMsg = makeFakeWATextMessage({
+      id: "EXT_001",
+      remoteJid: "111@g.us",
+      pushName: "Alice",
+      text: "Hello from live",
+      timestampSeconds: 1700002000,
+    });
+
+    const stored = await handleIncomingMessage(pool, waMsg, { dataDir });
+    expect(stored).toBe(true);
+
+    const { rows } = await pool.query(
+      `SELECT source, external_id, text_content, sent_at FROM messages WHERE external_id = $1`,
+      ["EXT_001"]
+    );
+    expect(rows.length).toBe(1);
+    const row = rows[0];
+    expect(row.source).toBe("live");
+    expect(row.external_id).toBe("EXT_001");
+    expect(row.text_content).toBe("Hello from live");
+    expect(new Date(row.sent_at).getTime()).toBe(1700002000 * 1000);
+  });
+
+  it("creates a group row with source='live' for the remoteJid", async () => {
+    const waMsg = makeFakeWATextMessage({
+      id: "EXT_002",
+      remoteJid: "222@g.us",
+      pushName: "Bob",
+      text: "Group test",
+      timestampSeconds: 1700003000,
+    });
+
+    await handleIncomingMessage(pool, waMsg, { dataDir });
+
+    const { rows } = await pool.query(
+      `SELECT whatsapp_id, source FROM groups WHERE whatsapp_id = $1`,
+      ["222@g.us"]
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].source).toBe("live");
+  });
+
+  it("deduplicates: storing the same message twice stores it once", async () => {
+    const waMsg = makeFakeWATextMessage({
+      id: "EXT_DUPE_001",
+      remoteJid: "333@g.us",
+      pushName: "Carol",
+      text: "Dedupe test message",
+      timestampSeconds: 1700004000,
+    });
+
+    const first = await handleIncomingMessage(pool, waMsg, { dataDir });
+    const second = await handleIncomingMessage(pool, waMsg, { dataDir });
+
+    expect(first).toBe(true);
+    expect(second).toBe(false); // duplicate, not stored again
+
+    const { rows } = await pool.query(
+      `SELECT COUNT(*) AS cnt FROM messages WHERE external_id = $1`,
+      ["EXT_DUPE_001"]
+    );
+    expect(Number(rows[0].cnt)).toBe(1);
+  });
+
+  it("stores sender as a participant", async () => {
+    const waMsg = makeFakeWATextMessage({
+      id: "EXT_PART_001",
+      remoteJid: "444@g.us",
+      pushName: "Dana",
+      text: "Participant test",
+      timestampSeconds: 1700005000,
+    });
+
+    await handleIncomingMessage(pool, waMsg, { dataDir });
+
+    const { rows } = await pool.query(
+      `SELECT p.display_name FROM messages m JOIN participants p ON p.id = m.participant_id WHERE m.external_id = $1`,
+      ["EXT_PART_001"]
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].display_name).toBe("Dana");
+  });
+
+  it("sets source to 'mixed' when an import group already exists for the same JID", async () => {
+    // First, insert an import group with whatsapp_id set
+    await pool.query(
+      `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, $3)`,
+      ["555@g.us", "Pre-existing Import Group", "import"]
+    );
+
+    const waMsg = makeFakeWATextMessage({
+      id: "EXT_MIXED_001",
+      remoteJid: "555@g.us",
+      pushName: "Eve",
+      text: "Mixed source test",
+      timestampSeconds: 1700006000,
+    });
+
+    await handleIncomingMessage(pool, waMsg, { dataDir });
+
+    const { rows } = await pool.query(
+      `SELECT source FROM groups WHERE whatsapp_id = $1`,
+      ["555@g.us"]
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].source).toBe("mixed");
+  });
+
+  // ---------------------------------------------------------------------------
+  // T040 — enqueue transcribe.voicenote for new voice notes
+  // ---------------------------------------------------------------------------
+
+  it("enqueues exactly one transcribe.voicenote job when a NEW voice note is stored", async () => {
+    const recorder = new InMemoryJobRunRecorder();
+    const bus = new InMemoryJobBus(recorder);
+
+    const waMsg = makeFakeWAVoiceNoteMessage({
+      id: "EXT_VN_ENQUEUE_001",
+      remoteJid: "enqueue-vn@g.us",
+      pushName: "Fay",
+      timestampSeconds: 1700010000,
+    });
+
+    const stored = await handleIncomingMessage(pool, waMsg, { dataDir, bus, downloadVoiceNote: fakeDownloader });
+    expect(stored).toBe(true);
+
+    // Exactly one job enqueued
+    expect(recorder.enqueuedJobs.length).toBe(1);
+    const enqueued = recorder.enqueuedJobs[0]!;
+    expect(enqueued.job.type).toBe("transcribe.voicenote");
+
+    // The messageId must be a non-empty string (the DB row id)
+    const { messageId } = enqueued.job.payload as { messageId: string };
+    expect(typeof messageId).toBe("string");
+    expect(messageId.length).toBeGreaterThan(0);
+
+    // Verify the messageId actually corresponds to a real messages row with
+    // downloaded, present media (so the worker can transcribe it).
+    const { rows } = await pool.query(
+      `SELECT id, media_filename, media_path, media_status FROM messages WHERE external_id = $1`,
+      ["EXT_VN_ENQUEUE_001"]
+    );
+    expect(rows.length).toBe(1);
+    expect(String(rows[0].id)).toBe(messageId);
+    expect(rows[0].media_status).toBe("present");
+    expect(rows[0].media_filename).toMatch(/\.opus$/);
+    expect(rows[0].media_path).toBeTruthy();
+  });
+
+  it("downloads voice-note media to disk and marks it present (transcribable)", async () => {
+    const waMsg = makeFakeWAVoiceNoteMessage({
+      id: "EXT_VN_DL_001",
+      remoteJid: "vn-dl@g.us",
+      pushName: "Mia",
+      timestampSeconds: 1700020000,
+    });
+
+    const stored = await handleIncomingMessage(pool, waMsg, { dataDir, downloadVoiceNote: fakeDownloader });
+    expect(stored).toBe(true);
+
+    const { rows } = await pool.query(
+      `SELECT media_filename, media_path, media_status, message_type FROM messages WHERE external_id = $1`,
+      ["EXT_VN_DL_001"]
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].message_type).toBe("media");
+    expect(rows[0].media_status).toBe("present");
+    expect(rows[0].media_filename).toMatch(/^live-EXT_VN_DL_001\.opus$/);
+    // The file was actually written with the downloaded bytes.
+    expect(fs.existsSync(rows[0].media_path)).toBe(true);
+    expect(fs.readFileSync(rows[0].media_path).equals(FAKE_AUDIO)).toBe(true);
+  });
+
+  it("marks media 'missing' and does NOT enqueue when the download fails", async () => {
+    const recorder = new InMemoryJobRunRecorder();
+    const bus = new InMemoryJobBus(recorder);
+    const failingDownloader = async () => { throw new Error("download boom"); };
+
+    const waMsg = makeFakeWAVoiceNoteMessage({
+      id: "EXT_VN_DLFAIL_001",
+      remoteJid: "vn-dlfail@g.us",
+      pushName: "Noa",
+      timestampSeconds: 1700021000,
+    });
+
+    const stored = await handleIncomingMessage(pool, waMsg, { dataDir, bus, downloadVoiceNote: failingDownloader });
+    expect(stored).toBe(true); // the message row is still recorded
+
+    const { rows } = await pool.query(
+      `SELECT media_status, media_path FROM messages WHERE external_id = $1`,
+      ["EXT_VN_DLFAIL_001"]
+    );
+    expect(rows[0].media_status).toBe("missing");
+    expect(rows[0].media_path).toBeNull();
+    // No dead job: a note without media is not enqueued.
+    expect(recorder.enqueuedJobs.length).toBe(0);
+  });
+
+  it("does NOT enqueue a voice note when no downloader is provided (no media to transcribe)", async () => {
+    const recorder = new InMemoryJobRunRecorder();
+    const bus = new InMemoryJobBus(recorder);
+
+    const waMsg = makeFakeWAVoiceNoteMessage({
+      id: "EXT_VN_NODL_001",
+      remoteJid: "vn-nodl@g.us",
+      pushName: "Omri",
+      timestampSeconds: 1700022000,
+    });
+
+    const stored = await handleIncomingMessage(pool, waMsg, { dataDir, bus });
+    expect(stored).toBe(true);
+    expect(recorder.enqueuedJobs.length).toBe(0);
+  });
+
+  it("does NOT enqueue a job for a non-voice-note (text) message", async () => {
+    const recorder = new InMemoryJobRunRecorder();
+    const bus = new InMemoryJobBus(recorder);
+
+    const waMsg = makeFakeWATextMessage({
+      id: "EXT_TEXT_NOQUEUE_001",
+      remoteJid: "text-noqueue@g.us",
+      pushName: "Gail",
+      text: "Just a text",
+      timestampSeconds: 1700011000,
+    });
+
+    const stored = await handleIncomingMessage(pool, waMsg, { dataDir, bus });
+    expect(stored).toBe(true);
+    expect(recorder.enqueuedJobs.length).toBe(0);
+  });
+
+  it("does NOT enqueue a job for a DUPLICATE voice note (already-stored)", async () => {
+    const recorder = new InMemoryJobRunRecorder();
+    const bus = new InMemoryJobBus(recorder);
+
+    const waMsg = makeFakeWAVoiceNoteMessage({
+      id: "EXT_VN_DUPE_001",
+      remoteJid: "vn-dupe@g.us",
+      pushName: "Harry",
+      timestampSeconds: 1700012000,
+    });
+
+    // First insertion — should enqueue (media downloaded → present)
+    const first = await handleIncomingMessage(pool, waMsg, { dataDir, bus, downloadVoiceNote: fakeDownloader });
+    expect(first).toBe(true);
+    expect(recorder.enqueuedJobs.length).toBe(1);
+
+    // Second insertion (duplicate) — should NOT enqueue again
+    const second = await handleIncomingMessage(pool, waMsg, { dataDir, bus, downloadVoiceNote: fakeDownloader });
+    expect(second).toBe(false);
+    expect(recorder.enqueuedJobs.length).toBe(1); // still only 1
+  });
+
+  it("does NOT enqueue when no bus is provided (backward-compatible collect path)", async () => {
+    // No bus — just confirm the function still returns true and no error thrown
+    const waMsg = makeFakeWAVoiceNoteMessage({
+      id: "EXT_VN_NOBUS_001",
+      remoteJid: "no-bus@g.us",
+      pushName: "Iris",
+      timestampSeconds: 1700013000,
+    });
+
+    const stored = await handleIncomingMessage(pool, waMsg, { dataDir });
+    expect(stored).toBe(true);
+    // No assertion on bus — just verifying no crash and correct return value
+  });
+
+  // ---------------------------------------------------------------------------
+  // T021 — display-name resolution
+  // ---------------------------------------------------------------------------
+
+  it("T021: group JID (@g.us) gets its name updated to the groupSubject return value", async () => {
+    const jid = "resolve-group-001@g.us";
+    let groupSubjectCallCount = 0;
+    const groupSubject = async (_jid: string) => {
+      groupSubjectCallCount++;
+      return "My Resolved Group";
+    };
+
+    const waMsg = makeFakeWATextMessage({
+      id: "EXT_DN_GRP_001",
+      remoteJid: jid,
+      pushName: "Someone",
+      text: "hello",
+      timestampSeconds: 1700030000,
+    });
+
+    await handleIncomingMessage(pool, waMsg, { dataDir, groupSubject });
+
+    const { rows } = await pool.query(
+      `SELECT name FROM groups WHERE whatsapp_id = $1`,
+      [jid]
+    );
+    expect(rows[0].name).toBe("My Resolved Group");
+    expect(groupSubjectCallCount).toBe(1);
+  });
+
+  it("T021: 1:1 JID (@s.whatsapp.net) gets its name updated to pushName", async () => {
+    const jid = "1234567890@s.whatsapp.net";
+
+    const waMsg = makeFakeWATextMessage({
+      id: "EXT_DN_11_001",
+      remoteJid: jid,
+      pushName: "Alice",
+      text: "hey",
+      timestampSeconds: 1700031000,
+    });
+
+    await handleIncomingMessage(pool, waMsg, { dataDir });
+
+    const { rows } = await pool.query(
+      `SELECT name FROM groups WHERE whatsapp_id = $1`,
+      [jid]
+    );
+    expect(rows[0].name).toBe("Alice");
+  });
+
+  it("T021: groupSubject that throws leaves name as the raw JID (resolution failure is non-fatal; message still stored)", async () => {
+    const jid = "resolve-fail-001@g.us";
+    const groupSubject = async (_jid: string): Promise<string> => {
+      throw new Error("network error");
+    };
+
+    const waMsg = makeFakeWATextMessage({
+      id: "EXT_DN_FAIL_001",
+      remoteJid: jid,
+      pushName: "Bob",
+      text: "testing",
+      timestampSeconds: 1700032000,
+    });
+
+    const stored = await handleIncomingMessage(pool, waMsg, { dataDir, groupSubject });
+    expect(stored).toBe(true); // message was still stored
+
+    const { rows } = await pool.query(
+      `SELECT name FROM groups WHERE whatsapp_id = $1`,
+      [jid]
+    );
+    // Name stays as the raw JID (unchanged)
+    expect(rows[0].name).toBe(jid);
+  });
+
+  it("T021: second message for an already-resolved group does NOT call groupSubject again and leaves name unchanged", async () => {
+    const jid = "resolve-once-001@g.us";
+    let groupSubjectCallCount = 0;
+    const groupSubject = async (_jid: string) => {
+      groupSubjectCallCount++;
+      return "Resolved Once";
+    };
+
+    const firstMsg = makeFakeWATextMessage({
+      id: "EXT_DN_ONCE_001",
+      remoteJid: jid,
+      pushName: "Carol",
+      text: "first message",
+      timestampSeconds: 1700033000,
+    });
+    const secondMsg = makeFakeWATextMessage({
+      id: "EXT_DN_ONCE_002",
+      remoteJid: jid,
+      pushName: "Carol",
+      text: "second message",
+      timestampSeconds: 1700033001,
+    });
+
+    await handleIncomingMessage(pool, firstMsg, { dataDir, groupSubject });
+    await handleIncomingMessage(pool, secondMsg, { dataDir, groupSubject });
+
+    // groupSubject called exactly once (first message) — gate prevents second call
+    expect(groupSubjectCallCount).toBe(1);
+
+    const { rows } = await pool.query(
+      `SELECT name FROM groups WHERE whatsapp_id = $1`,
+      [jid]
+    );
+    expect(rows[0].name).toBe("Resolved Once");
+  });
+
+  it("T021-lid: @lid JID gets its name updated to pushName (same as @s.whatsapp.net treatment)", async () => {
+    const jid = "70390252580989@lid";
+
+    const waMsg = makeFakeWATextMessage({
+      id: "EXT_DN_LID_001",
+      remoteJid: jid,
+      pushName: "Lid Person",
+      text: "message from lid",
+      timestampSeconds: 1700034000,
+    });
+
+    await handleIncomingMessage(pool, waMsg, { dataDir });
+
+    const { rows } = await pool.query(
+      `SELECT name FROM groups WHERE whatsapp_id = $1`,
+      [jid]
+    );
+    expect(rows[0].name).toBe("Lid Person");
+  });
+
+  it("T021-lid: groupSubject is NOT called for @lid JIDs (must never call groupSubject for @lid)", async () => {
+    const jid = "99887766554433@lid";
+    let groupSubjectCalled = false;
+    const groupSubject = async (_jid: string) => {
+      groupSubjectCalled = true;
+      return "Should Not Be Used";
+    };
+
+    const waMsg = makeFakeWATextMessage({
+      id: "EXT_DN_LID_002",
+      remoteJid: jid,
+      pushName: "Another Lid Person",
+      text: "another lid message",
+      timestampSeconds: 1700035000,
+    });
+
+    await handleIncomingMessage(pool, waMsg, { dataDir, groupSubject });
+
+    expect(groupSubjectCalled).toBe(false);
+
+    const { rows } = await pool.query(
+      `SELECT name FROM groups WHERE whatsapp_id = $1`,
+      [jid]
+    );
+    expect(rows[0].name).toBe("Another Lid Person");
+  });
+});

@@ -1,0 +1,92 @@
+/**
+ * T020 (importer side) — Tests for analyze.video enqueue in runImport.
+ *
+ * Verifies:
+ * - Present non-sticker videos get analyze.video enqueued (newest-first)
+ * - Missing media does NOT get enqueued
+ *
+ * Uses a real Postgres container (testcontainers) + InMemoryJobBus.
+ */
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import {
+  PostgreSqlContainer,
+  type StartedPostgreSqlContainer,
+} from "@testcontainers/postgresql";
+import pg from "pg";
+import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
+import { runMigrationsUp } from "../db/migrate.js";
+import { runImport } from "./run-import.js";
+import { InMemoryJobBus } from "../jobs/in-memory-bus.js";
+import { InMemoryJobRunRecorder } from "../jobs/job-run-recorder.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MIGRATIONS_DIR = path.resolve(__dirname, "../db/migrations");
+const FIXTURES_DIR = path.resolve(__dirname, "../../fixtures");
+
+describe("runImport video enqueue (T020)", () => {
+  let container: StartedPostgreSqlContainer;
+  let connectionString: string;
+  let pool: pg.Pool;
+  let dataDir: string;
+
+  beforeAll(async () => {
+    container = await new PostgreSqlContainer("postgres:16-alpine").start();
+    connectionString = container.getConnectionUri();
+    pool = new pg.Pool({ connectionString });
+    await runMigrationsUp(connectionString, MIGRATIONS_DIR);
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "whatsapp-import-vid-test-"));
+  }, 120_000);
+
+  afterAll(async () => {
+    await pool?.end();
+    await container?.stop();
+    if (dataDir && fs.existsSync(dataDir)) {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("enqueues analyze.video for present videos in a ZIP import", async () => {
+    const recorder = new InMemoryJobRunRecorder();
+    const bus = new InMemoryJobBus(recorder);
+    const filePath = path.join(FIXTURES_DIR, "sample-chat-video.zip");
+
+    await runImport(
+      { filePath, name: "Zip Video Enqueue Test" },
+      { databaseUrl: connectionString, dataDir, bus }
+    );
+
+    const videoJobs = recorder.enqueuedJobs.filter((j) => j.job.type === "analyze.video");
+    // The fixture sample-chat-video.zip has one video (VID-20260601-WA0001.mp4)
+    expect(videoJobs.length).toBeGreaterThan(0);
+
+    // Each messageId must correspond to a real messages row with present video
+    for (const job of videoJobs) {
+      const { messageId } = job.job.payload as { messageId: string };
+      const { rows } = await pool.query(
+        `SELECT media_status, media_filename FROM messages WHERE id = $1`,
+        [Number(messageId)]
+      );
+      expect(rows.length).toBe(1);
+      expect(rows[0]!.media_status).toBe("present");
+      const filename: string = rows[0]!.media_filename ?? "";
+      expect(filename).toMatch(/\.(mp4|mov)$/i);
+    }
+  });
+
+  it("does not enqueue analyze.video for missing media (txt import)", async () => {
+    const recorder = new InMemoryJobRunRecorder();
+    const bus = new InMemoryJobBus(recorder);
+    const filePath = path.join(FIXTURES_DIR, "android-chat.txt");
+
+    await runImport(
+      { filePath, name: "Txt No Video Enqueue" },
+      { databaseUrl: connectionString, dataDir, bus }
+    );
+
+    const videoJobs = recorder.enqueuedJobs.filter((j) => j.job.type === "analyze.video");
+    expect(videoJobs).toHaveLength(0);
+  });
+}, 120_000);

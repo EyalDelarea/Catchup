@@ -1,0 +1,172 @@
+{
+  "title": "Jobs Status (live)",
+  "uid": "jobs-status",
+  "schemaVersion": 38,
+  "version": 6,
+  "refresh": "10s",
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "browser",
+  "tags": ["jobs", "pipeline", "cockpit"],
+  "panels": [
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Ingested (range)",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "table", "editorMode": "code", "rawSql": "SELECT count(*)::int AS value FROM messages WHERE $__timeFilter(created_at)" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "none", "textMode": "auto", "justifyMode": "auto" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "purple" } }, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Backlog (pending)",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "table", "editorMode": "code", "rawSql": "SELECT count(*)::int AS value FROM job_runs WHERE status = 'pending'" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "none", "textMode": "auto", "justifyMode": "auto" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "blue", "value": null } ] } }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Running now",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "table", "editorMode": "code", "rawSql": "SELECT count(*)::int AS value FROM job_runs WHERE status = 'running' AND updated_at > now() - interval '10 minutes'" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "none", "textMode": "auto", "justifyMode": "auto" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Completed (range)",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "time_series", "editorMode": "code", "rawSql": "SELECT $__timeGroupAlias(updated_at, '$__interval'), count(*) AS value FROM job_runs WHERE status = 'done' AND $__timeFilter(updated_at) GROUP BY 1 ORDER BY 1" } ],
+      "options": { "reduceOptions": { "calcs": ["sum"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto", "justifyMode": "auto" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Failed (range)",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "time_series", "editorMode": "code", "rawSql": "SELECT $__timeGroupAlias(updated_at, '$__interval'), count(*) AS value FROM job_runs WHERE status = 'failed' AND $__timeFilter(updated_at) GROUP BY 1 ORDER BY 1" } ],
+      "options": { "reduceOptions": { "calcs": ["sum"], "fields": "", "values": false }, "colorMode": "value", "graphMode": "area", "textMode": "auto", "justifyMode": "auto" },
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "0", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] } }, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Dead",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "table", "editorMode": "code", "rawSql": "SELECT count(*)::int AS value FROM job_runs WHERE status = 'dead'" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "none", "textMode": "auto", "justifyMode": "auto" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] }
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Text messages (range)",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 0, "y": 4, "w": 5, "h": 4 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "table", "editorMode": "code", "rawSql": "SELECT count(*)::int AS value FROM messages WHERE message_type = 'text' AND $__timeFilter(created_at)" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "none", "textMode": "auto", "justifyMode": "auto" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] }
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Photos (range)",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 5, "y": 4, "w": 5, "h": 4 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "table", "editorMode": "code", "rawSql": "SELECT count(*)::int AS value FROM job_runs WHERE type = 'analyze.image' AND status = 'done' AND $__timeFilter(updated_at)" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "none", "textMode": "auto", "justifyMode": "auto" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] }
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Videos (range)",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 10, "y": 4, "w": 5, "h": 4 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "table", "editorMode": "code", "rawSql": "SELECT count(*)::int AS value FROM job_runs WHERE type = 'analyze.video' AND status = 'done' AND $__timeFilter(updated_at)" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "none", "textMode": "auto", "justifyMode": "auto" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "yellow" } }, "overrides": [] }
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "Voice notes (range)",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 15, "y": 4, "w": 5, "h": 4 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "table", "editorMode": "code", "rawSql": "SELECT count(*)::int AS value FROM job_runs WHERE type = 'transcribe.voicenote' AND status = 'done' AND $__timeFilter(updated_at)" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "none", "textMode": "auto", "justifyMode": "auto" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "orange" } }, "overrides": [] }
+    },
+    {
+      "id": 16,
+      "type": "stat",
+      "title": "Summaries (range)",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 20, "y": 4, "w": 4, "h": 4 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "table", "editorMode": "code", "rawSql": "SELECT count(*)::int AS value FROM summaries WHERE $__timeFilter(created_at)" } ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "colorMode": "background", "graphMode": "none", "textMode": "auto", "justifyMode": "auto" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "super-light-purple" } }, "overrides": [] }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Throughput — completions by job type (+ messages ingested)",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 0, "y": 8, "w": 24, "h": 9 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "time_series", "editorMode": "code", "rawSql": "SELECT $__timeGroupAlias(updated_at, '$__interval'), type AS metric, count(*) AS value FROM job_runs WHERE status IN ('done','failed','dead') AND $__timeFilter(updated_at) GROUP BY 1, type UNION ALL SELECT $__timeGroupAlias(created_at, '$__interval'), 'messages.saved' AS metric, count(*) AS value FROM messages WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 1" } ],
+      "options": { "legend": { "displayMode": "table", "placement": "right", "showLegend": true, "calcs": ["sum"] }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "custom": { "drawStyle": "bars", "fillOpacity": 80, "lineWidth": 0, "stacking": { "mode": "normal", "group": "A" } } }, "overrides": [] }
+    },
+    {
+      "id": 17,
+      "type": "table",
+      "title": "Queue wait & processing time by type (range)",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 0, "y": 17, "w": 10, "h": 8 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "table", "editorMode": "code", "rawSql": "SELECT type, count(*) FILTER (WHERE status = 'done')::int AS done, round(avg(extract(epoch FROM started_at - created_at)) FILTER (WHERE started_at IS NOT NULL))::int AS avg_queue, round(avg(extract(epoch FROM updated_at - started_at)) FILTER (WHERE started_at IS NOT NULL AND status IN ('done','failed','dead')))::int AS avg_proc FROM job_runs WHERE $__timeFilter(updated_at) GROUP BY type ORDER BY type" } ],
+      "options": { "showHeader": true, "cellHeight": "sm" },
+      "fieldConfig": { "defaults": { "custom": { "align": "left", "filterable": false } }, "overrides": [ { "matcher": { "id": "byName", "options": "avg_queue" }, "properties": [ { "id": "unit", "value": "s" }, { "id": "custom.align", "value": "right" }, { "id": "displayName", "value": "avg queue" } ] }, { "matcher": { "id": "byName", "options": "avg_proc" }, "properties": [ { "id": "unit", "value": "s" }, { "id": "custom.align", "value": "right" }, { "id": "displayName", "value": "avg proc" } ] }, { "matcher": { "id": "byName", "options": "done" }, "properties": [ { "id": "custom.align", "value": "right" } ] } ] }
+    },
+    {
+      "id": 18,
+      "type": "table",
+      "title": "Recent summaries — coverage & generation time",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 10, "y": 17, "w": 14, "h": 8 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "table", "editorMode": "code", "rawSql": "SELECT s.created_at AS made_at, (s.parameters->>'messageCount')::int AS messages, (s.parameters->'fromExclusive'->>'sentAt')::timestamptz AS covers_from, (s.parameters->'toInclusive'->>'sentAt')::timestamptz AS covers_to, j.proc AS gen_seconds FROM summaries s LEFT JOIN LATERAL ( SELECT round(extract(epoch FROM jr.updated_at - jr.started_at))::int AS proc FROM job_runs jr WHERE jr.type = 'summarize.group' AND (jr.payload->>'groupId')::bigint = s.group_id AND jr.started_at IS NOT NULL ORDER BY abs(extract(epoch FROM jr.updated_at - s.created_at)) ASC LIMIT 1 ) j ON true WHERE $__timeFilter(s.created_at) ORDER BY s.created_at DESC LIMIT 30" } ],
+      "options": { "showHeader": true, "cellHeight": "sm" },
+      "fieldConfig": { "defaults": { "custom": { "align": "left", "filterable": false } }, "overrides": [ { "matcher": { "id": "byName", "options": "made_at" }, "properties": [ { "id": "unit", "value": "dateTimeAsLocal" }, { "id": "displayName", "value": "made at" } ] }, { "matcher": { "id": "byName", "options": "covers_from" }, "properties": [ { "id": "unit", "value": "dateTimeAsLocal" }, { "id": "displayName", "value": "covers from" } ] }, { "matcher": { "id": "byName", "options": "covers_to" }, "properties": [ { "id": "unit", "value": "dateTimeAsLocal" }, { "id": "displayName", "value": "covers to" } ] }, { "matcher": { "id": "byName", "options": "messages" }, "properties": [ { "id": "custom.align", "value": "right" } ] }, { "matcher": { "id": "byName", "options": "gen_seconds" }, "properties": [ { "id": "unit", "value": "s" }, { "id": "custom.align", "value": "right" }, { "id": "displayName", "value": "gen time" } ] } ] }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Recent activity",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 0, "y": 25, "w": 13, "h": 8 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "table", "editorMode": "code", "rawSql": "SELECT type, status, round(extract(epoch FROM started_at - created_at))::int AS queued, round(extract(epoch FROM updated_at - started_at))::int AS took, left(coalesce(last_error, ''), 60) AS error FROM job_runs WHERE status IN ('done','failed','dead') ORDER BY updated_at DESC LIMIT 30" } ],
+      "options": { "showHeader": true, "cellHeight": "sm" },
+      "fieldConfig": { "defaults": { "custom": { "align": "left", "filterable": true } }, "overrides": [ { "matcher": { "id": "byName", "options": "queued" }, "properties": [ { "id": "unit", "value": "s" }, { "id": "custom.align", "value": "right" } ] }, { "matcher": { "id": "byName", "options": "took" }, "properties": [ { "id": "unit", "value": "s" }, { "id": "custom.align", "value": "right" } ] } ] }
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "In-flight & pending (oldest first)",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "x": 13, "y": 25, "w": 11, "h": 8 },
+      "targets": [ { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "table", "editorMode": "code", "rawSql": "SELECT type, status, attempts, round(extract(epoch FROM now() - updated_at))::int AS age FROM job_runs WHERE status IN ('running','pending') ORDER BY updated_at ASC LIMIT 30" } ],
+      "options": { "showHeader": true, "cellHeight": "sm" },
+      "fieldConfig": { "defaults": { "custom": { "align": "left", "filterable": true } }, "overrides": [ { "matcher": { "id": "byName", "options": "age" }, "properties": [ { "id": "unit", "value": "s" }, { "id": "custom.align", "value": "right" } ] } ] }
+    }
+  ]
+}

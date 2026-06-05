@@ -1,0 +1,198 @@
+/**
+ * live-service.ts — T042: testable wiring between a CollectorSession,
+ * the job bus, service_status heartbeat, and crash-isolation.
+ *
+ * `attachCollector` is a pure dependency-injection function:
+ * - on session 'connected' → setCollectorConnected(pool, true) + start heartbeat
+ * - on session 'disconnected' → setCollectorConnected(pool, false)
+ * - on session 'message' → handleMessage; errors are caught, logged, and forwarded
+ *   to onError — NEVER propagated (crash isolation).
+ * - stop() → stop heartbeat + session.stop() + set disconnected
+ *
+ * The real `handleIncomingMessage` from collector.ts and the real
+ * `setCollectorConnected` / `recordHeartbeat` from service-status / heartbeat
+ * are the defaults; override them in unit tests via deps.
+ */
+import type pg from "pg";
+import type { WAMessage } from "@whiskeysockets/baileys";
+import type { CollectorSession } from "../collector/session.js";
+import type { JobBus } from "../jobs/job-bus.js";
+import { startHeartbeat, type HeartbeatHandle } from "./heartbeat.js";
+
+// ---------------------------------------------------------------------------
+// Injectable function types (for unit testing)
+// ---------------------------------------------------------------------------
+
+export type SetConnectedFn = (
+  pool: pg.Pool | pg.PoolClient,
+  connected: boolean
+) => Promise<void>;
+
+export type RecordHeartbeatFn = (
+  pool: pg.Pool | pg.PoolClient
+) => Promise<void>;
+
+export type HandleMessageFn = (
+  pool: pg.Pool | pg.PoolClient,
+  msg: WAMessage,
+  opts: {
+    dataDir: string;
+    bus: JobBus;
+    downloadVoiceNote?: (m: WAMessage) => Promise<Buffer>;
+    downloadImage?: (m: WAMessage) => Promise<Buffer>;
+    downloadVideo?: (m: WAMessage) => Promise<Buffer>;
+    groupSubject?: (jid: string) => Promise<string>;
+  }
+) => Promise<boolean>;
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+export type AttachCollectorDeps = {
+  session: CollectorSession;
+  pool: pg.Pool | pg.PoolClient;
+  bus: JobBus;
+  dataDir: string;
+  /** Called on error inside a 'message' handler. Default: console.error */
+  onError?: (err: unknown) => void;
+  /** Heartbeat interval in ms. Default: 30_000 (30 s). */
+  heartbeatMs?: number;
+  /** Injectable override — defaults to real setCollectorConnected. */
+  setConnected?: SetConnectedFn;
+  /** Injectable override — defaults to real recordHeartbeat. */
+  recordHeartbeat?: RecordHeartbeatFn;
+  /** Injectable override — defaults to real handleIncomingMessage. */
+  handleMessage?: HandleMessageFn;
+};
+
+export type LiveServiceHandle = {
+  stop: () => void;
+};
+
+/**
+ * Attach lifecycle wiring to an already-started CollectorSession.
+ *
+ * Returns a handle whose `stop()` tears everything down cleanly.
+ * A collector error inside the 'message' handler is ALWAYS caught and never
+ * throws out of the event listener (crash isolation).
+ */
+export function attachCollector(deps: AttachCollectorDeps): LiveServiceHandle {
+  const {
+    session,
+    pool,
+    bus,
+    dataDir,
+    onError = (err) => {
+      console.error("[live-service] message handler error:", err);
+    },
+    heartbeatMs = 30_000,
+  } = deps;
+
+  // Resolve injectable overrides (lazy to keep real imports out of tests)
+  let _setConnected: SetConnectedFn;
+  let _recordHeartbeat: RecordHeartbeatFn;
+  let _handleMessage: HandleMessageFn;
+
+  if (deps.setConnected) {
+    _setConnected = deps.setConnected;
+  } else {
+    // Lazy-loaded real implementation — do NOT import at module top level or
+    // else the test environment would need the real DB module.
+    // This is resolved on first event; safe because events don't fire until
+    // the session connects.
+    _setConnected = async (p, c) => {
+      const { setCollectorConnected } = await import(
+        "../db/repositories/service-status.js"
+      );
+      await setCollectorConnected(p, c);
+    };
+  }
+
+  if (deps.recordHeartbeat) {
+    _recordHeartbeat = deps.recordHeartbeat;
+  } else {
+    _recordHeartbeat = async (p) => {
+      const { recordHeartbeat } = await import(
+        "../db/repositories/service-status.js"
+      );
+      await recordHeartbeat(p);
+    };
+  }
+
+  if (deps.handleMessage) {
+    _handleMessage = deps.handleMessage;
+  } else {
+    _handleMessage = async (p, msg, opts) => {
+      const { handleIncomingMessage } = await import(
+        "../collector/collector.js"
+      );
+      return handleIncomingMessage(p, msg, opts);
+    };
+  }
+
+  // Heartbeat handle — initialized on 'connected', torn down on stop()
+  let heartbeatHandle: HeartbeatHandle | null = null;
+
+  // ── Event handlers ─────────────────────────────────────────────────────────
+
+  const onConnected = () => {
+    // Mark DB row as connected
+    void _setConnected(pool, true).catch((err) => {
+      console.error("[live-service] setConnected(true) failed:", err);
+    });
+
+    // Start heartbeat loop
+    heartbeatHandle = startHeartbeat({
+      pool: pool as pg.Pool,
+      intervalMs: heartbeatMs,
+      recordHeartbeat: _recordHeartbeat,
+    });
+  };
+
+  const onDisconnected = () => {
+    void _setConnected(pool, false).catch((err) => {
+      console.error("[live-service] setConnected(false) failed:", err);
+    });
+  };
+
+  const onMessage = (msg: WAMessage) => {
+    // Crash-isolation: errors inside the handler must NEVER escape the listener.
+    void _handleMessage(pool, msg, {
+      dataDir,
+      bus,
+      downloadVoiceNote: (m) => session.downloadMedia(m),
+      downloadImage: (m) => session.downloadMedia(m),
+      downloadVideo: (m) => session.downloadMedia(m),
+      groupSubject: (jid) => session.groupSubject(jid),
+    })
+      .then((_stored) => {
+        // stored can be used for logging; intentionally unused here.
+      })
+      .catch((err: unknown) => {
+        onError(err);
+      });
+  };
+
+  // Register listeners
+  session.on("connected", onConnected);
+  session.on("disconnected", onDisconnected);
+  // EventEmitter uses `message` as a plain string event; WAMessage is the arg.
+  session.on("message", onMessage as (...args: unknown[]) => void);
+
+  // ── Handle ─────────────────────────────────────────────────────────────────
+
+  return {
+    stop() {
+      // Stop heartbeat timer
+      heartbeatHandle?.stop();
+      heartbeatHandle = null;
+
+      // Mark disconnected in DB (best-effort)
+      void _setConnected(pool, false).catch(() => {});
+
+      // Stop the Baileys session
+      session.stop();
+    },
+  };
+}

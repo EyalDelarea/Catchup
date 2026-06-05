@@ -1,0 +1,51 @@
+import type pg from "pg";
+import { findGroupByName } from "../db/repositories/groups.js";
+import { selectMessages, type Selection } from "./select.js";
+import { buildPrompt, estimateTokens } from "./prompt.js";
+import type { SummaryPrompt } from "./summarizer.js";
+
+export type PreparedSummary =
+  | { kind: "empty" }
+  | {
+      kind: "ready";
+      groupId: number;
+      prompt: SummaryPrompt;
+      summaryType: "last_n" | "since";
+      parameters: Record<string, unknown>;
+      messageCount: number;
+    };
+
+/**
+ * Shared first half of summarization (used by the CLI and the web server):
+ * resolve the group, select messages, apply the over-budget guard, build the
+ * prompt. Throws on unknown chat / over-budget (same messages as before).
+ */
+export async function prepareSummary(
+  client: pg.Pool | pg.PoolClient,
+  groupName: string,
+  selection: Selection,
+  tokenBudget: number
+): Promise<PreparedSummary> {
+  const group = await findGroupByName(client, groupName);
+  if (!group) {
+    throw new Error(`Unknown chat "${groupName}". Run 'groups' to list.`);
+  }
+  const messages = await selectMessages(client, group.id, selection);
+  if (messages.length === 0) return { kind: "empty" };
+
+  const prompt = buildPrompt(messages);
+  const tokens = estimateTokens(prompt.system + prompt.user);
+  if (tokens > tokenBudget) {
+    throw new Error(
+      `Selection too large (~${tokens} tokens > budget ${tokenBudget}); narrow it with a smaller --last or a more recent --since.`
+    );
+  }
+
+  const summaryType = "last" in selection ? "last_n" : "since";
+  const parameters =
+    "last" in selection
+      ? { n: selection.last }
+      : { since: selection.since.toISOString().slice(0, 10) };
+
+  return { kind: "ready", groupId: group.id, prompt, summaryType, parameters, messageCount: messages.length };
+}

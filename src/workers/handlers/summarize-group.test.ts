@@ -1,0 +1,175 @@
+/**
+ * T015 — Tests for makeSummarizeGroupHandler.
+ *
+ * Tests use injected fakes — no live DB, no Ollama.
+ *
+ * Scenarios:
+ * 1. Cache-hit → no throw, result is 'cache-hit'.
+ * 2. Generated → no throw, result is 'generated'.
+ * 3. Group not found → throws.
+ * 4. summarize failure → rethrows so bus can retry.
+ */
+import { describe, it, expect, vi } from "vitest";
+import type pg from "pg";
+import { makeSummarizeGroupHandler } from "./summarize-group.js";
+import type { Job } from "../../jobs/job-types.js";
+import type { PreparedCatchup } from "../../summarization/prepare-catchup.js";
+import type { SummaryPrompt } from "../../summarization/summarizer.js";
+import type { InsertSummaryInput } from "../../summarization/run-summary.js";
+import type { Cursor } from "../../db/repositories/read-watermarks.js";
+
+// ---------------------------------------------------------------------------
+// Fakes
+// ---------------------------------------------------------------------------
+
+function makeJob(groupId: string): Job<"summarize.group"> {
+  return {
+    id: "test-job-sg-1",
+    type: "summarize.group",
+    payload: { groupId },
+    attempts: 1,
+    maxAttempts: 3,
+  };
+}
+
+/**
+ * Minimal fake pg.Pool that returns a group row for the given groupId.
+ */
+function makeFakePool(groupName: string | null): pg.Pool {
+  return {
+    query: vi.fn().mockResolvedValue({
+      rows: groupName !== null ? [{ name: groupName }] : [],
+    }),
+  } as unknown as pg.Pool;
+}
+
+function makeCacheHitCatchup(): PreparedCatchup {
+  return { kind: "cache-hit", summary: "cached text", generatedAt: new Date() };
+}
+
+function makeReadyCatchup(): PreparedCatchup {
+  return {
+    kind: "ready",
+    groupId: 1,
+    prompt: { system: "sys", user: "usr" } as SummaryPrompt,
+    summaryType: "watermark",
+    parameters: {
+      fromExclusive: null,
+      toInclusive: { sentAt: new Date().toISOString(), messageId: 1 },
+      messageCount: 5,
+      usedFallback: false,
+    },
+    messageCount: 5,
+    newWatermark: { sentAt: new Date(), messageId: 1 } as Cursor,
+    usedFallback: false,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("makeSummarizeGroupHandler", () => {
+  it("resolves without error on cache-hit (idempotent — already current)", async () => {
+    const pool = makeFakePool("Test Group");
+    const prepareCatchup = vi.fn().mockResolvedValue(makeCacheHitCatchup());
+    const summarize = vi.fn();
+    const insertSummary = vi.fn();
+    const updateWatermark = vi.fn();
+
+    const handler = makeSummarizeGroupHandler({
+      pool,
+      prepareCatchup,
+      summarize,
+      insertSummary,
+      updateWatermark,
+      model: "gemma4:26b",
+      tokenBudget: 24000,
+    });
+
+    await expect(handler(makeJob("1"))).resolves.toBeUndefined();
+    // No summarization call on cache-hit
+    expect(summarize).not.toHaveBeenCalled();
+  });
+
+  it("resolves without error on generated (new messages → summary written)", async () => {
+    const pool = makeFakePool("Test Group");
+    const prepareCatchup = vi.fn().mockResolvedValue(makeReadyCatchup());
+    const summarize = vi.fn().mockResolvedValue("Generated summary text");
+    const insertSummary = vi.fn().mockResolvedValue(42);
+    const updateWatermark = vi.fn().mockResolvedValue(undefined);
+
+    const handler = makeSummarizeGroupHandler({
+      pool,
+      prepareCatchup,
+      summarize,
+      insertSummary,
+      updateWatermark,
+      model: "gemma4:26b",
+      tokenBudget: 24000,
+    });
+
+    await expect(handler(makeJob("1"))).resolves.toBeUndefined();
+    expect(summarize).toHaveBeenCalledOnce();
+    expect(insertSummary).toHaveBeenCalledOnce();
+    expect(updateWatermark).toHaveBeenCalledOnce();
+  });
+
+  it("throws when the group is not found in the DB", async () => {
+    const pool = makeFakePool(null); // no rows returned
+    const prepareCatchup = vi.fn();
+    const summarize = vi.fn();
+    const insertSummary = vi.fn();
+    const updateWatermark = vi.fn();
+
+    const handler = makeSummarizeGroupHandler({
+      pool,
+      prepareCatchup,
+      summarize,
+      insertSummary,
+      updateWatermark,
+      model: "gemma4:26b",
+      tokenBudget: 24000,
+    });
+
+    await expect(handler(makeJob("99"))).rejects.toThrow(/99/);
+    expect(prepareCatchup).not.toHaveBeenCalled();
+  });
+
+  it("rethrows when summarize throws (so the bus retries)", async () => {
+    const pool = makeFakePool("Test Group");
+    const prepareCatchup = vi.fn().mockResolvedValue(makeReadyCatchup());
+    const summarize = vi.fn().mockRejectedValue(new Error("Ollama down"));
+    const insertSummary = vi.fn();
+    const updateWatermark = vi.fn();
+
+    const handler = makeSummarizeGroupHandler({
+      pool,
+      prepareCatchup,
+      summarize,
+      insertSummary,
+      updateWatermark,
+      model: "gemma4:26b",
+      tokenBudget: 24000,
+    });
+
+    await expect(handler(makeJob("1"))).rejects.toThrow("Ollama down");
+    expect(insertSummary).not.toHaveBeenCalled();
+    expect(updateWatermark).not.toHaveBeenCalled();
+  });
+
+  it("throws on invalid groupId payload", async () => {
+    const pool = makeFakePool("Test Group");
+    const handler = makeSummarizeGroupHandler({
+      pool,
+      prepareCatchup: vi.fn(),
+      summarize: vi.fn(),
+      insertSummary: vi.fn(),
+      updateWatermark: vi.fn(),
+      model: "gemma4:26b",
+      tokenBudget: 24000,
+    });
+
+    await expect(handler(makeJob("not-a-number"))).rejects.toThrow(/Invalid groupId/);
+  });
+});
