@@ -5,13 +5,10 @@
  * Also covers the from_me column persistence for T003.
  */
 
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { NormalizedMessage } from "../../importer/types.js";
-import { runMigrationsUp } from "../migrate.js";
+import { createTestDatabase } from "../../test/db.js";
 import { upsertGroup } from "./groups.js";
 import {
   countReadableByGroup,
@@ -20,9 +17,6 @@ import {
   insertMessages,
 } from "./messages.js";
 import { upsertParticipant } from "./participants.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_DIR = path.resolve(__dirname, "..", "migrations");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -52,18 +46,14 @@ function makeMsg(overrides: Partial<NormalizedMessage> = {}): NormalizedMessage 
 // ---------------------------------------------------------------------------
 
 describe("messages read queries", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   // -------------------------------------------------------------------------

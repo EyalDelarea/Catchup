@@ -25,9 +25,7 @@ let container: StartedPostgreSqlContainer | undefined;
  * Vitest globalSetup: boot one Postgres and migrate the template database once.
  * The admin connection URI is provided to test workers via `inject("pgAdminUri")`.
  */
-export default async function setup({
-  provide,
-}: GlobalSetupContext): Promise<() => Promise<void>> {
+export default async function setup({ provide }: GlobalSetupContext): Promise<() => Promise<void>> {
   // max_connections is raised because many parallel test files each open a pool
   // against this single server.
   container = await new PostgreSqlContainer("postgres:16-alpine")

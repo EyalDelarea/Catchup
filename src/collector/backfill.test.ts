@@ -11,19 +11,13 @@
  */
 
 import os from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { WAMessage } from "@whiskeysockets/baileys";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroupByWhatsappId } from "../db/repositories/groups.js";
+import { createTestDatabase } from "../test/db.js";
 import { backfillGroup } from "./backfill.js";
 import { handleIncomingMessage } from "./collector.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
 
 // ---------------------------------------------------------------------------
 // Fake Baileys message factories (inline copy — keep in sync with collector.test.ts)
@@ -83,22 +77,16 @@ function makeBatch(
 // ---------------------------------------------------------------------------
 
 describe("backfillGroup integration", () => {
-  let container: StartedPostgreSqlContainer;
-  let connectionString: string;
   let pool: pg.Pool;
   let dataDir: string;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    connectionString = container.getConnectionUri();
-    pool = new pg.Pool({ connectionString });
-    await runMigrationsUp(connectionString, MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
     dataDir = os.tmpdir();
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   // -------------------------------------------------------------------------

@@ -1,27 +1,24 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createEmptyTestDatabase } from "../test/db.js";
 import { runMigrationsDown, runMigrationsUp } from "./migrate.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "migrations");
 
 describe("database migrations", () => {
-  let container: StartedPostgreSqlContainer;
   let connectionString: string;
   let pool: pg.Pool;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    connectionString = container.getConnectionUri();
+    connectionString = await createEmptyTestDatabase();
     pool = new pg.Pool({ connectionString });
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   it("runs all migrations UP and creates the four tables", async () => {

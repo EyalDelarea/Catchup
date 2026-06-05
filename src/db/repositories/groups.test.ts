@@ -1,10 +1,7 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { NormalizedMessage } from "../../importer/types.js";
-import { runMigrationsUp } from "../migrate.js";
+import { createTestDatabase } from "../../test/db.js";
 import {
   isDisplayNameUnresolved,
   listGroups,
@@ -14,9 +11,6 @@ import {
   upsertGroupByWhatsappId,
 } from "./groups.js";
 import { insertMessages } from "./messages.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_DIR = path.resolve(__dirname, "..", "migrations");
 
 function makeMsg(
   groupId: number,
@@ -43,18 +37,14 @@ function makeMsg(
 }
 
 describe("listGroups — lastMessageAt (T015)", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   it("returns lastMessageAt as the newest message's sent_at", async () => {
@@ -105,18 +95,14 @@ describe("listGroups — lastMessageAt (T015)", () => {
 // ---------------------------------------------------------------------------
 
 describe("updateDisplayName + isDisplayNameUnresolved (T019)", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   it("updateDisplayName returns true and renames when name == whatsapp_id (still the raw JID)", async () => {
@@ -185,18 +171,14 @@ describe("updateDisplayName + isDisplayNameUnresolved (T019)", () => {
 // ---------------------------------------------------------------------------
 
 describe("listUnresolvedGroups", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   it("returns only groups where name == whatsapp_id (unresolved)", async () => {

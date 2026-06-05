@@ -6,42 +6,36 @@
  * - Stickers do NOT get analyze.image enqueued
  * - Missing media does NOT get enqueued
  *
- * Uses a real Postgres container (testcontainers) + InMemoryJobBus.
+ * Uses a shared test DB (createTestDatabase) + InMemoryJobBus.
  */
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runMigrationsUp } from "../db/migrate.js";
 import { InMemoryJobBus } from "../jobs/in-memory-bus.js";
 import { InMemoryJobRunRecorder } from "../jobs/job-run-recorder.js";
+import { createTestDatabase } from "../test/db.js";
 import { runImport } from "./run-import.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_DIR = path.resolve(__dirname, "../db/migrations");
 const FIXTURES_DIR = path.resolve(__dirname, "../../fixtures");
 
 describe("runImport image enqueue (T016)", () => {
-  let container: StartedPostgreSqlContainer;
   let connectionString: string;
   let pool: pg.Pool;
   let dataDir: string;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    connectionString = container.getConnectionUri();
+    connectionString = await createTestDatabase();
     pool = new pg.Pool({ connectionString });
-    await runMigrationsUp(connectionString, MIGRATIONS_DIR);
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "whatsapp-import-img-test-"));
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
     if (dataDir && fs.existsSync(dataDir)) {
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
