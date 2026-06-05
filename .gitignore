@@ -25,6 +25,13 @@ backups/
 # Local dev / tooling artifacts
 .playwright-mcp/
 
+# Local design tooling — the committed deliverables are assets/*.svg + assets/*.png.
+# The banner generator and the raw Sora font (OFL) stay local; the PNG bakes the
+# rasterized wordmark so no font is redistributed.
+assets/.fonts/
+assets/build-banner.mjs
+assets/_*
+
 # Internal AI-assisted build process & planning — kept locally, excluded from the public repo
 CLAUDE.md
 .claude/
