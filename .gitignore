@@ -15,10 +15,12 @@ data/
 # DB backups (contain real data)
 backups/
 
-# WhatsApp session/auth + media + imports (defensive — normally under data/)
-baileys-auth/
-imports/
-media/
+# WhatsApp session/auth + media + imports (defensive — normally under data/).
+# Anchored to the repo root with a leading slash so they don't swallow source
+# directories of the same name (e.g. src/media/).
+/baileys-auth/
+/imports/
+/media/
 
 # Local dev / tooling artifacts
 .playwright-mcp/
