@@ -10,8 +10,27 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: jobs only read the repo.
+permissions:
+  contents: read
+
 jobs:
-  test:
+  lint:
+    name: lint (biome)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Biome check
+        run: npx biome ci src
+
+  build-test:
     name: typecheck · build · test
     runs-on: ubuntu-latest
     steps:
@@ -42,3 +61,19 @@ jobs:
       # so concurrent container startups don't contend and flake under CI load.
       - name: Test
         run: npm test -- --no-file-parallelism
+
+  # Single durable required status check. Branch protection requires `ci-ok`,
+  # so adding/renaming jobs above never needs a branch-protection edit.
+  ci-ok:
+    name: ci-ok
+    runs-on: ubuntu-latest
+    needs: [lint, build-test]
+    if: always()
+    steps:
+      - name: Verify upstream jobs succeeded
+        run: |
+          if [ "${{ needs.lint.result }}" != "success" ] || [ "${{ needs.build-test.result }}" != "success" ]; then
+            echo "A required job failed: lint=${{ needs.lint.result }} build-test=${{ needs.build-test.result }}"
+            exit 1
+          fi
+          echo "All required jobs passed."
