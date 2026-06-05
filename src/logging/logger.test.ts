@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
-import pino from "pino";
 import { Writable } from "node:stream";
-import { createLogger, childLogger } from "./logger.js";
+import pino from "pino";
+import { describe, expect, it } from "vitest";
+import { childLogger, createLogger } from "./logger.js";
 
 /** Capture stream that collects all written JSON lines. */
 function captureStream(): { stream: Writable; lines: () => string[] } {

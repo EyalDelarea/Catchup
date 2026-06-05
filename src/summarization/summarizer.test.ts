@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OllamaSummarizer } from "./summarizer.js";
 
 function fakeFetch(captured: { body?: any }, content: string) {
@@ -15,7 +15,9 @@ describe("OllamaSummarizer", () => {
   it("sends num_ctx + repeat_penalty (and NO json format) and returns the prose summary", async () => {
     const captured: { body?: any } = {};
     const engine = new OllamaSummarizer({
-      host: "http://localhost:11434", model: "gemma4:26b", numCtx: 32768,
+      host: "http://localhost:11434",
+      model: "gemma4:26b",
+      numCtx: 32768,
       fetchImpl: fakeFetch(captured, "  השיחה עסקה בטיול ובמסיבה.  "),
     });
     const out = await engine.summarize({ system: "S", user: "U" });
@@ -31,25 +33,39 @@ describe("OllamaSummarizer", () => {
 
   it("throws a clear error when the model returns empty output", async () => {
     const engine = new OllamaSummarizer({
-      host: "http://localhost:11434", model: "gemma4:26b", numCtx: 32768,
-      fetchImpl: async () => ({ ok: true, json: async () => ({ message: { content: "   " } }) }) as unknown as Response,
+      host: "http://localhost:11434",
+      model: "gemma4:26b",
+      numCtx: 32768,
+      fetchImpl: async () =>
+        ({ ok: true, json: async () => ({ message: { content: "   " } }) }) as unknown as Response,
     });
-    await expect(engine.summarize({ system: "S", user: "U" })).rejects.toThrow(/empty model output/i);
+    await expect(engine.summarize({ system: "S", user: "U" })).rejects.toThrow(
+      /empty model output/i,
+    );
   });
 
   it("throws a clear error when Ollama is unreachable", async () => {
     const engine = new OllamaSummarizer({
-      host: "http://localhost:11434", model: "gemma4:26b", numCtx: 32768,
-      fetchImpl: async () => { throw new Error("ECONNREFUSED"); },
+      host: "http://localhost:11434",
+      model: "gemma4:26b",
+      numCtx: 32768,
+      fetchImpl: async () => {
+        throw new Error("ECONNREFUSED");
+      },
     });
-    await expect(engine.summarize({ system: "S", user: "U" })).rejects.toThrow(/Ollama not reachable/i);
+    await expect(engine.summarize({ system: "S", user: "U" })).rejects.toThrow(
+      /Ollama not reachable/i,
+    );
   });
 });
 
 function streamBody(lines: string[]): ReadableStream<Uint8Array> {
   const enc = new TextEncoder();
   return new ReadableStream({
-    start(c) { for (const l of lines) c.enqueue(enc.encode(l + "\n")); c.close(); },
+    start(c) {
+      for (const l of lines) c.enqueue(enc.encode(l + "\n"));
+      c.close();
+    },
   });
 }
 
@@ -57,13 +73,18 @@ describe("OllamaSummarizer.summarizeStream", () => {
   it("yields content deltas in order and requests stream:true with no json format", async () => {
     let body: any;
     const engine = new OllamaSummarizer({
-      host: "http://localhost:11434", model: "gemma4:26b", numCtx: 32768,
+      host: "http://localhost:11434",
+      model: "gemma4:26b",
+      numCtx: 32768,
       fetchImpl: async (_url, init) => {
         body = JSON.parse(init.body);
-        return { ok: true, body: streamBody([
-          JSON.stringify({ message: { content: "שלום " } }),
-          JSON.stringify({ message: { content: "עולם" }, done: true }),
-        ]) } as unknown as Response;
+        return {
+          ok: true,
+          body: streamBody([
+            JSON.stringify({ message: { content: "שלום " } }),
+            JSON.stringify({ message: { content: "עולם" }, done: true }),
+          ]),
+        } as unknown as Response;
       },
     });
     const out: string[] = [];
@@ -77,8 +98,12 @@ describe("OllamaSummarizer.summarizeStream", () => {
 
   it("throws a clear error when Ollama is unreachable (stream)", async () => {
     const engine = new OllamaSummarizer({
-      host: "http://localhost:11434", model: "gemma4:26b", numCtx: 32768,
-      fetchImpl: async () => { throw new Error("ECONNREFUSED"); },
+      host: "http://localhost:11434",
+      model: "gemma4:26b",
+      numCtx: 32768,
+      fetchImpl: async () => {
+        throw new Error("ECONNREFUSED");
+      },
     });
     const gen = engine.summarizeStream({ system: "S", user: "U" });
     await expect(gen.next()).rejects.toThrow(/Ollama not reachable/i);
@@ -87,17 +112,23 @@ describe("OllamaSummarizer.summarizeStream", () => {
   it("forwards the AbortSignal to fetch when opts.signal is provided", async () => {
     let capturedSignal: AbortSignal | undefined;
     const engine = new OllamaSummarizer({
-      host: "http://localhost:11434", model: "gemma4:26b", numCtx: 32768,
+      host: "http://localhost:11434",
+      model: "gemma4:26b",
+      numCtx: 32768,
       fetchImpl: async (_url, init) => {
         capturedSignal = (init as any).signal;
-        return { ok: true, body: streamBody([
-          JSON.stringify({ message: { content: "hi" }, done: true }),
-        ]) } as unknown as Response;
+        return {
+          ok: true,
+          body: streamBody([JSON.stringify({ message: { content: "hi" }, done: true })]),
+        } as unknown as Response;
       },
     });
     const ac = new AbortController();
     const out: string[] = [];
-    for await (const d of engine.summarizeStream({ system: "S", user: "U" }, { signal: ac.signal })) {
+    for await (const d of engine.summarizeStream(
+      { system: "S", user: "U" },
+      { signal: ac.signal },
+    )) {
       out.push(d);
     }
     expect(out).toEqual(["hi"]);
@@ -114,7 +145,10 @@ describe("OllamaSummarizer.summarizeStream", () => {
       read: async () => {
         readCount++;
         if (readCount === 1) {
-          return { done: false, value: enc.encode(JSON.stringify({ message: { content: "token1" } }) + "\n") };
+          return {
+            done: false,
+            value: enc.encode(JSON.stringify({ message: { content: "token1" } }) + "\n"),
+          };
         }
         // Abort before the 2nd chunk
         ac.abort();
@@ -126,16 +160,22 @@ describe("OllamaSummarizer.summarizeStream", () => {
     };
 
     const engine = new OllamaSummarizer({
-      host: "http://localhost:11434", model: "gemma4:26b", numCtx: 32768,
-      fetchImpl: async () => ({
-        ok: true,
-        body: { getReader: () => mockReader },
-      } as unknown as Response),
+      host: "http://localhost:11434",
+      model: "gemma4:26b",
+      numCtx: 32768,
+      fetchImpl: async () =>
+        ({
+          ok: true,
+          body: { getReader: () => mockReader },
+        }) as unknown as Response,
     });
 
     const out: string[] = [];
     // Must NOT throw — abort is a clean stop
-    for await (const d of engine.summarizeStream({ system: "S", user: "U" }, { signal: ac.signal })) {
+    for await (const d of engine.summarizeStream(
+      { system: "S", user: "U" },
+      { signal: ac.signal },
+    )) {
       out.push(d);
     }
     // We got 1 token before abort
@@ -149,17 +189,23 @@ describe("OllamaSummarizer.summarizeStream", () => {
     ac.abort(); // already aborted
 
     const engine = new OllamaSummarizer({
-      host: "http://localhost:11434", model: "gemma4:26b", numCtx: 32768,
-      fetchImpl: async () => ({
-        ok: true,
-        body: streamBody([
-          JSON.stringify({ message: { content: "should not yield" }, done: true }),
-        ]),
-      } as unknown as Response),
+      host: "http://localhost:11434",
+      model: "gemma4:26b",
+      numCtx: 32768,
+      fetchImpl: async () =>
+        ({
+          ok: true,
+          body: streamBody([
+            JSON.stringify({ message: { content: "should not yield" }, done: true }),
+          ]),
+        }) as unknown as Response,
     });
 
     const out: string[] = [];
-    for await (const d of engine.summarizeStream({ system: "S", user: "U" }, { signal: ac.signal })) {
+    for await (const d of engine.summarizeStream(
+      { system: "S", user: "U" },
+      { signal: ac.signal },
+    )) {
       out.push(d);
     }
     expect(out).toEqual([]);
@@ -167,13 +213,14 @@ describe("OllamaSummarizer.summarizeStream", () => {
 
   it("summarizeStream with no signal still works (backwards compatible)", async () => {
     const engine = new OllamaSummarizer({
-      host: "http://localhost:11434", model: "gemma4:26b", numCtx: 32768,
-      fetchImpl: async () => ({
-        ok: true,
-        body: streamBody([
-          JSON.stringify({ message: { content: "hello" }, done: true }),
-        ]),
-      } as unknown as Response),
+      host: "http://localhost:11434",
+      model: "gemma4:26b",
+      numCtx: 32768,
+      fetchImpl: async () =>
+        ({
+          ok: true,
+          body: streamBody([JSON.stringify({ message: { content: "hello" }, done: true })]),
+        }) as unknown as Response,
     });
     const out: string[] = [];
     for await (const d of engine.summarizeStream({ system: "S", user: "U" })) {
@@ -185,7 +232,9 @@ describe("OllamaSummarizer.summarizeStream", () => {
 
 // Fix 7: node:http transport is used by default (not global fetch)
 describe("OllamaSummarizer — node:http transport default (Fix 7)", () => {
-  afterEach(() => { vi.restoreAllMocks(); });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it("does NOT call global fetch when no fetchImpl is provided (uses node:http transport)", async () => {
     // Spy on global fetch — if it is called, the fix is broken.
@@ -200,7 +249,9 @@ describe("OllamaSummarizer — node:http transport default (Fix 7)", () => {
     } as unknown as Response);
 
     const engine = new OllamaSummarizer({
-      host: "http://localhost:11434", model: "gemma4:26b", numCtx: 32768,
+      host: "http://localhost:11434",
+      model: "gemma4:26b",
+      numCtx: 32768,
       fetchImpl: fetchImplSpy,
     });
     await engine.summarize({ system: "S", user: "U" });
@@ -213,8 +264,13 @@ describe("OllamaSummarizer — node:http transport default (Fix 7)", () => {
 
   it("constructor without fetchImpl does not throw (transport is lazy)", () => {
     // Constructing without fetchImpl or timeoutMs should not throw.
-    expect(() => new OllamaSummarizer({
-      host: "http://localhost:11434", model: "gemma4:26b", numCtx: 32768,
-    })).not.toThrow();
+    expect(
+      () =>
+        new OllamaSummarizer({
+          host: "http://localhost:11434",
+          model: "gemma4:26b",
+          numCtx: 32768,
+        }),
+    ).not.toThrow();
   });
 });

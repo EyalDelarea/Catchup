@@ -4,8 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import "dotenv/config";
-import { runImport } from "./importer/run-import.js";
 import { loadConfig } from "./config.js";
+import { runImport } from "./importer/run-import.js";
+import type { JobBus } from "./jobs/job-bus.js";
 
 const program = new Command();
 
@@ -17,122 +18,112 @@ program
 program
   .command("import")
   .description(
-    "Import a WhatsApp export. Single-file: import <path> --name <name>. Bulk: import --folder <dir>"
+    "Import a WhatsApp export. Single-file: import <path> --name <name>. Bulk: import --folder <dir>",
   )
   .argument("[path]", "Path to exported WhatsApp chat file (.txt or .zip)")
   .option("--name <name>", "Group or chat display name (required for single-file mode)")
   .option("--folder <dir>", "Folder to scan for .txt/.zip exports and enqueue as background jobs")
-  .action(
-    async (
-      filePath: string | undefined,
-      options: { name?: string; folder?: string }
-    ) => {
-      const { folder, name } = options;
+  .action(async (filePath: string | undefined, options: { name?: string; folder?: string }) => {
+    const { folder, name } = options;
 
-      // ── --folder mode ─────────────────────────────────────────────────────
-      if (folder !== undefined) {
-        // Mutual exclusion: --folder cannot be combined with <path> or --name
-        if (filePath !== undefined) {
-          process.stderr.write(
-            "Error: --folder and a positional <path> are mutually exclusive. Use one or the other.\n"
-          );
-          process.exit(1);
-        }
-        if (name !== undefined) {
-          process.stderr.write(
-            "Error: --folder and --name are mutually exclusive. --name is only for single-file mode.\n"
-          );
-          process.exit(1);
-        }
-
-        // Validate directory exists
-        if (!fs.existsSync(folder)) {
-          process.stderr.write(`Error: Folder not found: ${folder}\n`);
-          process.exit(1);
-        }
-        if (!fs.statSync(folder).isDirectory()) {
-          process.stderr.write(`Error: Not a directory: ${folder}\n`);
-          process.exit(1);
-        }
-
-        try {
-          const { enqueueFolder } = await import("./importer/bulk-import.js");
-
-          // Test-only seam: an in-memory bus discards jobs when the process
-          // exits, so it is gated on NODE_ENV=test and can NEVER be activated
-          // in production (where it would silently swallow enqueued jobs).
-          let bus;
-          if (
-            process.env["USE_IN_MEMORY_BUS"] === "1" &&
-            process.env["NODE_ENV"] === "test"
-          ) {
-            const { InMemoryJobBus } = await import("./jobs/in-memory-bus.js");
-            const { InMemoryJobRunRecorder } = await import("./jobs/job-run-recorder.js");
-            bus = new InMemoryJobBus(new InMemoryJobRunRecorder());
-          } else {
-            const { RabbitMqJobBus } = await import("./jobs/rabbitmq-bus.js");
-            const { PostgresJobRunRecorder } = await import("./jobs/job-run-recorder.js");
-            const { createDbClient } = await import("./db/client.js");
-            const config = loadConfig();
-            const dbClient = createDbClient();
-            const recorder = new PostgresJobRunRecorder(dbClient);
-            bus = new RabbitMqJobBus({ url: config.broker.url, recorder });
-          }
-
-          const result = await enqueueFolder(bus, folder);
-          console.log(`Enqueued ${result.enqueued} import jobs.`);
-          await bus.close();
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          process.stderr.write(`Error: Failed to enqueue folder: ${message}\n`);
-          process.exit(1);
-        }
-        return;
-      }
-
-      // ── Single-file mode (original behaviour, unchanged) ──────────────────
-      if (filePath === undefined) {
+    // ── --folder mode ─────────────────────────────────────────────────────
+    if (folder !== undefined) {
+      // Mutual exclusion: --folder cannot be combined with <path> or --name
+      if (filePath !== undefined) {
         process.stderr.write(
-          "Error: A file path is required in single-file mode. Use import <path> --name <name>.\n"
+          "Error: --folder and a positional <path> are mutually exclusive. Use one or the other.\n",
+        );
+        process.exit(1);
+      }
+      if (name !== undefined) {
+        process.stderr.write(
+          "Error: --folder and --name are mutually exclusive. --name is only for single-file mode.\n",
         );
         process.exit(1);
       }
 
-      if (name === undefined) {
-        process.stderr.write(
-          "Error: --name <name> is required in single-file mode.\n"
-        );
+      // Validate directory exists
+      if (!fs.existsSync(folder)) {
+        process.stderr.write(`Error: Folder not found: ${folder}\n`);
         process.exit(1);
       }
-
-      // T018 — error: missing file
-      if (!fs.existsSync(filePath)) {
-        process.stderr.write(`Error: File not found: ${filePath}\n`);
-        process.exit(1);
-      }
-
-      // T018 — error: unsupported extension
-      const ext = path.extname(filePath).toLowerCase();
-      if (ext !== ".txt" && ext !== ".zip") {
-        process.stderr.write(
-          `Error: Unsupported file type "${ext}". Only .txt and .zip exports are supported.\n`
-        );
+      if (!fs.statSync(folder).isDirectory()) {
+        process.stderr.write(`Error: Not a directory: ${folder}\n`);
         process.exit(1);
       }
 
       try {
-        const result = await runImport({ filePath, name });
-        // Contract output: Imported "<name>": <inserted> new, <skipped> duplicate, <media> media files.
-        console.log(
-          `Imported "${result.groupName}": ${result.inserted} new, ${result.skipped} duplicate, ${result.mediaFiles} media files.`
-        );
+        const { enqueueFolder } = await import("./importer/bulk-import.js");
+
+        // Test-only seam: an in-memory bus discards jobs when the process
+        // exits, so it is gated on NODE_ENV=test and can NEVER be activated
+        // in production (where it would silently swallow enqueued jobs).
+        let bus: JobBus;
+        if (process.env["USE_IN_MEMORY_BUS"] === "1" && process.env["NODE_ENV"] === "test") {
+          const { InMemoryJobBus } = await import("./jobs/in-memory-bus.js");
+          const { InMemoryJobRunRecorder } = await import("./jobs/job-run-recorder.js");
+          bus = new InMemoryJobBus(new InMemoryJobRunRecorder());
+        } else {
+          const { RabbitMqJobBus } = await import("./jobs/rabbitmq-bus.js");
+          const { PostgresJobRunRecorder } = await import("./jobs/job-run-recorder.js");
+          const { createDbClient } = await import("./db/client.js");
+          const config = loadConfig();
+          const dbClient = createDbClient();
+          const recorder = new PostgresJobRunRecorder(dbClient);
+          bus = new RabbitMqJobBus({ url: config.broker.url, recorder });
+        }
+
+        const result = await enqueueFolder(bus, folder);
+        console.log(`Enqueued ${result.enqueued} import jobs.`);
+        await bus.close();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`Error: Import failed: ${message}\n`);
+        process.stderr.write(`Error: Failed to enqueue folder: ${message}\n`);
         process.exit(1);
       }
+      return;
     }
-  );
+
+    // ── Single-file mode (original behaviour, unchanged) ──────────────────
+    if (filePath === undefined) {
+      process.stderr.write(
+        "Error: A file path is required in single-file mode. Use import <path> --name <name>.\n",
+      );
+      process.exit(1);
+    }
+
+    if (name === undefined) {
+      process.stderr.write("Error: --name <name> is required in single-file mode.\n");
+      process.exit(1);
+    }
+
+    // T018 — error: missing file
+    if (!fs.existsSync(filePath)) {
+      process.stderr.write(`Error: File not found: ${filePath}\n`);
+      process.exit(1);
+    }
+
+    // T018 — error: unsupported extension
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext !== ".txt" && ext !== ".zip") {
+      process.stderr.write(
+        `Error: Unsupported file type "${ext}". Only .txt and .zip exports are supported.\n`,
+      );
+      process.exit(1);
+    }
+
+    try {
+      const result = await runImport({ filePath, name });
+      // Contract output: Imported "<name>": <inserted> new, <skipped> duplicate, <media> media files.
+      console.log(
+        `Imported "${result.groupName}": ${result.inserted} new, ${result.skipped} duplicate, ${result.mediaFiles} media files.`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`Error: Import failed: ${message}\n`);
+      process.exit(1);
+    }
+  });
 
 program
   .command("collect")
@@ -155,12 +146,12 @@ program
     // SAFETY BANNER — make the outbound posture unmistakable before linking.
     if (config.whatsapp.allowSend) {
       console.log(
-        "⚠️  SENDING ENABLED (WHATSAPP_ALLOW_SEND=true): this tool may transmit to WhatsApp."
+        "⚠️  SENDING ENABLED (WHATSAPP_ALLOW_SEND=true): this tool may transmit to WhatsApp.",
       );
     } else {
       console.log(
         "🔒 Read-only mode: this tool will NOT send messages, read receipts, or presence.\n" +
-          "   It is a passive observer. (Sending stays off unless you set WHATSAPP_ALLOW_SEND=true.)"
+          "   It is a passive observer. (Sending stays off unless you set WHATSAPP_ALLOW_SEND=true.)",
       );
     }
 
@@ -178,7 +169,7 @@ program
         .then(({ resolveAllGroupNames }) =>
           resolveAllGroupNames(pool, {
             groupSubject: (jid) => session.groupSubject(jid),
-          })
+          }),
         )
         .then(({ resolved }) => {
           if (resolved > 0) {
@@ -214,9 +205,12 @@ program
     process.on("SIGINT", () => {
       console.log(`\nStopping collector. Stored ${storedCount} messages total.`);
       session.stop();
-      pool.end().catch(() => {}).finally(() => {
-        process.exit(0);
-      });
+      pool
+        .end()
+        .catch(() => {})
+        .finally(() => {
+          process.exit(0);
+        });
     });
   });
 
@@ -308,7 +302,7 @@ program
     try {
       const result = await runTranscription({ groupName: options.group });
       console.log(
-        `Transcribed ${result.ok}, failed ${result.failed}, skipped ${result.skipped} voice notes.`
+        `Transcribed ${result.ok}, failed ${result.failed}, skipped ${result.skipped} voice notes.`,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -329,7 +323,21 @@ program
       process.stderr.write(`Error: invalid --port "${options.port}".\n`);
       process.exit(1);
     }
-    const [{ createServer }, { OllamaSummarizer }, { RabbitMqJobBus }, { PostgresJobRunRecorder }, { createDbClient }, pg, { backfillGroup }, { isHealthy, getLastHeartbeatAt }, { createLogger }, { startScheduler }, { parseTimes }, { enqueueScheduledRun }, { getLastRun, recordRun }] = await Promise.all([
+    const [
+      { createServer },
+      { OllamaSummarizer },
+      { RabbitMqJobBus },
+      { PostgresJobRunRecorder },
+      { createDbClient },
+      pg,
+      { backfillGroup },
+      { isHealthy, getLastHeartbeatAt },
+      { createLogger },
+      { startScheduler },
+      { parseTimes },
+      { enqueueScheduledRun },
+      { getLastRun, recordRun },
+    ] = await Promise.all([
       import("./web/server.js"),
       import("./summarization/summarizer.js"),
       import("./jobs/rabbitmq-bus.js"),
@@ -368,7 +376,7 @@ program
           } catch {
             // broker unreachable for this type — omit so depth stays null
           }
-        })
+        }),
       );
       return result as Partial<Record<(typeof types)[number], number>>;
     };
@@ -389,7 +397,7 @@ program
             if (!liveSession) return { fetched: 0, durationMs: 0, partial: true };
             const { rows } = await pool.query<{ whatsapp_id: string }>(
               "SELECT whatsapp_id FROM groups WHERE id=$1",
-              [groupId]
+              [groupId],
             );
             const jid = rows[0]?.whatsapp_id;
             if (!jid) return { fetched: 0, durationMs: 0, partial: true };
@@ -400,8 +408,11 @@ program
               targetWindow: 25,
               maxFetch: 200,
               timeoutMs: 10_000,
-              fetchHistory: (c: number, a: import("./collector/backfill.js").AnchorKey, ts: number) =>
-                liveSession.fetchMessageHistory(c, a, ts),
+              fetchHistory: (
+                c: number,
+                a: import("./collector/backfill.js").AnchorKey,
+                ts: number,
+              ) => liveSession.fetchMessageHistory(c, a, ts),
               awaitHistory: (toMs: number) => liveSession.awaitHistorySync(jid, toMs),
               downloadVoiceNote: (m: import("@whiskeysockets/baileys").WAMessage) =>
                 liveSession.downloadMedia(m),
@@ -443,9 +454,7 @@ program
         enqueueRun: enqueueScheduledRun,
       });
       if (config.digest.enabled) {
-        console.log(
-          `[scheduler] digest scheduler started (times: ${config.digest.times})`
-        );
+        console.log(`[scheduler] digest scheduler started (times: ${config.digest.times})`);
       }
     } catch (err) {
       // Scheduler startup failure must NOT crash the web server
@@ -460,12 +469,12 @@ program
       // Safety banner (same wording as the standalone `collect` command)
       if (config.whatsapp.allowSend) {
         console.log(
-          "⚠️  SENDING ENABLED (WHATSAPP_ALLOW_SEND=true): this tool may transmit to WhatsApp."
+          "⚠️  SENDING ENABLED (WHATSAPP_ALLOW_SEND=true): this tool may transmit to WhatsApp.",
         );
       } else {
         console.log(
           "🔒 Read-only mode: this tool will NOT send messages, read receipts, or presence.\n" +
-            "   It is a passive observer. (Sending stays off unless you set WHATSAPP_ALLOW_SEND=true.)"
+            "   It is a passive observer. (Sending stays off unless you set WHATSAPP_ALLOW_SEND=true.)",
         );
       }
 
@@ -488,7 +497,7 @@ program
             .then(({ resolveAllGroupNames }) =>
               resolveAllGroupNames(pool, {
                 groupSubject: (jid) => session.groupSubject(jid),
-              })
+              }),
             )
             .then(({ resolved }) => {
               if (resolved > 0) {
@@ -511,7 +520,9 @@ program
           dataDir: config.dataDir,
           onError: (err) => {
             const msg = err instanceof Error ? err.message : String(err);
-            process.stderr.write(`[collector] message handler error (web server continues): ${msg}\n`);
+            process.stderr.write(
+              `[collector] message handler error (web server continues): ${msg}\n`,
+            );
           },
         });
 
@@ -519,9 +530,7 @@ program
       } catch (err) {
         // Collector startup failure must NOT exit (web server keeps running)
         const msg = err instanceof Error ? err.message : String(err);
-        process.stderr.write(
-          `[collector] startup error (web server continues): ${msg}\n`
-        );
+        process.stderr.write(`[collector] startup error (web server continues): ${msg}\n`);
       }
     }
 
@@ -534,7 +543,10 @@ program
       server.close();
       brokerBus.close().catch(() => {});
       dbClient.end().catch(() => {});
-      pool.end().catch(() => {}).finally(() => process.exit(0));
+      pool
+        .end()
+        .catch(() => {})
+        .finally(() => process.exit(0));
     };
     process.on("SIGINT", gracefulShutdown);
     process.on("SIGTERM", gracefulShutdown);
@@ -543,14 +555,10 @@ program
 program
   .command("analyze-backlog")
   .description(
-    "Enqueue analyze jobs for present visual media that have no completed analysis (includes failed rows)"
+    "Enqueue analyze jobs for present visual media that have no completed analysis (includes failed rows)",
   )
   .option("--limit <n>", "Maximum number of messages to enqueue")
-  .option(
-    "--types <list>",
-    "Comma-separated job types to enqueue",
-    "analyze.image,analyze.video"
-  )
+  .option("--types <list>", "Comma-separated job types to enqueue", "analyze.image,analyze.video")
   .action(async (options: { limit?: string; types?: string }) => {
     const limit = options.limit !== undefined ? Number(options.limit) : undefined;
     if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
@@ -559,17 +567,22 @@ program
     }
 
     const allowedTypes = new Set(
-      (options.types ?? "analyze.image,analyze.video").split(",").map((s) => s.trim())
+      (options.types ?? "analyze.image,analyze.video").split(",").map((s) => s.trim()),
     );
 
-    const [{ RabbitMqJobBus }, { PostgresJobRunRecorder }, { createDbClient }, pg, { selectVisualMediaNeedingAnalysis }] =
-      await Promise.all([
-        import("./jobs/rabbitmq-bus.js"),
-        import("./jobs/job-run-recorder.js"),
-        import("./db/client.js"),
-        import("pg"),
-        import("./db/repositories/media-analyses.js"),
-      ]);
+    const [
+      { RabbitMqJobBus },
+      { PostgresJobRunRecorder },
+      { createDbClient },
+      pg,
+      { selectVisualMediaNeedingAnalysis },
+    ] = await Promise.all([
+      import("./jobs/rabbitmq-bus.js"),
+      import("./jobs/job-run-recorder.js"),
+      import("./db/client.js"),
+      import("pg"),
+      import("./db/repositories/media-analyses.js"),
+    ]);
 
     const config = loadConfig();
     const pool = new pg.default.Pool({ connectionString: config.databaseUrl });
@@ -602,18 +615,23 @@ program
 program
   .command("digest-run")
   .description(
-    "Manually trigger a scheduled digest run: enqueue summarize.group jobs for all changed groups"
+    "Manually trigger a scheduled digest run: enqueue summarize.group jobs for all changed groups",
   )
   .option("--all", "Enqueue all groups regardless of whether they have new messages")
   .action(async (options: { all?: boolean }) => {
-    const [{ RabbitMqJobBus }, { PostgresJobRunRecorder }, { createDbClient }, pg, { enqueueScheduledRun }] =
-      await Promise.all([
-        import("./jobs/rabbitmq-bus.js"),
-        import("./jobs/job-run-recorder.js"),
-        import("./db/client.js"),
-        import("pg"),
-        import("./scheduler/enqueue-run.js"),
-      ]);
+    const [
+      { RabbitMqJobBus },
+      { PostgresJobRunRecorder },
+      { createDbClient },
+      pg,
+      { enqueueScheduledRun },
+    ] = await Promise.all([
+      import("./jobs/rabbitmq-bus.js"),
+      import("./jobs/job-run-recorder.js"),
+      import("./db/client.js"),
+      import("pg"),
+      import("./scheduler/enqueue-run.js"),
+    ]);
 
     const config = loadConfig();
     const pool = new pg.default.Pool({ connectionString: config.databaseUrl });

@@ -3,9 +3,9 @@
  *
  * All deps are injected fakes; no real DB or vision engine needed.
  */
-import { describe, it, expect, vi } from "vitest";
-import { makeAnalyzeMediaHandler } from "./analyze-media.js";
+import { describe, expect, it, vi } from "vitest";
 import type { Job } from "../../jobs/job-types.js";
+import { makeAnalyzeMediaHandler } from "./analyze-media.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -84,7 +84,9 @@ describe("makeAnalyzeMediaHandler", () => {
     const hasAnalysis = vi.fn().mockResolvedValue(false);
 
     const handler = makeAnalyzeMediaHandler({ hasAnalysis, analyzeOne });
-    await expect(handler(makeJob("analyze.image", "3"), "analyze.image")).rejects.toThrow("vision boom");
+    await expect(handler(makeJob("analyze.image", "3"), "analyze.image")).rejects.toThrow(
+      "vision boom",
+    );
   });
 
   it("does not call analyzeOne when hasAnalysis throws", async () => {
@@ -92,7 +94,9 @@ describe("makeAnalyzeMediaHandler", () => {
     const hasAnalysis = vi.fn().mockRejectedValue(new Error("db down"));
 
     const handler = makeAnalyzeMediaHandler({ hasAnalysis, analyzeOne });
-    await expect(handler(makeJob("analyze.image", "1"), "analyze.image")).rejects.toThrow("db down");
+    await expect(handler(makeJob("analyze.image", "1"), "analyze.image")).rejects.toThrow(
+      "db down",
+    );
     expect(analyzeOne).not.toHaveBeenCalled();
   });
 });

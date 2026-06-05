@@ -9,14 +9,14 @@
  * 3. Group not found → throws.
  * 4. summarize failure → rethrows so bus can retry.
  */
-import { describe, it, expect, vi } from "vitest";
+
 import type pg from "pg";
-import { makeSummarizeGroupHandler } from "./summarize-group.js";
+import { describe, expect, it, vi } from "vitest";
+import type { Cursor } from "../../db/repositories/read-watermarks.js";
 import type { Job } from "../../jobs/job-types.js";
 import type { PreparedCatchup } from "../../summarization/prepare-catchup.js";
 import type { SummaryPrompt } from "../../summarization/summarizer.js";
-import type { InsertSummaryInput } from "../../summarization/run-summary.js";
-import type { Cursor } from "../../db/repositories/read-watermarks.js";
+import { makeSummarizeGroupHandler } from "./summarize-group.js";
 
 // ---------------------------------------------------------------------------
 // Fakes

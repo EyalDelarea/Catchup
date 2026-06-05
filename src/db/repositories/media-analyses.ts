@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { IMAGE_PREDICATE, VIDEO_PREDICATE, kindFromFilename } from "../../vision/media-kind.js";
+import { IMAGE_PREDICATE, kindFromFilename, VIDEO_PREDICATE } from "../../vision/media-kind.js";
 
 export type InsertMediaAnalysisInput = {
   messageId: number;
@@ -20,7 +20,7 @@ export type InsertMediaAnalysisInput = {
  */
 export async function insertMediaAnalysis(
   client: pg.Pool | pg.PoolClient,
-  input: InsertMediaAnalysisInput
+  input: InsertMediaAnalysisInput,
 ): Promise<void> {
   await client.query(
     `
@@ -41,7 +41,7 @@ export async function insertMediaAnalysis(
       input.engine,
       input.status,
       input.errorMessage ?? null,
-    ]
+    ],
   );
 }
 
@@ -53,11 +53,11 @@ export async function insertMediaAnalysis(
  */
 export async function hasAnalysis(
   client: pg.Pool | pg.PoolClient,
-  messageId: number
+  messageId: number,
 ): Promise<boolean> {
   const { rows } = await client.query<{ cnt: string }>(
     `SELECT COUNT(*) AS cnt FROM media_analyses WHERE message_id = $1 AND status = 'completed'`,
-    [messageId]
+    [messageId],
   );
   return Number(rows[0].cnt) > 0;
 }
@@ -71,7 +71,7 @@ export async function hasAnalysis(
  */
 export async function getVisualMediaPath(
   client: pg.Pool | pg.PoolClient,
-  messageId: number
+  messageId: number,
 ): Promise<{ path: string; kind: "image" | "video" } | null> {
   const { rows } = await client.query<{ media_path: string; media_filename: string }>(
     `
@@ -83,7 +83,7 @@ export async function getVisualMediaPath(
       AND m.media_path IS NOT NULL
       AND (${IMAGE_PREDICATE} OR ${VIDEO_PREDICATE})
     `,
-    [messageId]
+    [messageId],
   );
   const row = rows[0];
   if (!row) return null;
@@ -105,7 +105,7 @@ export async function getVisualMediaPath(
  */
 export async function selectPendingVisualMedia(
   client: pg.Pool | pg.PoolClient,
-  limit: number
+  limit: number,
 ): Promise<number[]> {
   const { rows } = await client.query<{ id: string }>(
     `
@@ -120,7 +120,7 @@ export async function selectPendingVisualMedia(
     ORDER BY m.sent_at DESC
     LIMIT $1
     `,
-    [limit]
+    [limit],
   );
   return rows.map((r) => Number(r.id));
 }
@@ -138,7 +138,7 @@ export async function selectPendingVisualMedia(
  */
 export async function selectVisualMediaNeedingAnalysis(
   client: pg.Pool | pg.PoolClient,
-  limit?: number
+  limit?: number,
 ): Promise<{ messageId: number; kind: "image" | "video" }[]> {
   const params: unknown[] = [];
   let limitClause = "";
@@ -164,7 +164,7 @@ export async function selectVisualMediaNeedingAnalysis(
     ORDER BY m.sent_at DESC, m.id DESC
     ${limitClause}
     `,
-    params
+    params,
   );
 
   const result: { messageId: number; kind: "image" | "video" }[] = [];

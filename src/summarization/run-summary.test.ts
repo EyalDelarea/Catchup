@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PreparedCatchup } from "./prepare-catchup.js";
 import type { SummarizeAndPersistDeps } from "./run-summary.js";
 import { summarizeAndPersist } from "./run-summary.js";
-import type { PreparedCatchup } from "./prepare-catchup.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -128,8 +128,13 @@ describe("summarizeAndPersist — new messages (generated)", () => {
     deps = makeDeps({
       prepareCatchup: vi.fn().mockResolvedValue(readyResult),
       summarize: vi.fn().mockResolvedValue("A great summary"),
-      insertSummary: vi.fn().mockImplementation(async () => { callOrder.push("insertSummary"); return 1; }),
-      updateWatermark: vi.fn().mockImplementation(async () => { callOrder.push("updateWatermark"); }),
+      insertSummary: vi.fn().mockImplementation(async () => {
+        callOrder.push("insertSummary");
+        return 1;
+      }),
+      updateWatermark: vi.fn().mockImplementation(async () => {
+        callOrder.push("updateWatermark");
+      }),
     });
 
     await summarizeAndPersist(deps, groupId);
@@ -148,7 +153,12 @@ describe("summarizeAndPersist — failure isolation", () => {
       groupId: 1,
       prompt: { system: "s", user: "u" },
       summaryType: "watermark",
-      parameters: { fromExclusive: null, toInclusive: { sentAt: newWatermark.sentAt.toISOString(), messageId: 1 }, messageCount: 1, usedFallback: false },
+      parameters: {
+        fromExclusive: null,
+        toInclusive: { sentAt: newWatermark.sentAt.toISOString(), messageId: 1 },
+        messageCount: 1,
+        usedFallback: false,
+      },
       messageCount: 1,
       newWatermark,
       usedFallback: false,

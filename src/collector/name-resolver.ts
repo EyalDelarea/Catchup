@@ -44,7 +44,7 @@ export type ResolveResult = {
  */
 export async function resolveAllGroupNames(
   pool: pg.Pool | pg.PoolClient,
-  deps: NameResolverDeps
+  deps: NameResolverDeps,
 ): Promise<ResolveResult> {
   let resolved = 0;
 
@@ -80,9 +80,7 @@ export async function resolveAllGroupNames(
     } catch (err) {
       // One failure must never abort the batch (incl. UNIQUE name collisions)
       const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(
-        `[name-resolver] skipped ${whatsappId}: ${msg}\n`
-      );
+      process.stderr.write(`[name-resolver] skipped ${whatsappId}: ${msg}\n`);
     }
   }
 

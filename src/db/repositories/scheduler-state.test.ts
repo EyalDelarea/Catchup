@@ -1,11 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../migrate.js";
 import { getLastRun, recordRun } from "./scheduler-state.js";
 

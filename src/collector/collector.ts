@@ -11,15 +11,19 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import type pg from "pg";
 import type { WAMessage } from "@whiskeysockets/baileys";
-import { mapWaMessage } from "./message-mapper.js";
-import { upsertGroupByWhatsappId, updateDisplayName, isDisplayNameUnresolved } from "../db/repositories/groups.js";
-import { upsertParticipant } from "../db/repositories/participants.js";
+import type pg from "pg";
+import {
+  isDisplayNameUnresolved,
+  updateDisplayName,
+  upsertGroupByWhatsappId,
+} from "../db/repositories/groups.js";
 import { insertMessages } from "../db/repositories/messages.js";
+import { upsertParticipant } from "../db/repositories/participants.js";
 import { normalize } from "../importer/normalize.js";
 import type { ImportedMessage } from "../importer/types.js";
 import type { JobBus } from "../jobs/job-bus.js";
+import { mapWaMessage } from "./message-mapper.js";
 
 export type CollectorOptions = {
   /** Root data directory (from config.dataDir). Live voice-note media is written
@@ -110,7 +114,7 @@ function liveVideoThumbnailFilename(externalId: string | null): string {
 export async function handleIncomingMessage(
   client: pg.Pool | pg.PoolClient,
   waMessage: WAMessage,
-  opts: CollectorOptions
+  opts: CollectorOptions,
 ): Promise<boolean> {
   // --- Map ---
   const mapped = mapWaMessage(waMessage);
@@ -142,7 +146,7 @@ export async function handleIncomingMessage(
           } catch (e) {
             const message = e instanceof Error ? e.message : String(e);
             process.stderr.write(
-              `Warning: failed to resolve group subject for jid=${jid}: ${message}\n`
+              `Warning: failed to resolve group subject for jid=${jid}: ${message}\n`,
             );
           }
         }
@@ -178,10 +182,10 @@ export async function handleIncomingMessage(
   const mediaFilename = willDownload
     ? liveVoiceNoteFilename(mapped.externalId)
     : willDownloadImage
-    ? liveImageFilename(mapped.externalId)
-    : willDownloadVideo
-    ? liveVideoFilename(mapped.externalId)
-    : mapped.mediaFilename;
+      ? liveImageFilename(mapped.externalId)
+      : willDownloadVideo
+        ? liveVideoFilename(mapped.externalId)
+        : mapped.mediaFilename;
 
   // --- Normalize ---
   const importedMsg: ImportedMessage = {
@@ -220,7 +224,7 @@ export async function handleIncomingMessage(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(
-        `Warning: failed to download voice-note media (external_id=${mapped.externalId ?? "null"}): ${message}\n`
+        `Warning: failed to download voice-note media (external_id=${mapped.externalId ?? "null"}): ${message}\n`,
       );
       normalized.mediaPath = null;
       normalized.mediaStatus = "missing";
@@ -242,7 +246,7 @@ export async function handleIncomingMessage(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(
-        `Warning: failed to download image media (external_id=${mapped.externalId ?? "null"}): ${message}\n`
+        `Warning: failed to download image media (external_id=${mapped.externalId ?? "null"}): ${message}\n`,
       );
       normalized.mediaPath = null;
       normalized.mediaStatus = "missing";
@@ -270,7 +274,7 @@ export async function handleIncomingMessage(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(
-        `Warning: failed to download video media (external_id=${mapped.externalId ?? "null"}): ${message}\n`
+        `Warning: failed to download video media (external_id=${mapped.externalId ?? "null"}): ${message}\n`,
       );
       normalized.mediaPath = null;
       normalized.mediaStatus = "missing";
@@ -286,16 +290,14 @@ export async function handleIncomingMessage(
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         process.stderr.write(
-          `Warning: failed to persist video thumbnail (external_id=${mapped.externalId ?? "null"}): ${message}\n`
+          `Warning: failed to persist video thumbnail (external_id=${mapped.externalId ?? "null"}): ${message}\n`,
         );
       }
     }
   }
 
   // --- Insert ---
-  const result = await insertMessages(client, [
-    { ...normalized, participantId },
-  ]);
+  const result = await insertMessages(client, [{ ...normalized, participantId }]);
 
   const isNew = result.inserted > 0;
 

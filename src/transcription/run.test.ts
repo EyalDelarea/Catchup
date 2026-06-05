@@ -1,11 +1,8 @@
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroup } from "../db/repositories/groups.js";
 import { insertMessages } from "../db/repositories/messages.js";
@@ -20,26 +17,38 @@ const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
 class StubTranscriber implements Transcriber {
   opened = false;
   closed = false;
-  async open() { this.opened = true; }
+  async open() {
+    this.opened = true;
+  }
   async transcribe(wavPath: string) {
     if (wavPath.includes("bad")) throw new Error("decode failed");
     return { text: `text-for:${path.basename(wavPath)}` };
   }
-  async close() { this.closed = true; }
+  async close() {
+    this.closed = true;
+  }
 }
 
 async function seedMedia(
   pool: pg.Pool,
   groupId: number,
   filename: string,
-  dedupeKey: string
+  dedupeKey: string,
 ): Promise<void> {
   const row: NormalizedMessage & { participantId: number | null } = {
-    groupId, importId: null, source: "import", senderName: null,
-    messageType: "media", textContent: null,
-    mediaFilename: filename, mediaPath: `/tmp/${filename}`, mediaStatus: "present",
+    groupId,
+    importId: null,
+    source: "import",
+    senderName: null,
+    messageType: "media",
+    textContent: null,
+    mediaFilename: filename,
+    mediaPath: `/tmp/${filename}`,
+    mediaStatus: "present",
     sentAt: new Date("2026-02-01T08:00:00.000Z"),
-    dedupeKey, externalId: null, participantId: null,
+    dedupeKey,
+    externalId: null,
+    participantId: null,
   };
   await insertMessages(pool, [row]);
 }
@@ -67,27 +76,40 @@ describe("transcribeOneNote prune-after-caption", () => {
 
   async function seedVoiceNote(groupName: string, dedupeKey: string): Promise<number> {
     const groupId = await upsertGroup(pool, { name: groupName, source: "import" });
-    const result = await insertMessages(pool, [{
-      groupId, importId: null, source: "import", senderName: null,
-      messageType: "media", textContent: null,
-      mediaFilename: "voice.opus",
-      mediaPath: `/tmp/voice-${dedupeKey}.opus`,
-      mediaStatus: "present",
-      sentAt: new Date("2026-01-01T10:00:00Z"),
-      dedupeKey, externalId: null, participantId: null, fromMe: null,
-    }]);
+    const result = await insertMessages(pool, [
+      {
+        groupId,
+        importId: null,
+        source: "import",
+        senderName: null,
+        messageType: "media",
+        textContent: null,
+        mediaFilename: "voice.opus",
+        mediaPath: `/tmp/voice-${dedupeKey}.opus`,
+        mediaStatus: "present",
+        sentAt: new Date("2026-01-01T10:00:00Z"),
+        dedupeKey,
+        externalId: null,
+        participantId: null,
+        fromMe: null,
+      },
+    ]);
     return result.ids[0]!;
   }
 
   const stubTranscriber: Transcriber = {
     async open() {},
-    async transcribe() { return { text: "shalom" }; },
+    async transcribe() {
+      return { text: "shalom" };
+    },
     async close() {},
   };
 
   const failingTranscriber: Transcriber = {
     async open() {},
-    async transcribe() { throw new Error("transcription failed"); },
+    async transcribe() {
+      throw new Error("transcription failed");
+    },
     async close() {},
   };
 
@@ -138,7 +160,7 @@ describe("transcribeOneNote prune-after-caption", () => {
         convert: false,
         retainMedia: false,
         pruneMediaFile,
-      })
+      }),
     ).rejects.toThrow("transcription failed");
 
     expect(pruneMediaFile).not.toHaveBeenCalled();
@@ -172,7 +194,7 @@ describe("runTranscription", () => {
     const stub = new StubTranscriber();
     const first = await runTranscription(
       { groupName: "RT" },
-      { databaseUrl: connectionString, transcriber: stub, engine: "stub-engine" }
+      { databaseUrl: connectionString, transcriber: stub, engine: "stub-engine" },
     );
 
     expect(first.ok).toBe(1);
@@ -182,14 +204,14 @@ describe("runTranscription", () => {
     expect(stub.closed).toBe(true);
 
     const { rows } = await pool.query(
-      `SELECT status, transcript, error_message FROM transcripts ORDER BY message_id`
+      `SELECT status, transcript, error_message FROM transcripts ORDER BY message_id`,
     );
     expect(rows.find((r) => r.status === "completed")?.transcript).toContain("text-for:");
     expect(rows.find((r) => r.status === "failed")?.error_message).toContain("decode failed");
 
     const second = await runTranscription(
       { groupName: "RT" },
-      { databaseUrl: connectionString, transcriber: stub, engine: "stub-engine" }
+      { databaseUrl: connectionString, transcriber: stub, engine: "stub-engine" },
     );
     expect(second.ok).toBe(0);
     expect(second.failed).toBe(0);

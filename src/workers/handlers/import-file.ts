@@ -1,6 +1,6 @@
+import type { RunImportInput, RunImportResult } from "../../importer/run-import.js";
 import type { JobBus } from "../../jobs/job-bus.js";
 import type { Job } from "../../jobs/job-types.js";
-import type { RunImportInput, RunImportResult } from "../../importer/run-import.js";
 
 export type ImportFileHandlerDeps = {
   /** Calls the full import pipeline. */

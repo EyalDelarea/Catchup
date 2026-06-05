@@ -1,9 +1,9 @@
-import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import path from "node:path";
-import os from "node:os";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.resolve(__dirname, "cli.ts");
@@ -19,13 +19,17 @@ describe("CLI contract — import --folder mode (FR-025)", () => {
   it("--folder with a positional <path> exits non-zero with a clear error", () => {
     const r = run(["import", "/some/file.txt", "--folder", "/some/dir"]);
     expect(r.status).not.toBe(0);
-    expect(r.stderr.toLowerCase()).toMatch(/mutually exclusive|cannot use.*together|folder.*file|file.*folder|--folder/);
+    expect(r.stderr.toLowerCase()).toMatch(
+      /mutually exclusive|cannot use.*together|folder.*file|file.*folder|--folder/,
+    );
   });
 
   it("--folder with --name exits non-zero with a clear error", () => {
     const r = run(["import", "--folder", "/some/dir", "--name", "MyGroup"]);
     expect(r.status).not.toBe(0);
-    expect(r.stderr.toLowerCase()).toMatch(/mutually exclusive|cannot use.*together|--name.*--folder|--folder.*--name/);
+    expect(r.stderr.toLowerCase()).toMatch(
+      /mutually exclusive|cannot use.*together|--name.*--folder|--folder.*--name/,
+    );
   });
 
   it("--folder prints 'Enqueued N import jobs.' and exits 0", () => {
@@ -34,7 +38,7 @@ describe("CLI contract — import --folder mode (FR-025)", () => {
     try {
       fs.writeFileSync(path.join(tmpDir, "chat1.txt"), "dummy");
       fs.writeFileSync(path.join(tmpDir, "export2.zip"), "dummy");
-      fs.writeFileSync(path.join(tmpDir, "image.jpg"), "dummy");   // ignored
+      fs.writeFileSync(path.join(tmpDir, "image.jpg"), "dummy"); // ignored
 
       // Use RABBITMQ_URL=stub so the CLI uses our stubbed bus path
       // The CLI uses USE_IN_MEMORY_BUS=1 env to bypass real broker in tests

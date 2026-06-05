@@ -16,11 +16,7 @@ export const up = (pgm: MigrationBuilder): void => {
     },
   });
 
-  pgm.addConstraint(
-    "participants",
-    "participants_display_name_unique",
-    "UNIQUE (display_name)"
-  );
+  pgm.addConstraint("participants", "participants_display_name_unique", "UNIQUE (display_name)");
 };
 
 export const down = (pgm: MigrationBuilder): void => {

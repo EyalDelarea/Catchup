@@ -150,9 +150,7 @@ function normalizeYear(year: number): number {
 }
 
 function parseTime(timePart: string): { hour: number; minute: number; second: number } {
-  const timeMatch = /^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s?([AP]M))?$/i.exec(
-    timePart.trim(),
-  );
+  const timeMatch = /^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s?([AP]M))?$/i.exec(timePart.trim());
 
   if (!timeMatch) {
     throw new Error(`Unsupported WhatsApp export time: ${timePart}`);

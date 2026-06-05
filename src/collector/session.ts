@@ -14,18 +14,18 @@
  * implemented against the Baileys API as documented but has NOT been validated
  * against a real WhatsApp account in this task.
  */
-import fs from "node:fs";
-import path from "node:path";
+
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import type { Boom } from "@hapi/boom";
 import makeWASocket, {
-  useMultiFileAuthState,
+  type ConnectionState,
   DisconnectReason,
   downloadMediaMessage,
-  type WASocket,
+  useMultiFileAuthState,
   type WAMessage,
-  type ConnectionState,
+  type WASocket,
 } from "@whiskeysockets/baileys";
-import { Boom } from "@hapi/boom";
 import { applyOutboundGuard } from "./outbound-guard.js";
 
 export type SessionEvents = {
@@ -97,7 +97,7 @@ export class CollectorSession extends EventEmitter {
       {
         logger: makeSilentLogger() as never,
         reuploadRequest: sock.updateMediaMessage,
-      }
+      },
     );
     return buf as Buffer;
   }
@@ -131,7 +131,7 @@ export class CollectorSession extends EventEmitter {
   async fetchMessageHistory(
     count: number,
     anchorKey: { remoteJid: string; id: string; fromMe: boolean },
-    anchorTsMs: number
+    anchorTsMs: number,
   ): Promise<string> {
     const sock = this.socket;
     if (!sock) {
@@ -140,7 +140,7 @@ export class CollectorSession extends EventEmitter {
     return sock.fetchMessageHistory(
       count,
       { remoteJid: anchorKey.remoteJid, id: anchorKey.id, fromMe: anchorKey.fromMe },
-      anchorTsMs
+      anchorTsMs,
     );
   }
 
@@ -176,9 +176,7 @@ export class CollectorSession extends EventEmitter {
       const handler = (data: { messages: WAMessage[]; isLatest?: boolean }) => {
         if (settled) return;
         // Filter messages belonging to this chat
-        const relevant = data.messages.filter(
-          (m) => m.key?.remoteJid === chatJid
-        );
+        const relevant = data.messages.filter((m) => m.key?.remoteJid === chatJid);
         if (relevant.length === 0) return; // Not for our chat — keep waiting
         settled = true;
         cleanup();
@@ -187,12 +185,15 @@ export class CollectorSession extends EventEmitter {
 
       sock.ev.on("messaging-history.set", handler);
 
-      timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve([]);
-      }, Math.max(0, timeoutMs));
+      timer = setTimeout(
+        () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve([]);
+        },
+        Math.max(0, timeoutMs),
+      );
     });
   }
 
@@ -245,15 +246,12 @@ export class CollectorSession extends EventEmitter {
         if (this.stopped) return;
 
         // Determine if we should reconnect
-        const statusCode =
-          (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
+        const statusCode = (lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
 
         const loggedOut = statusCode === DisconnectReason.loggedOut;
 
         if (loggedOut) {
-          console.error(
-            "WhatsApp session logged out. Delete data/baileys-auth/ and re-link."
-          );
+          console.error("WhatsApp session logged out. Delete data/baileys-auth/ and re-link.");
         } else {
           // Reconnect after a brief delay
           setTimeout(() => {
@@ -280,10 +278,7 @@ export class CollectorSession extends EventEmitter {
 /**
  * Start a CollectorSession and return it.
  */
-export async function startSession(
-  authDir: string,
-  allowSend = false
-): Promise<CollectorSession> {
+export async function startSession(authDir: string, allowSend = false): Promise<CollectorSession> {
   const session = new CollectorSession(authDir, allowSend);
   await session.start();
   return session;
@@ -304,19 +299,16 @@ export async function startSession(
  * Falls back to the raw linking string if rendering fails for any reason.
  */
 function printQr(qr: string): void {
-  type QrToString = (
-    text: string,
-    opts: { type: "terminal"; small: boolean }
-  ) => Promise<string>;
+  type QrToString = (text: string, opts: { type: "terminal"; small: boolean }) => Promise<string>;
   const specifier = "qrcode" as string;
   import(specifier)
     .then(async (mod: unknown) => {
       const m = mod as { toString?: QrToString; default?: { toString?: QrToString } };
-      const toString = m.toString ?? m.default?.toString;
-      if (typeof toString !== "function") {
+      const toStringFn = m.toString ?? m.default?.toString;
+      if (typeof toStringFn !== "function") {
         throw new Error("qrcode: toString() not found");
       }
-      console.log(await toString(qr, { type: "terminal", small: true }));
+      console.log(await toStringFn(qr, { type: "terminal", small: true }));
     })
     .catch((err: unknown) => {
       if (process.env["QR_DEBUG"] === "1") {

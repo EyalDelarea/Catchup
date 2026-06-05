@@ -2,13 +2,8 @@
  * liveness.test.ts — Pure unit tests for src/service/liveness.ts
  * No database needed; all time is injected via the `now` parameter.
  */
-import { describe, it, expect, beforeEach } from "vitest";
-import {
-  markHeartbeat,
-  getLastHeartbeatAt,
-  isHealthy,
-  resetLiveness,
-} from "./liveness.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import { getLastHeartbeatAt, isHealthy, markHeartbeat, resetLiveness } from "./liveness.js";
 
 describe("liveness", () => {
   beforeEach(() => {

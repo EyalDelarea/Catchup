@@ -15,7 +15,7 @@ type CreateImportInput = {
  */
 export async function createImport(
   client: pg.Pool | pg.PoolClient,
-  input: CreateImportInput
+  input: CreateImportInput,
 ): Promise<number> {
   const result = await client.query<{ id: string }>(
     `
@@ -23,13 +23,7 @@ export async function createImport(
     VALUES ($1, $2, $3, $4, $5)
     RETURNING id
     `,
-    [
-      input.groupId,
-      input.sourcePath,
-      input.sourceHash,
-      input.originalFilePath,
-      input.status,
-    ]
+    [input.groupId, input.sourcePath, input.sourceHash, input.originalFilePath, input.status],
   );
 
   const row = result.rows[0];
@@ -44,12 +38,9 @@ export async function createImport(
  */
 export async function markImportCompleted(
   client: pg.Pool | pg.PoolClient,
-  importId: number
+  importId: number,
 ): Promise<void> {
-  await client.query(
-    `UPDATE imports SET status = 'completed' WHERE id = $1`,
-    [importId]
-  );
+  await client.query(`UPDATE imports SET status = 'completed' WHERE id = $1`, [importId]);
 }
 
 /**
@@ -59,12 +50,12 @@ export async function markImportCompleted(
 export async function updateImportFilePath(
   client: pg.Pool | pg.PoolClient,
   importId: number,
-  originalFilePath: string
+  originalFilePath: string,
 ): Promise<void> {
-  await client.query(
-    `UPDATE imports SET original_file_path = $2 WHERE id = $1`,
-    [importId, originalFilePath]
-  );
+  await client.query(`UPDATE imports SET original_file_path = $2 WHERE id = $1`, [
+    importId,
+    originalFilePath,
+  ]);
 }
 
 /**
@@ -73,10 +64,10 @@ export async function updateImportFilePath(
 export async function markImportFailed(
   client: pg.Pool | pg.PoolClient,
   importId: number,
-  errorMessage?: string
+  errorMessage?: string,
 ): Promise<void> {
-  await client.query(
-    `UPDATE imports SET status = 'failed', error_message = $2 WHERE id = $1`,
-    [importId, errorMessage ?? null]
-  );
+  await client.query(`UPDATE imports SET status = 'failed', error_message = $2 WHERE id = $1`, [
+    importId,
+    errorMessage ?? null,
+  ]);
 }

@@ -1,8 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import {
-  RabbitMQContainer,
-  type StartedRabbitMQContainer,
-} from "@testcontainers/rabbitmq";
+import { RabbitMQContainer, type StartedRabbitMQContainer } from "@testcontainers/rabbitmq";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { InMemoryJobRunRecorder } from "./job-run-recorder.js";
 import { RabbitMqJobBus } from "./rabbitmq-bus.js";
 
@@ -37,212 +34,180 @@ describe("RabbitMqJobBus — integration (testcontainers)", () => {
 
   // ── T018-1: enqueue → consume → ack ─────────────────────────────────────
 
-  it(
-    "enqueue → consume → ack: handler receives the job; queue drains; recorder shows pending→running→done",
-    async () => {
-      const recorder = new InMemoryJobRunRecorder();
-      const bus = makeBus(recorder);
+  it("enqueue → consume → ack: handler receives the job; queue drains; recorder shows pending→running→done", async () => {
+    const recorder = new InMemoryJobRunRecorder();
+    const bus = makeBus(recorder);
 
-      try {
-        const { id } = await bus.enqueue(
-          "import.file",
-          { filePath: "/a/b.zip" },
-          { maxAttempts: 3 }
-        );
+    try {
+      const { id } = await bus.enqueue("import.file", { filePath: "/a/b.zip" }, { maxAttempts: 3 });
 
-        // Give RabbitMQ a moment to persist the message
-        await new Promise((r) => setTimeout(r, 50));
-        expect(await bus.depth("import.file")).toBe(1);
+      // Give RabbitMQ a moment to persist the message
+      await new Promise((r) => setTimeout(r, 50));
+      expect(await bus.depth("import.file")).toBe(1);
 
-        const received: string[] = [];
-        await bus.consume(
-          "import.file",
-          async (job) => {
-            received.push(job.id);
-          },
-          { prefetch: 1 }
-        );
+      const received: string[] = [];
+      await bus.consume(
+        "import.file",
+        async (job) => {
+          received.push(job.id);
+        },
+        { prefetch: 1 },
+      );
 
-        // Wait for async delivery and ack
-        await waitUntil(() => received.length === 1, 5_000);
-        // Queue should drain after ack
-        await waitUntil(() => bus.depth("import.file").then((d) => d === 0), 5_000);
+      // Wait for async delivery and ack
+      await waitUntil(() => received.length === 1, 5_000);
+      // Queue should drain after ack
+      await waitUntil(() => bus.depth("import.file").then((d) => d === 0), 5_000);
 
-        expect(received).toEqual([id]);
-        expect(await bus.depth("import.file")).toBe(0);
+      expect(received).toEqual([id]);
+      expect(await bus.depth("import.file")).toBe(0);
 
-        const statuses = recorder.historyFor(id).map((e) => e.status);
-        expect(statuses).toEqual(["pending", "running", "done"]);
-      } finally {
-        await bus.close();
-      }
-    },
-    30_000
-  );
+      const statuses = recorder.historyFor(id).map((e) => e.status);
+      expect(statuses).toEqual(["pending", "running", "done"]);
+    } finally {
+      await bus.close();
+    }
+  }, 30_000);
 
   // ── T018-2: retry → DLQ ─────────────────────────────────────────────────
 
-  it(
-    "retry → DLQ: handler always throws with maxAttempts=2; recorder reaches 'dead'; message lands in jobs.import.file.dead",
-    async () => {
-      const recorder = new InMemoryJobRunRecorder();
-      const bus = makeBus(recorder);
+  it("retry → DLQ: handler always throws with maxAttempts=2; recorder reaches 'dead'; message lands in jobs.import.file.dead", async () => {
+    const recorder = new InMemoryJobRunRecorder();
+    const bus = makeBus(recorder);
 
-      try {
-        const { id } = await bus.enqueue(
-          "import.file",
-          { filePath: "/fail.zip" },
-          { maxAttempts: 2 }
-        );
+    try {
+      const { id } = await bus.enqueue(
+        "import.file",
+        { filePath: "/fail.zip" },
+        { maxAttempts: 2 },
+      );
 
-        await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 50));
 
-        let callCount = 0;
-        await bus.consume(
-          "import.file",
-          async () => {
-            callCount++;
-            throw new Error("always fails");
-          },
-          { prefetch: 1 }
-        );
+      let callCount = 0;
+      await bus.consume(
+        "import.file",
+        async () => {
+          callCount++;
+          throw new Error("always fails");
+        },
+        { prefetch: 1 },
+      );
 
-        // Wait until recorder shows the job is dead
-        await waitUntil(
-          () => recorder.historyFor(id).some((e) => e.status === "dead"),
-          10_000
-        );
+      // Wait until recorder shows the job is dead
+      await waitUntil(() => recorder.historyFor(id).some((e) => e.status === "dead"), 10_000);
 
-        // The job must not be redelivered (no extra calls after it reached dead)
-        // Give a short settle window
-        await new Promise((r) => setTimeout(r, 200));
-        const finalCallCount = callCount;
+      // The job must not be redelivered (no extra calls after it reached dead)
+      // Give a short settle window
+      await new Promise((r) => setTimeout(r, 200));
+      const finalCallCount = callCount;
 
-        // Handler called exactly maxAttempts times
-        expect(finalCallCount).toBe(2);
+      // Handler called exactly maxAttempts times
+      expect(finalCallCount).toBe(2);
 
-        // Main queue drained
-        expect(await bus.depth("import.file")).toBe(0);
+      // Main queue drained
+      expect(await bus.depth("import.file")).toBe(0);
 
-        // Status sequence: pending → running → failed → running → dead
-        const statuses = recorder.historyFor(id).map((e) => e.status);
-        expect(statuses).toEqual([
-          "pending",
-          "running",
-          "failed",
-          "running",
-          "dead",
-        ]);
+      // Status sequence: pending → running → failed → running → dead
+      const statuses = recorder.historyFor(id).map((e) => e.status);
+      expect(statuses).toEqual(["pending", "running", "failed", "running", "dead"]);
 
-        // Physical message lands in the dead-letter queue
-        await waitUntil(
-          () => bus.deadDepth("import.file").then((n) => n === 1),
-          5_000
-        );
-        expect(await bus.deadDepth("import.file")).toBe(1);
-      } finally {
-        await bus.close();
-      }
-    },
-    30_000
-  );
+      // Physical message lands in the dead-letter queue
+      await waitUntil(() => bus.deadDepth("import.file").then((n) => n === 1), 5_000);
+      expect(await bus.deadDepth("import.file")).toBe(1);
+    } finally {
+      await bus.close();
+    }
+  }, 30_000);
 
   // ── T018-3: prefetch respected ───────────────────────────────────────────
 
-  it(
-    "prefetch=1: only one message is unacked/in-flight at a time while others wait",
-    async () => {
-      const recorder = new InMemoryJobRunRecorder();
-      const bus = makeBus(recorder);
+  it("prefetch=1: only one message is unacked/in-flight at a time while others wait", async () => {
+    const recorder = new InMemoryJobRunRecorder();
+    const bus = makeBus(recorder);
 
-      try {
-        // Enqueue 3 jobs
-        await bus.enqueue("transcribe.voicenote", { messageId: "m1" }, { maxAttempts: 1 });
-        await bus.enqueue("transcribe.voicenote", { messageId: "m2" }, { maxAttempts: 1 });
-        await bus.enqueue("transcribe.voicenote", { messageId: "m3" }, { maxAttempts: 1 });
+    try {
+      // Enqueue 3 jobs
+      await bus.enqueue("transcribe.voicenote", { messageId: "m1" }, { maxAttempts: 1 });
+      await bus.enqueue("transcribe.voicenote", { messageId: "m2" }, { maxAttempts: 1 });
+      await bus.enqueue("transcribe.voicenote", { messageId: "m3" }, { maxAttempts: 1 });
 
-        await new Promise((r) => setTimeout(r, 100));
-        expect(await bus.depth("transcribe.voicenote")).toBe(3);
+      await new Promise((r) => setTimeout(r, 100));
+      expect(await bus.depth("transcribe.voicenote")).toBe(3);
 
-        // Track max concurrent in-flight
-        let inFlight = 0;
-        let maxInFlight = 0;
-        let releaseFirst: (() => void) | undefined;
-        const firstBlocked = new Promise<void>((resolve) => {
-          releaseFirst = resolve;
-        });
+      // Track max concurrent in-flight
+      let inFlight = 0;
+      let maxInFlight = 0;
+      let releaseFirst: (() => void) | undefined;
+      const firstBlocked = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
 
-        const processed: string[] = [];
+      const processed: string[] = [];
 
-        const consumePromise = bus.consume(
-          "transcribe.voicenote",
-          async (job) => {
-            inFlight++;
-            if (inFlight > maxInFlight) maxInFlight = inFlight;
+      const consumePromise = bus.consume(
+        "transcribe.voicenote",
+        async (job) => {
+          inFlight++;
+          if (inFlight > maxInFlight) maxInFlight = inFlight;
 
-            // First job blocks until released
-            if (processed.length === 0) {
-              await firstBlocked;
-            }
+          // First job blocks until released
+          if (processed.length === 0) {
+            await firstBlocked;
+          }
 
-            processed.push(job.payload.messageId);
-            inFlight--;
-          },
-          { prefetch: 1 }
-        );
+          processed.push(job.payload.messageId);
+          inFlight--;
+        },
+        { prefetch: 1 },
+      );
 
-        // Wait until first job is in-flight (blocking)
-        await waitUntil(() => inFlight === 1, 5_000);
+      // Wait until first job is in-flight (blocking)
+      await waitUntil(() => inFlight === 1, 5_000);
 
-        // While first job is blocked, the other two should be waiting in the queue (not dispatched)
-        // With prefetch=1, only 1 unacked message can be delivered at a time
-        expect(inFlight).toBe(1);
+      // While first job is blocked, the other two should be waiting in the queue (not dispatched)
+      // With prefetch=1, only 1 unacked message can be delivered at a time
+      expect(inFlight).toBe(1);
 
-        // Release the first job
-        releaseFirst!();
+      // Release the first job
+      releaseFirst!();
 
-        // Wait for all 3 to complete
-        await waitUntil(() => processed.length === 3, 10_000);
+      // Wait for all 3 to complete
+      await waitUntil(() => processed.length === 3, 10_000);
 
-        await consumePromise;
+      await consumePromise;
 
-        // maxInFlight should never exceed 1
-        expect(maxInFlight).toBe(1);
-        expect(processed).toHaveLength(3);
-        expect(await bus.depth("transcribe.voicenote")).toBe(0);
-      } finally {
-        await bus.close();
-      }
-    },
-    30_000
-  );
+      // maxInFlight should never exceed 1
+      expect(maxInFlight).toBe(1);
+      expect(processed).toHaveLength(3);
+      expect(await bus.depth("transcribe.voicenote")).toBe(0);
+    } finally {
+      await bus.close();
+    }
+  }, 30_000);
 
   // ── T018-4: close() does not leave hanging handles ───────────────────────
 
-  it(
-    "close() cleanly tears down channel + connection (no hanging handles)",
-    async () => {
-      const recorder = new InMemoryJobRunRecorder();
-      const bus = makeBus(recorder);
+  it("close() cleanly tears down channel + connection (no hanging handles)", async () => {
+    const recorder = new InMemoryJobRunRecorder();
+    const bus = makeBus(recorder);
 
-      // Trigger connection by enqueueing
-      await bus.enqueue("import.file", { filePath: "/x.zip" });
+    // Trigger connection by enqueueing
+    await bus.enqueue("import.file", { filePath: "/x.zip" });
 
-      // close() must resolve without throwing
-      await expect(bus.close()).resolves.toBeUndefined();
+    // close() must resolve without throwing
+    await expect(bus.close()).resolves.toBeUndefined();
 
-      // Calling close() a second time must also be safe
-      await expect(bus.close()).resolves.toBeUndefined();
-    },
-    15_000
-  );
+    // Calling close() a second time must also be safe
+    await expect(bus.close()).resolves.toBeUndefined();
+  }, 15_000);
 });
 
 // ── Fix 4: connect-race unit test (fake amqplib, no Testcontainers) ──────────
 
 describe("RabbitMqJobBus — connect race (unit)", () => {
   it("two concurrent consume() calls result in a single amqplib.connect() call", async () => {
-    let connectCallCount = 0;
+    const connectCallCount = 0;
 
     // Build a minimal fake channel and model
     const fakeChannel = {
@@ -276,9 +241,11 @@ describe("RabbitMqJobBus — connect race (unit)", () => {
     const bus = new TestBus({ url: "amqp://fake-no-connect", recorder });
 
     // Monkey-patch the private connect method via prototype to count calls
-    const originalConnect = (bus as unknown as { connect: () => Promise<unknown> })["connect"].bind(bus);
+    const originalConnect = (bus as unknown as { connect: () => Promise<unknown> })["connect"].bind(
+      bus,
+    );
     let connectCallsObserved = 0;
-    (bus as unknown as { connect: () => Promise<unknown> })["connect"] = async function () {
+    (bus as unknown as { connect: () => Promise<unknown> })["connect"] = async () => {
       connectCallsObserved++;
       // Simulate slow connect to force a race
       return new Promise<unknown>((resolve) => setTimeout(() => resolve(fakeChannel), 10));
@@ -326,7 +293,9 @@ describe("RabbitMqJobBus — connect race (unit)", () => {
     // create a testable subclass that exposes connectingPromise.
     class InspectableBus extends RabbitMqJobBus {
       get exposedConnectingPromise() {
-        return (this as unknown as Record<string, unknown>)["connectingPromise"] as Promise<unknown> | null;
+        return (this as unknown as Record<string, unknown>)[
+          "connectingPromise"
+        ] as Promise<unknown> | null;
       }
 
       // Override to count real-connect calls
@@ -368,7 +337,7 @@ describe("RabbitMqJobBus — connect race (unit)", () => {
 
 async function waitUntil(
   predicate: () => boolean | Promise<boolean>,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

@@ -14,12 +14,12 @@
  */
 
 import type pg from "pg";
+import type { Cursor } from "../../db/repositories/read-watermarks.js";
 import type { Job } from "../../jobs/job-types.js";
 import type { PreparedCatchup } from "../../summarization/prepare-catchup.js";
 import type { InsertSummaryInput } from "../../summarization/run-summary.js";
-import type { Cursor } from "../../db/repositories/read-watermarks.js";
-import type { SummaryPrompt } from "../../summarization/summarizer.js";
 import { summarizeAndPersist } from "../../summarization/run-summary.js";
+import type { SummaryPrompt } from "../../summarization/summarizer.js";
 
 export type SummarizeGroupHandlerDeps = {
   pool: pg.Pool;
@@ -27,7 +27,7 @@ export type SummarizeGroupHandlerDeps = {
     pool: pg.Pool,
     groupName: string,
     fallbackN: number,
-    tokenBudget: number
+    tokenBudget: number,
   ) => Promise<PreparedCatchup>;
   summarize: (prompt: SummaryPrompt) => Promise<string>;
   insertSummary: (pool: pg.Pool, input: InsertSummaryInput) => Promise<number>;
@@ -45,9 +45,7 @@ export type SummarizeGroupHandlerDeps = {
  * are rethrown for retry.
  */
 export function makeSummarizeGroupHandler(deps: SummarizeGroupHandlerDeps) {
-  return async function summarizeGroupHandler(
-    job: Job<"summarize.group">
-  ): Promise<void> {
+  return async function summarizeGroupHandler(job: Job<"summarize.group">): Promise<void> {
     const groupId = Number(job.payload.groupId);
     if (!Number.isFinite(groupId) || groupId <= 0) {
       throw new Error(`Invalid groupId in summarize.group payload: ${job.payload.groupId}`);
@@ -58,7 +56,7 @@ export function makeSummarizeGroupHandler(deps: SummarizeGroupHandlerDeps) {
     // the groups repo findGroupByName is used by prepareCatchup internally.
     const { rows } = await deps.pool.query<{ name: string }>(
       `SELECT name FROM groups WHERE id = $1`,
-      [groupId]
+      [groupId],
     );
     if (rows.length === 0) {
       throw new Error(`summarize.group: group ${groupId} not found`);
@@ -76,7 +74,7 @@ export function makeSummarizeGroupHandler(deps: SummarizeGroupHandlerDeps) {
         tokenBudget: deps.tokenBudget,
         groupName,
       },
-      groupId
+      groupId,
     );
     // Both 'cache-hit' and 'generated' are successful completions.
     // Only exceptions propagate for bus retry.

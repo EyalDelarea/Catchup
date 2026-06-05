@@ -1,7 +1,7 @@
 import type pg from "pg";
 import { findGroupByName } from "../db/repositories/groups.js";
-import { selectMessages, type Selection } from "./select.js";
 import { buildPrompt, estimateTokens } from "./prompt.js";
+import { type Selection, selectMessages } from "./select.js";
 import type { SummaryPrompt } from "./summarizer.js";
 
 export type PreparedSummary =
@@ -24,7 +24,7 @@ export async function prepareSummary(
   client: pg.Pool | pg.PoolClient,
   groupName: string,
   selection: Selection,
-  tokenBudget: number
+  tokenBudget: number,
 ): Promise<PreparedSummary> {
   const group = await findGroupByName(client, groupName);
   if (!group) {
@@ -37,7 +37,7 @@ export async function prepareSummary(
   const tokens = estimateTokens(prompt.system + prompt.user);
   if (tokens > tokenBudget) {
     throw new Error(
-      `Selection too large (~${tokens} tokens > budget ${tokenBudget}); narrow it with a smaller --last or a more recent --since.`
+      `Selection too large (~${tokens} tokens > budget ${tokenBudget}); narrow it with a smaller --last or a more recent --since.`,
     );
   }
 
@@ -47,5 +47,12 @@ export async function prepareSummary(
       ? { n: selection.last }
       : { since: selection.since.toISOString().slice(0, 10) };
 
-  return { kind: "ready", groupId: group.id, prompt, summaryType, parameters, messageCount: messages.length };
+  return {
+    kind: "ready",
+    groupId: group.id,
+    prompt,
+    summaryType,
+    parameters,
+    messageCount: messages.length,
+  };
 }

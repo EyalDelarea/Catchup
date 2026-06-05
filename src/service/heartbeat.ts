@@ -81,7 +81,7 @@ export function startHeartbeat(deps: HeartbeatDeps): HeartbeatHandle {
 export async function markConnected(
   pool: pg.Pool | pg.PoolClient,
   connected: boolean,
-  setConnected: SetConnectedFn = dbSetCollectorConnected
+  setConnected: SetConnectedFn = dbSetCollectorConnected,
 ): Promise<void> {
   await setConnected(pool, connected);
 }

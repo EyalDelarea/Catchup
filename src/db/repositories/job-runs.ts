@@ -17,7 +17,7 @@ export type UpsertJobRunInput = {
 /** Upsert a job_runs row by id. On conflict, updates all mutable fields and touches updated_at. */
 export async function upsertJobRun(
   client: pg.Pool | pg.PoolClient,
-  input: UpsertJobRunInput
+  input: UpsertJobRunInput,
 ): Promise<void> {
   await client.query(
     `
@@ -40,7 +40,7 @@ export async function upsertJobRun(
       input.attempts,
       input.maxAttempts,
       input.lastError ?? null,
-    ]
+    ],
   );
 }
 
@@ -55,7 +55,7 @@ export async function setJobStatus(
   client: pg.Pool | pg.PoolClient,
   id: string,
   status: JobStatus,
-  lastError?: string
+  lastError?: string,
 ): Promise<void> {
   await client.query(
     `
@@ -66,7 +66,7 @@ export async function setJobStatus(
         updated_at = now()
     WHERE id = $1
     `,
-    [id, status, lastError ?? null]
+    [id, status, lastError ?? null],
   );
 }
 
@@ -78,25 +78,23 @@ export async function setJobStatus(
  *
  * Returns the number of rows updated.
  */
-export async function resetStaleRunningJobs(
-  client: pg.Pool | pg.PoolClient
-): Promise<number> {
+export async function resetStaleRunningJobs(client: pg.Pool | pg.PoolClient): Promise<number> {
   const { rowCount } = await client.query(
     `UPDATE job_runs
      SET status     = 'failed',
          last_error = 'worker restarted',
          updated_at = now()
-     WHERE status = 'running'`
+     WHERE status = 'running'`,
   );
   return rowCount ?? 0;
 }
 
 /** Return a record of status → count for all job_runs rows. Missing statuses return 0. */
 export async function countJobsByStatus(
-  client: pg.Pool | pg.PoolClient
+  client: pg.Pool | pg.PoolClient,
 ): Promise<Record<string, number>> {
   const { rows } = await client.query<{ status: string; cnt: string }>(
-    `SELECT status, count(*) AS cnt FROM job_runs GROUP BY status`
+    `SELECT status, count(*) AS cnt FROM job_runs GROUP BY status`,
   );
 
   const result: Record<string, number> = {

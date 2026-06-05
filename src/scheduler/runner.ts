@@ -17,9 +17,9 @@
 
 import type pg from "pg";
 import type { JobBus } from "../jobs/job-bus.js";
-import type { TimeSlot } from "./schedule.js";
-import { nextRun, dueCatchup } from "./schedule.js";
 import type { EnqueueScheduledRunOpts, EnqueueScheduledRunResult } from "./enqueue-run.js";
+import type { TimeSlot } from "./schedule.js";
+import { dueCatchup, nextRun } from "./schedule.js";
 
 export type StartSchedulerOpts = {
   pool: pg.Pool;
@@ -35,7 +35,11 @@ export type StartSchedulerOpts = {
   /** Injected DB write — records that a slot ran at a given time. */
   recordRun: (pool: pg.Pool, slotKey: string, runAt: Date) => Promise<void>;
   /** Injected enqueue function. */
-  enqueueRun: (pool: pg.Pool, bus: JobBus, opts?: EnqueueScheduledRunOpts) => Promise<EnqueueScheduledRunResult>;
+  enqueueRun: (
+    pool: pg.Pool,
+    bus: JobBus,
+    opts?: EnqueueScheduledRunOpts,
+  ) => Promise<EnqueueScheduledRunResult>;
   logger?: {
     info: (msg: string) => void;
     error: (msg: string) => void;
@@ -61,7 +65,8 @@ export type SchedulerHandle = {
  * If !enabled, returns a no-op stop() immediately.
  */
 export function startScheduler(opts: StartSchedulerOpts): SchedulerHandle {
-  const { pool, bus, times, enabled, now, setTimer, getLastRun, recordRun, enqueueRun, logger } = opts;
+  const { pool, bus, times, enabled, now, setTimer, getLastRun, recordRun, enqueueRun, logger } =
+    opts;
 
   if (!enabled || times.length === 0) {
     return { stop: () => {} };

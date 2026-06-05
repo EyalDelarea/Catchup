@@ -35,7 +35,12 @@ const noopLogger: Logger = {
  * and can take seconds to minutes per item, so we never pre-fetch more than
  * one at a time regardless of --concurrency.
  */
-const PREFETCH_ONE_TYPES = new Set<JobType>(["transcribe.voicenote", "analyze.image", "analyze.video", "summarize.group"]);
+const PREFETCH_ONE_TYPES = new Set<JobType>([
+  "transcribe.voicenote",
+  "analyze.image",
+  "analyze.video",
+  "summarize.group",
+]);
 
 /**
  * Normalize a job type to a coarse operation label for metrics/dashboards.
@@ -68,7 +73,9 @@ export function opForJobType(type: JobType): string {
  * Returns a close function for graceful shutdown.
  * The returned promise rejects if any consumer registration fails at startup.
  */
-export async function buildWorker(opts: BuildWorkerOptions): Promise<{ close: () => Promise<void> }> {
+export async function buildWorker(
+  opts: BuildWorkerOptions,
+): Promise<{ close: () => Promise<void> }> {
   const { bus, handlers, concurrency } = opts;
   const log = opts.logger ?? noopLogger;
 
@@ -76,7 +83,9 @@ export async function buildWorker(opts: BuildWorkerOptions): Promise<{ close: ()
   const registerPromises: Promise<void>[] = [];
 
   // Register each handler type with correlated per-job logging
-  for (const [type, handler] of Object.entries(handlers) as Array<[JobType, (job: Job) => Promise<void>]>) {
+  for (const [type, handler] of Object.entries(handlers) as Array<
+    [JobType, (job: Job) => Promise<void>]
+  >) {
     if (handler) {
       const prefetch = PREFETCH_ONE_TYPES.has(type) ? 1 : concurrency;
 
@@ -104,7 +113,7 @@ export async function buildWorker(opts: BuildWorkerOptions): Promise<{ close: ()
       };
 
       registerPromises.push(
-        bus.consume(type, wrappedHandler as (job: Job<typeof type>) => Promise<void>, { prefetch })
+        bus.consume(type, wrappedHandler as (job: Job<typeof type>) => Promise<void>, { prefetch }),
       );
     }
   }
@@ -139,7 +148,7 @@ async function main(): Promise<void> {
     { analyzeMediaOne, normalizeImageWithFfmpeg },
     { analyzeVideo, extractFramesWithFfmpeg, extractAudioWithFfmpeg, fileSizeMbSync },
     { OllamaVisionAnalyzer },
-    { IvritWhisperTranscriber, convertToWav },
+    { IvritWhisperTranscriber },
     { createLogger },
     { pruneMediaFile },
     { resetStaleRunningJobs },
@@ -190,7 +199,10 @@ async function main(): Promise<void> {
   // On startup, reset any orphaned 'running' rows from a previous crash/restart.
   const staleReset = await resetStaleRunningJobs(pool);
   if (staleReset > 0) {
-    logger.warn({ staleReset }, `Reset ${staleReset} stale 'running' job(s) to 'failed' on startup.`);
+    logger.warn(
+      { staleReset },
+      `Reset ${staleReset} stale 'running' job(s) to 'failed' on startup.`,
+    );
   }
 
   const importFileHandler = makeImportFileHandler({
@@ -224,7 +236,8 @@ async function main(): Promise<void> {
           ffmpegPath: config.transcription.ffmpegPath,
           convert: true,
           retainMedia: config.retainMedia,
-          pruneMediaFile: (id) => pruneMediaFile(pool, Number(id), { retainMedia: config.retainMedia }),
+          pruneMediaFile: (id) =>
+            pruneMediaFile(pool, Number(id), { retainMedia: config.retainMedia }),
         }),
     });
     handlers["transcribe.voicenote"] = transcribeVoicenoteHandler;
@@ -248,20 +261,22 @@ async function main(): Promise<void> {
 
     // Build a shared transcriber for video audio extraction.
     // open()/close() are called per analyzeVideo invocation via the injected function.
-    const buildTranscribeAudio = () => async (audioPath: string): Promise<string> => {
-      const transcriber = new IvritWhisperTranscriber({
-        pythonPath: config.transcription.pythonPath,
-        model: config.transcription.model,
-        ffmpegPath,
-      });
-      await transcriber.open();
-      try {
-        const { text } = await transcriber.transcribe(audioPath);
-        return text;
-      } finally {
-        await transcriber.close();
-      }
-    };
+    const buildTranscribeAudio =
+      () =>
+      async (audioPath: string): Promise<string> => {
+        const transcriber = new IvritWhisperTranscriber({
+          pythonPath: config.transcription.pythonPath,
+          model: config.transcription.model,
+          ffmpegPath,
+        });
+        await transcriber.open();
+        try {
+          const { text } = await transcriber.transcribe(audioPath);
+          return text;
+        } finally {
+          await transcriber.close();
+        }
+      };
 
     const analyzeMediaHandler = makeAnalyzeMediaHandler({
       hasAnalysis: (messageId) => hasAnalysis(pool, messageId),
@@ -270,8 +285,7 @@ async function main(): Promise<void> {
           pool,
           getVisualMediaPath: (id) => getVisualMediaPath(pool, id),
           visionAnalyzer: ollamaAnalyzer,
-          normalizeImage: (imagePath) =>
-            normalizeImageWithFfmpeg(ffmpegPath, imagePath),
+          normalizeImage: (imagePath) => normalizeImageWithFfmpeg(ffmpegPath, imagePath),
           insertMediaAnalysis: (input) => insertMediaAnalysis(pool, input),
           engineLabel: config.vision.model,
           // Video deps
@@ -287,12 +301,11 @@ async function main(): Promise<void> {
                   });
                   return { frames, dir };
                 },
-                extractAudio: (videoPath) =>
-                  extractAudioWithFfmpeg(ffmpegPath, videoPath),
+                extractAudio: (videoPath) => extractAudioWithFfmpeg(ffmpegPath, videoPath),
                 maxVideoMb: config.vision.maxVideoMb,
                 fileSizeMb: fileSizeMbSync,
               },
-              input
+              input,
             ),
           getThumbnailPath: (_messageId) => Promise.resolve(null),
           retainMedia: config.retainMedia,
@@ -351,7 +364,7 @@ async function main(): Promise<void> {
 
   logger.info(
     { concurrency, types: Object.keys(handlers) },
-    `Worker started (concurrency=${concurrency}, types=${Object.keys(handlers).join(",")})`
+    `Worker started (concurrency=${concurrency}, types=${Object.keys(handlers).join(",")})`,
   );
 }
 

@@ -1,15 +1,15 @@
 import type pg from "pg";
 import { findGroupByName } from "../db/repositories/groups.js";
-import { getWatermark } from "../db/repositories/read-watermarks.js";
 import type { Cursor } from "../db/repositories/read-watermarks.js";
+import { getWatermark } from "../db/repositories/read-watermarks.js";
 import { getLatestCatchupSummary } from "../db/repositories/summaries.js";
-import {
-  selectAfterCursor,
-  firstPendingVoiceNoteAfter,
-  firstPendingVisualMediaAfter,
-  type SelectedMessageWithCursor,
-} from "./select.js";
 import { buildPrompt, estimateTokens } from "./prompt.js";
+import {
+  firstPendingVisualMediaAfter,
+  firstPendingVoiceNoteAfter,
+  type SelectedMessageWithCursor,
+  selectAfterCursor,
+} from "./select.js";
 import type { SummaryPrompt } from "./summarizer.js";
 
 export type { Cursor };
@@ -45,7 +45,7 @@ export async function prepareCatchup(
   client: pg.Pool | pg.PoolClient,
   groupName: string,
   fallbackN: number = 25,
-  tokenBudget: number
+  tokenBudget: number,
 ): Promise<PreparedCatchup> {
   // 1. Resolve group
   const group = await findGroupByName(client, groupName);
@@ -91,7 +91,7 @@ export async function prepareCatchup(
       range = all.filter(
         (m) =>
           m.sentAt < barrier!.sentAt ||
-          (m.sentAt.getTime() === barrier!.sentAt.getTime() && m.messageId < barrier!.messageId)
+          (m.sentAt.getTime() === barrier!.sentAt.getTime() && m.messageId < barrier!.messageId),
       );
     } else {
       range = all;
@@ -122,7 +122,7 @@ export async function prepareCatchup(
   const tokens = estimateTokens(prompt.system + prompt.user);
   if (tokens > tokenBudget) {
     throw new Error(
-      `Selection too large (~${tokens} tokens > budget ${tokenBudget}); narrow it with a smaller --last or a more recent --since.`
+      `Selection too large (~${tokens} tokens > budget ${tokenBudget}); narrow it with a smaller --last or a more recent --since.`,
     );
   }
 

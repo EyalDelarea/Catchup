@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import * as amqplib from "amqplib";
 import type { JobBus } from "./job-bus.js";
-import type { Job, JobPayloads, JobType, ConsumeOptions } from "./job-types.js";
 import type { JobRunRecorder } from "./job-run-recorder.js";
+import type { ConsumeOptions, Job, JobPayloads, JobType } from "./job-types.js";
 
 const DEFAULT_MAX_ATTEMPTS = 3;
 const RECONNECT_DELAY_MS = 2_000;
@@ -139,7 +139,7 @@ export class RabbitMqJobBus implements JobBus {
   async enqueue<T extends JobType>(
     type: T,
     payload: JobPayloads[T],
-    opts?: { maxAttempts?: number }
+    opts?: { maxAttempts?: number },
   ): Promise<{ id: string }> {
     const ch = await this.connect();
     const maxAttempts = opts?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
@@ -162,7 +162,7 @@ export class RabbitMqJobBus implements JobBus {
   async consume<T extends JobType>(
     type: T,
     handler: (job: Job<T>) => Promise<void>,
-    opts: ConsumeOptions
+    opts: ConsumeOptions,
   ): Promise<void> {
     const ch = await this.connect();
     await this.assertTopology(ch, type);

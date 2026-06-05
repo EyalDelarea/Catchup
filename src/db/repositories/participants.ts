@@ -6,7 +6,7 @@ import type pg from "pg";
  */
 export async function upsertParticipant(
   client: pg.Pool | pg.PoolClient,
-  displayName: string
+  displayName: string,
 ): Promise<number> {
   const result = await client.query<{ id: string }>(
     `
@@ -15,7 +15,7 @@ export async function upsertParticipant(
     ON CONFLICT (display_name) DO UPDATE SET display_name = EXCLUDED.display_name
     RETURNING id
     `,
-    [displayName]
+    [displayName],
   );
 
   const row = result.rows[0];
@@ -31,13 +31,13 @@ export async function upsertParticipant(
  */
 export async function upsertParticipants(
   client: pg.Pool | pg.PoolClient,
-  displayNames: string[]
+  displayNames: string[],
 ): Promise<Map<string, number>> {
   const entries = await Promise.all(
     displayNames.map(async (name) => {
       const id = await upsertParticipant(client, name);
       return [name, id] as [string, number];
-    })
+    }),
   );
   return new Map(entries);
 }

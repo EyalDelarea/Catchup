@@ -92,9 +92,7 @@ export function mapWaMessage(waMessage: WAMessage): MappedMessage | null {
 
   // Resolve sender name: pushName > key.participant > fallback
   const senderName: string =
-    (waMessage.pushName as string | undefined) ??
-    key.participant ??
-    remoteJid;
+    (waMessage.pushName as string | undefined) ?? key.participant ?? remoteJid;
 
   // Resolve timestamp
   const sentAt = new Date(timestampToMs(waMessage.messageTimestamp));
@@ -200,9 +198,7 @@ function resolveContent(msg: NonNullable<WAMessage["message"]>): ContentResult |
     const caption = msg.videoMessage.caption ?? null;
     // Extract embedded thumbnail bytes (Uint8Array → Buffer)
     const thumbBytes = (msg.videoMessage as { jpegThumbnail?: Uint8Array | null }).jpegThumbnail;
-    const jpegThumbnail = thumbBytes && thumbBytes.length > 0
-      ? Buffer.from(thumbBytes)
-      : null;
+    const jpegThumbnail = thumbBytes && thumbBytes.length > 0 ? Buffer.from(thumbBytes) : null;
     return {
       messageType: "media",
       textContent: caption || null,

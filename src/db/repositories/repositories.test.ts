@@ -1,17 +1,14 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runMigrationsUp } from "../migrate.js";
-import { upsertGroup, listGroups } from "./groups.js";
-import { upsertParticipant, upsertParticipants } from "./participants.js";
-import { insertMessages } from "./messages.js";
-import { createImport, markImportCompleted, markImportFailed } from "./imports.js";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { NormalizedMessage } from "../../importer/types.js";
+import { runMigrationsUp } from "../migrate.js";
+import { listGroups, upsertGroup } from "./groups.js";
+import { createImport, markImportCompleted, markImportFailed } from "./imports.js";
+import { insertMessages } from "./messages.js";
+import { upsertParticipant, upsertParticipants } from "./participants.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "..", "migrations");
@@ -154,10 +151,9 @@ describe("repositories integration", () => {
       const id2 = await upsertGroup(pool, { name: "Idempotent Group", source: "import" });
       expect(id1).toBe(id2);
 
-      const { rows } = await pool.query(
-        `SELECT COUNT(*) AS cnt FROM groups WHERE name = $1`,
-        ["Idempotent Group"]
-      );
+      const { rows } = await pool.query(`SELECT COUNT(*) AS cnt FROM groups WHERE name = $1`, [
+        "Idempotent Group",
+      ]);
       expect(Number(rows[0].cnt)).toBe(1);
     });
   });
@@ -180,7 +176,7 @@ describe("repositories integration", () => {
 
       const { rows } = await pool.query(
         `SELECT COUNT(*) AS cnt FROM participants WHERE display_name = $1`,
-        ["Charlie"]
+        ["Charlie"],
       );
       expect(Number(rows[0].cnt)).toBe(1);
     });
@@ -221,10 +217,7 @@ describe("repositories integration", () => {
       expect(typeof importId).toBe("number");
       expect(importId).toBeGreaterThan(0);
 
-      const { rows } = await pool.query(
-        `SELECT status FROM imports WHERE id = $1`,
-        [importId]
-      );
+      const { rows } = await pool.query(`SELECT status FROM imports WHERE id = $1`, [importId]);
       expect(rows[0].status).toBe("pending");
     });
 
@@ -238,10 +231,7 @@ describe("repositories integration", () => {
         status: "pending",
       });
       await markImportCompleted(pool, importId);
-      const { rows } = await pool.query(
-        `SELECT status FROM imports WHERE id = $1`,
-        [importId]
-      );
+      const { rows } = await pool.query(`SELECT status FROM imports WHERE id = $1`, [importId]);
       expect(rows[0].status).toBe("completed");
     });
 
@@ -255,10 +245,9 @@ describe("repositories integration", () => {
         status: "pending",
       });
       await markImportFailed(pool, importId, "Something went wrong");
-      const { rows } = await pool.query(
-        `SELECT status, error_message FROM imports WHERE id = $1`,
-        [importId]
-      );
+      const { rows } = await pool.query(`SELECT status, error_message FROM imports WHERE id = $1`, [
+        importId,
+      ]);
       expect(rows[0].status).toBe("failed");
       expect(rows[0].error_message).toBe("Something went wrong");
     });

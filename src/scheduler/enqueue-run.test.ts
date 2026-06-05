@@ -10,19 +10,17 @@
  * 3. opts.all=true forces enqueue for all groups regardless of changes.
  * 4. A single failing group does not abort the batch (other groups still enqueued).
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
+
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroup } from "../db/repositories/groups.js";
 import { insertMessages } from "../db/repositories/messages.js";
-import { upsertWatermark } from "../db/repositories/read-watermarks.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
+import { upsertWatermark } from "../db/repositories/read-watermarks.js";
 import type { JobBus } from "../jobs/job-bus.js";
 import type { JobPayloads, JobType } from "../jobs/job-types.js";
 import { enqueueScheduledRun } from "./enqueue-run.js";
@@ -42,8 +40,12 @@ function makeFakeBus(): JobBus & { calls: EnqueueCall[]; failForGroupId?: string
 
   const bus: JobBus & { calls: EnqueueCall[]; failForGroupId?: string } = {
     calls,
-    get failForGroupId() { return failForGroupId; },
-    set failForGroupId(v) { failForGroupId = v; },
+    get failForGroupId() {
+      return failForGroupId;
+    },
+    set failForGroupId(v) {
+      failForGroupId = v;
+    },
     enqueue: vi.fn(async <T extends JobType>(type: T, payload: JobPayloads[T]) => {
       if (
         type === "summarize.group" &&
@@ -75,7 +77,7 @@ async function seedMessage(
   pool: pg.Pool,
   groupId: number,
   dedupeKey: string,
-  sentAt: Date
+  sentAt: Date,
 ): Promise<number> {
   const participantId = await upsertParticipant(pool, "Tester");
   await insertMessages(pool, [
@@ -97,7 +99,7 @@ async function seedMessage(
   ]);
   const { rows } = await pool.query<{ id: string }>(
     `SELECT id FROM messages WHERE dedupe_key = $1`,
-    [dedupeKey]
+    [dedupeKey],
   );
   return Number(rows[0]!.id);
 }
@@ -165,9 +167,11 @@ describe("enqueueScheduledRun", () => {
     const result = await enqueueScheduledRun(pool, bus);
 
     // Group C should not be enqueued (watermark covers it)
-    const newCalls = bus.calls.slice(before).filter(
-      (c) => c.type === "summarize.group" && String(c.payload["groupId"]) === String(groupCId)
-    );
+    const newCalls = bus.calls
+      .slice(before)
+      .filter(
+        (c) => c.type === "summarize.group" && String(c.payload["groupId"]) === String(groupCId),
+      );
     expect(newCalls).toHaveLength(0);
     // skipped >= 1 because at least group C was skipped
     expect(result.skipped).toBeGreaterThanOrEqual(1);
@@ -213,7 +217,7 @@ describe("enqueueScheduledRun", () => {
 
     // Group F should still have been enqueued
     const fEnqueued = bus.calls.some(
-      (c) => c.type === "summarize.group" && String(c.payload["groupId"]) === String(groupFId)
+      (c) => c.type === "summarize.group" && String(c.payload["groupId"]) === String(groupFId),
     );
     expect(fEnqueued).toBe(true);
 

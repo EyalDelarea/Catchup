@@ -14,7 +14,7 @@ export type Watermark = {
  */
 export async function getWatermark(
   client: pg.Pool | pg.PoolClient,
-  groupId: number
+  groupId: number,
 ): Promise<Watermark | null> {
   const { rows } = await client.query<{
     group_id: string;
@@ -27,7 +27,7 @@ export async function getWatermark(
     FROM read_watermarks
     WHERE group_id = $1
     `,
-    [groupId]
+    [groupId],
   );
 
   if (rows.length === 0) return null;
@@ -56,7 +56,7 @@ export async function getWatermark(
 export async function upsertWatermark(
   client: pg.Pool | pg.PoolClient,
   groupId: number,
-  cursor: Cursor
+  cursor: Cursor,
 ): Promise<void> {
   await client.query(
     `
@@ -73,6 +73,6 @@ export async function upsertWatermark(
           AND EXCLUDED.watermark_message_id > read_watermarks.watermark_message_id
         )
     `,
-    [groupId, cursor.sentAt, cursor.messageId]
+    [groupId, cursor.sentAt, cursor.messageId],
   );
 }

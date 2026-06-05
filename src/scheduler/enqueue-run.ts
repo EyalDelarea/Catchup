@@ -52,7 +52,7 @@ async function hasNewMessages(pool: pg.Pool, groupId: number): Promise<boolean> 
       )
     LIMIT 1
     `,
-    [groupId]
+    [groupId],
   );
   return rows.length > 0;
 }
@@ -67,20 +67,18 @@ async function hasNewMessages(pool: pg.Pool, groupId: number): Promise<boolean> 
 export async function enqueueScheduledRun(
   pool: pg.Pool,
   bus: JobBus,
-  opts?: EnqueueScheduledRunOpts
+  opts?: EnqueueScheduledRunOpts,
 ): Promise<EnqueueScheduledRunResult> {
   let enqueued = 0;
   let skipped = 0;
 
   try {
-    const { rows } = await pool.query<{ id: string }>(
-      `SELECT id FROM groups ORDER BY id ASC`
-    );
+    const { rows } = await pool.query<{ id: string }>(`SELECT id FROM groups ORDER BY id ASC`);
 
     for (const row of rows) {
       const groupId = Number(row.id);
       try {
-        const changed = opts?.all === true || await hasNewMessages(pool, groupId);
+        const changed = opts?.all === true || (await hasNewMessages(pool, groupId));
         if (!changed) {
           skipped++;
           continue;
@@ -91,9 +89,7 @@ export async function enqueueScheduledRun(
       } catch (err) {
         // Per-group error: log and continue the batch
         const msg = err instanceof Error ? err.message : String(err);
-        process.stderr.write(
-          `[enqueueScheduledRun] group ${groupId} failed, skipping: ${msg}\n`
-        );
+        process.stderr.write(`[enqueueScheduledRun] group ${groupId} failed, skipping: ${msg}\n`);
         // Count as skipped so the caller knows something happened
         skipped++;
       }

@@ -16,12 +16,5 @@ export interface Transcriber {
 
 /** ffmpeg args to convert any audio file to a 16 kHz mono WAV (overwrites output). */
 export function buildFfmpegArgs(inputPath: string, outputPath: string): string[] {
-  return [
-    "-i", inputPath,
-    "-ar", "16000",
-    "-ac", "1",
-    "-f", "wav",
-    "-y",
-    outputPath,
-  ];
+  return ["-i", inputPath, "-ar", "16000", "-ac", "1", "-f", "wav", "-y", outputPath];
 }

@@ -1,22 +1,19 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { NormalizedMessage } from "../../importer/types.js";
 import { runMigrationsUp } from "../migrate.js";
 import { upsertGroup } from "./groups.js";
-import { insertMessages } from "./messages.js";
-import type { NormalizedMessage } from "../../importer/types.js";
 import {
-  insertMediaAnalysis,
-  hasAnalysis,
   getVisualMediaPath,
+  hasAnalysis,
+  insertMediaAnalysis,
   selectPendingVisualMedia,
   selectVisualMediaNeedingAnalysis,
 } from "./media-analyses.js";
+import { insertMessages } from "./messages.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "..", "migrations");
@@ -38,7 +35,7 @@ describe("media-analyses", () => {
 
   async function seedMediaMessage(
     groupId: number,
-    overrides: Partial<NormalizedMessage> = {}
+    overrides: Partial<NormalizedMessage> = {},
   ): Promise<number> {
     const row: NormalizedMessage & { participantId: number | null } = {
       groupId,
@@ -59,7 +56,7 @@ describe("media-analyses", () => {
     await insertMessages(pool, [row]);
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM messages WHERE dedupe_key = $1`,
-      [row.dedupeKey]
+      [row.dedupeKey],
     );
     return Number(rows[0].id);
   }
@@ -72,15 +69,15 @@ describe("media-analyses", () => {
       await pool.query(
         `INSERT INTO media_analyses (message_id, kind, description, engine, status)
          VALUES ($1, 'image', 'a cat', 'test-engine', 'completed')`,
-        [messageId]
+        [messageId],
       );
 
       await expect(
         pool.query(
           `INSERT INTO media_analyses (message_id, kind, description, engine, status)
            VALUES ($1, 'image', 'a dog', 'test-engine', 'completed')`,
-          [messageId]
-        )
+          [messageId],
+        ),
       ).rejects.toMatchObject({ code: "23505" });
     });
 
@@ -92,8 +89,8 @@ describe("media-analyses", () => {
         pool.query(
           `INSERT INTO media_analyses (message_id, kind, description, engine, status, error_message)
            VALUES ($1, 'image', NULL, 'test-engine', 'failed', 'model timeout')`,
-          [messageId]
-        )
+          [messageId],
+        ),
       ).resolves.toBeDefined();
     });
 
@@ -105,8 +102,8 @@ describe("media-analyses", () => {
         pool.query(
           `INSERT INTO media_analyses (message_id, kind, description, engine, status)
            VALUES ($1, 'image', NULL, 'test-engine', 'completed')`,
-          [messageId]
-        )
+          [messageId],
+        ),
       ).rejects.toMatchObject({ code: "23514" });
     });
 
@@ -118,8 +115,8 @@ describe("media-analyses", () => {
         pool.query(
           `INSERT INTO media_analyses (message_id, kind, description, engine, status)
            VALUES ($1, 'audio', 'something', 'test-engine', 'completed')`,
-          [messageId]
-        )
+          [messageId],
+        ),
       ).rejects.toMatchObject({ code: "23514" });
     });
 
@@ -131,8 +128,8 @@ describe("media-analyses", () => {
         pool.query(
           `INSERT INTO media_analyses (message_id, kind, description, engine, status)
            VALUES ($1, 'image', 'something', 'test-engine', 'pending')`,
-          [messageId]
-        )
+          [messageId],
+        ),
       ).rejects.toMatchObject({ code: "23514" });
     });
   });
@@ -152,7 +149,7 @@ describe("media-analyses", () => {
 
       const { rows } = await pool.query(
         `SELECT kind, description, engine, status FROM media_analyses WHERE message_id = $1`,
-        [messageId]
+        [messageId],
       );
       expect(rows).toHaveLength(1);
       expect(rows[0].kind).toBe("image");
@@ -180,7 +177,7 @@ describe("media-analyses", () => {
 
       const { rows } = await pool.query(
         `SELECT kind, description, status, error_message FROM media_analyses WHERE message_id = $1`,
-        [messageId]
+        [messageId],
       );
       expect(rows).toHaveLength(1);
       expect(rows[0].kind).toBe("video");
@@ -214,7 +211,7 @@ describe("media-analyses", () => {
 
       const { rows } = await pool.query(
         `SELECT description, status, error_message FROM media_analyses WHERE message_id = $1`,
-        [messageId]
+        [messageId],
       );
       expect(rows).toHaveLength(1);
       expect(rows[0].status).toBe("completed");

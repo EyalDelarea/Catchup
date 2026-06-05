@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { kindFromFilename, isSticker } from "./media-kind.js";
+import { describe, expect, it } from "vitest";
+import { isSticker, kindFromFilename } from "./media-kind.js";
 
 describe("kindFromFilename", () => {
   it("returns 'image' for .jpg", () => {

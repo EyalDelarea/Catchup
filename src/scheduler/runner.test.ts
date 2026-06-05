@@ -10,8 +10,9 @@
  * 4. Scheduled timer fires → enqueueScheduledRun called + recordRun called + reschedule.
  * 5. stop() clears the pending timer (no further fires).
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+
 import type pg from "pg";
+import { describe, expect, it, vi } from "vitest";
 import type { JobBus } from "../jobs/job-bus.js";
 import { startScheduler } from "./runner.js";
 import type { TimeSlot } from "./schedule.js";
@@ -65,15 +66,20 @@ function makeFakeTimer(): {
     },
     lastMs: () => lastMs,
     callCount: () => callCount,
-    get clearHandle() { return handle; },
+    get clearHandle() {
+      return handle;
+    },
   };
 }
 
-const TIMES: TimeSlot[] = [{ h: 8, m: 0 }, { h: 18, m: 0 }];
+const TIMES: TimeSlot[] = [
+  { h: 8, m: 0 },
+  { h: 18, m: 0 },
+];
 
 // Fixed "now" for tests: 09:00 on 2026-06-04 (one slot already passed today: 08:00)
 const NOW_AFTER_FIRST_SLOT = new Date(2026, 5, 4, 9, 0, 0); // 09:00
-const NOW_BEFORE_ALL_SLOTS = new Date(2026, 5, 4, 7, 0, 0);  // 07:00
+const NOW_BEFORE_ALL_SLOTS = new Date(2026, 5, 4, 7, 0, 0); // 07:00
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -238,7 +244,9 @@ describe("startScheduler — scheduled timer fire", () => {
 
     // enqueueRun and recordRun should have been called
     await vi.waitFor(() => expect(enqueue).toHaveBeenCalled(), { timeout: 2000 });
-    await vi.waitFor(() => expect(timer.callCount()).toBeGreaterThan(countBefore), { timeout: 2000 });
+    await vi.waitFor(() => expect(timer.callCount()).toBeGreaterThan(countBefore), {
+      timeout: 2000,
+    });
 
     expect(enqueue).toHaveBeenCalled();
     expect(recordRun).toHaveBeenCalled();

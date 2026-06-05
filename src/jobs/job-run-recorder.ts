@@ -1,10 +1,7 @@
 import type pg from "pg";
-import type { Job, JobType } from "./job-types.js";
 import type { JobStatus } from "../db/repositories/job-runs.js";
-import {
-  upsertJobRun,
-  setJobStatus,
-} from "../db/repositories/job-runs.js";
+import { setJobStatus, upsertJobRun } from "../db/repositories/job-runs.js";
+import type { Job, JobType } from "./job-types.js";
 
 /** Seam: records job lifecycle events; decouples the bus from the database. */
 export interface JobRunRecorder {
@@ -27,11 +24,7 @@ export class PostgresJobRunRecorder implements JobRunRecorder {
     });
   }
 
-  async recordStatus(
-    id: string,
-    status: JobStatus,
-    lastError?: string
-  ): Promise<void> {
+  async recordStatus(id: string, status: JobStatus, lastError?: string): Promise<void> {
     await setJobStatus(this.client, id, status, lastError);
   }
 }
@@ -52,11 +45,7 @@ export class InMemoryJobRunRecorder implements JobRunRecorder {
     this._statusHistory.push({ id: job.id, status: "pending" });
   }
 
-  async recordStatus(
-    id: string,
-    status: JobStatus,
-    lastError?: string
-  ): Promise<void> {
+  async recordStatus(id: string, status: JobStatus, lastError?: string): Promise<void> {
     this._statusHistory.push({ id, status, lastError });
   }
 

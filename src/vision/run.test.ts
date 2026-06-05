@@ -6,9 +6,9 @@
  * T019 tests cover the video branch (kind='video').
  * Prune tests cover the prune-after-caption feature.
  */
-import { describe, it, expect, vi } from "vitest";
-import { analyzeMediaOne } from "./run.js";
+import { describe, expect, it, vi } from "vitest";
 import type { InsertMediaAnalysisInput } from "../db/repositories/media-analyses.js";
+import { analyzeMediaOne } from "./run.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -16,42 +16,51 @@ import type { InsertMediaAnalysisInput } from "../db/repositories/media-analyses
 
 type CallRecord = InsertMediaAnalysisInput;
 
-function makeMinimalDeps(overrides: Partial<{
-  getVisualMediaPath: () => Promise<{ path: string; kind: "image" | "video" } | null>;
-  visionAnalyzer: {
-    describeImage: (p: string) => Promise<{ description: string; engine: string }>;
-    describeImages: (paths: string[]) => Promise<{ description: string; engine: string }>;
-  };
-  normalizeImage: (p: string) => Promise<string>;
-  insertMediaAnalysis: (input: InsertMediaAnalysisInput) => Promise<void>;
-  engineLabel: string;
-  // video-specific deps
-  analyzeVideo: (input: { mediaPath: string | null; thumbnailPath: string | null }) => Promise<{ description: string; engine: string }>;
-  getThumbnailPath: (messageId: number) => Promise<string | null>;
-  // prune deps
-  retainMedia: boolean;
-  pruneMediaFile: (messageId: number) => Promise<void>;
-}> = {}) {
+function makeMinimalDeps(
+  overrides: Partial<{
+    getVisualMediaPath: () => Promise<{ path: string; kind: "image" | "video" } | null>;
+    visionAnalyzer: {
+      describeImage: (p: string) => Promise<{ description: string; engine: string }>;
+      describeImages: (paths: string[]) => Promise<{ description: string; engine: string }>;
+    };
+    normalizeImage: (p: string) => Promise<string>;
+    insertMediaAnalysis: (input: InsertMediaAnalysisInput) => Promise<void>;
+    engineLabel: string;
+    // video-specific deps
+    analyzeVideo: (input: {
+      mediaPath: string | null;
+      thumbnailPath: string | null;
+    }) => Promise<{ description: string; engine: string }>;
+    getThumbnailPath: (messageId: number) => Promise<string | null>;
+    // prune deps
+    retainMedia: boolean;
+    pruneMediaFile: (messageId: number) => Promise<void>;
+  }> = {},
+) {
   const insertCalls: CallRecord[] = [];
   return {
     pool: {} as never, // not used directly — all DB calls are injected
-    getVisualMediaPath: overrides.getVisualMediaPath
-      ?? vi.fn().mockResolvedValue({ path: "/media/img001.jpg", kind: "image" }),
-    visionAnalyzer: overrides.visionAnalyzer
-      ?? {
-        describeImage: vi.fn().mockResolvedValue({ description: "תמונה", engine: "llama3.2-vision" }),
-        describeImages: vi.fn().mockResolvedValue({ description: "תמונה", engine: "llama3.2-vision" }),
-      },
-    normalizeImage: overrides.normalizeImage
-      ?? vi.fn().mockImplementation(async (p: string) => p), // identity: return same path
-    insertMediaAnalysis: overrides.insertMediaAnalysis
-      ?? vi.fn().mockImplementation(async (input: InsertMediaAnalysisInput) => { insertCalls.push(input); }),
+    getVisualMediaPath:
+      overrides.getVisualMediaPath ??
+      vi.fn().mockResolvedValue({ path: "/media/img001.jpg", kind: "image" }),
+    visionAnalyzer: overrides.visionAnalyzer ?? {
+      describeImage: vi.fn().mockResolvedValue({ description: "תמונה", engine: "llama3.2-vision" }),
+      describeImages: vi
+        .fn()
+        .mockResolvedValue({ description: "תמונה", engine: "llama3.2-vision" }),
+    },
+    normalizeImage: overrides.normalizeImage ?? vi.fn().mockImplementation(async (p: string) => p), // identity: return same path
+    insertMediaAnalysis:
+      overrides.insertMediaAnalysis ??
+      vi.fn().mockImplementation(async (input: InsertMediaAnalysisInput) => {
+        insertCalls.push(input);
+      }),
     engineLabel: overrides.engineLabel ?? "llama3.2-vision",
     // video
-    analyzeVideo: overrides.analyzeVideo
-      ?? vi.fn().mockResolvedValue({ description: "וידאו: תיאור", engine: "llama3.2-vision+whisper" }),
-    getThumbnailPath: overrides.getThumbnailPath
-      ?? vi.fn().mockResolvedValue(null),
+    analyzeVideo:
+      overrides.analyzeVideo ??
+      vi.fn().mockResolvedValue({ description: "וידאו: תיאור", engine: "llama3.2-vision+whisper" }),
+    getThumbnailPath: overrides.getThumbnailPath ?? vi.fn().mockResolvedValue(null),
     // prune
     retainMedia: overrides.retainMedia ?? false,
     pruneMediaFile: overrides.pruneMediaFile ?? vi.fn().mockResolvedValue(undefined),
@@ -88,7 +97,9 @@ describe("analyzeMediaOne", () => {
   it("inserts a 'completed' analysis row on success", async () => {
     const insertCalls: CallRecord[] = [];
     const deps = makeMinimalDeps({
-      insertMediaAnalysis: vi.fn().mockImplementation(async (input: CallRecord) => { insertCalls.push(input); }),
+      insertMediaAnalysis: vi.fn().mockImplementation(async (input: CallRecord) => {
+        insertCalls.push(input);
+      }),
     });
     await analyzeMediaOne(42, "image", deps);
     expect(insertCalls).toHaveLength(1);
@@ -108,7 +119,9 @@ describe("analyzeMediaOne", () => {
         describeImage: vi.fn().mockRejectedValue(boom),
         describeImages: vi.fn().mockRejectedValue(boom),
       },
-      insertMediaAnalysis: vi.fn().mockImplementation(async (input: CallRecord) => { insertCalls.push(input); }),
+      insertMediaAnalysis: vi.fn().mockImplementation(async (input: CallRecord) => {
+        insertCalls.push(input);
+      }),
     });
     await expect(analyzeMediaOne(42, "image", deps)).rejects.toThrow("vision engine crashed");
     expect(insertCalls).toHaveLength(1);
@@ -124,7 +137,9 @@ describe("analyzeMediaOne", () => {
     const insertCalls: CallRecord[] = [];
     const deps = makeMinimalDeps({
       getVisualMediaPath: vi.fn().mockResolvedValue(null),
-      insertMediaAnalysis: vi.fn().mockImplementation(async (input: CallRecord) => { insertCalls.push(input); }),
+      insertMediaAnalysis: vi.fn().mockImplementation(async (input: CallRecord) => {
+        insertCalls.push(input);
+      }),
     });
     await expect(analyzeMediaOne(42, "image", deps)).rejects.toThrow();
     expect(insertCalls).toHaveLength(1);
@@ -136,7 +151,9 @@ describe("analyzeMediaOne", () => {
   // ---------------------------------------------------------------------------
 
   it("T019: video — calls getVisualMediaPath to resolve the mediaPath", async () => {
-    const getVisualMediaPath = vi.fn().mockResolvedValue({ path: "/media/vid001.mp4", kind: "video" });
+    const getVisualMediaPath = vi
+      .fn()
+      .mockResolvedValue({ path: "/media/vid001.mp4", kind: "video" });
     const deps = makeMinimalDeps({ getVisualMediaPath });
     await analyzeMediaOne(42, "video", deps);
     expect(getVisualMediaPath).toHaveBeenCalledWith(42);
@@ -146,8 +163,13 @@ describe("analyzeMediaOne", () => {
     const insertCalls: CallRecord[] = [];
     const deps = makeMinimalDeps({
       getVisualMediaPath: vi.fn().mockResolvedValue({ path: "/media/vid001.mp4", kind: "video" }),
-      analyzeVideo: vi.fn().mockResolvedValue({ description: "וידאו: חתול · דיבור: שלום", engine: "llama3.2-vision+whisper" }),
-      insertMediaAnalysis: vi.fn().mockImplementation(async (input: CallRecord) => { insertCalls.push(input); }),
+      analyzeVideo: vi.fn().mockResolvedValue({
+        description: "וידאו: חתול · דיבור: שלום",
+        engine: "llama3.2-vision+whisper",
+      }),
+      insertMediaAnalysis: vi.fn().mockImplementation(async (input: CallRecord) => {
+        insertCalls.push(input);
+      }),
     });
     await analyzeMediaOne(42, "video", deps);
     expect(insertCalls).toHaveLength(1);
@@ -166,7 +188,9 @@ describe("analyzeMediaOne", () => {
     const deps = makeMinimalDeps({
       getVisualMediaPath: vi.fn().mockResolvedValue({ path: "/media/vid001.mp4", kind: "video" }),
       analyzeVideo: vi.fn().mockRejectedValue(boom),
-      insertMediaAnalysis: vi.fn().mockImplementation(async (input: CallRecord) => { insertCalls.push(input); }),
+      insertMediaAnalysis: vi.fn().mockImplementation(async (input: CallRecord) => {
+        insertCalls.push(input);
+      }),
     });
     await expect(analyzeMediaOne(42, "video", deps)).rejects.toThrow("video analysis crashed");
     expect(insertCalls).toHaveLength(1);
@@ -179,7 +203,9 @@ describe("analyzeMediaOne", () => {
   });
 
   it("T019: video — passes mediaPath and thumbnailPath to analyzeVideo", async () => {
-    const analyzeVideo = vi.fn().mockResolvedValue({ description: "וידאו: X", engine: "fake+none" });
+    const analyzeVideo = vi
+      .fn()
+      .mockResolvedValue({ description: "וידאו: X", engine: "fake+none" });
     const getThumbnailPath = vi.fn().mockResolvedValue("/media/thumb001.jpg");
     const deps = makeMinimalDeps({
       getVisualMediaPath: vi.fn().mockResolvedValue({ path: "/media/vid001.mp4", kind: "video" }),
@@ -189,12 +215,17 @@ describe("analyzeMediaOne", () => {
     await analyzeMediaOne(42, "video", deps);
     expect(getThumbnailPath).toHaveBeenCalledWith(42);
     expect(analyzeVideo).toHaveBeenCalledWith(
-      expect.objectContaining({ mediaPath: "/media/vid001.mp4", thumbnailPath: "/media/thumb001.jpg" })
+      expect.objectContaining({
+        mediaPath: "/media/vid001.mp4",
+        thumbnailPath: "/media/thumb001.jpg",
+      }),
     );
   });
 
   it("T019: video — passes null thumbnailPath when getThumbnailPath returns null", async () => {
-    const analyzeVideo = vi.fn().mockResolvedValue({ description: "וידאו: X", engine: "fake+none" });
+    const analyzeVideo = vi
+      .fn()
+      .mockResolvedValue({ description: "וידאו: X", engine: "fake+none" });
     const deps = makeMinimalDeps({
       getVisualMediaPath: vi.fn().mockResolvedValue({ path: "/media/vid001.mp4", kind: "video" }),
       analyzeVideo,
@@ -202,7 +233,7 @@ describe("analyzeMediaOne", () => {
     });
     await analyzeMediaOne(42, "video", deps);
     expect(analyzeVideo).toHaveBeenCalledWith(
-      expect.objectContaining({ mediaPath: "/media/vid001.mp4", thumbnailPath: null })
+      expect.objectContaining({ mediaPath: "/media/vid001.mp4", thumbnailPath: null }),
     );
   });
 
@@ -210,7 +241,9 @@ describe("analyzeMediaOne", () => {
     const insertCalls: CallRecord[] = [];
     const deps = makeMinimalDeps({
       getVisualMediaPath: vi.fn().mockResolvedValue(null),
-      insertMediaAnalysis: vi.fn().mockImplementation(async (input: CallRecord) => { insertCalls.push(input); }),
+      insertMediaAnalysis: vi.fn().mockImplementation(async (input: CallRecord) => {
+        insertCalls.push(input);
+      }),
     });
     await expect(analyzeMediaOne(42, "video", deps)).rejects.toThrow();
     expect(insertCalls).toHaveLength(1);

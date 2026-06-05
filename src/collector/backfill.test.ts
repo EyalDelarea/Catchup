@@ -9,20 +9,18 @@
  * - Seed an anchor message by calling handleIncomingMessage with one real WAMessage
  *   so getNewestAnchor returns non-null.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
-import path from "node:path";
+
 import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runMigrationsUp } from "../db/migrate.js";
-import { handleIncomingMessage } from "./collector.js";
-import { backfillGroup } from "./backfill.js";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { WAMessage } from "@whiskeysockets/baileys";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroupByWhatsappId } from "../db/repositories/groups.js";
+import { backfillGroup } from "./backfill.js";
+import { handleIncomingMessage } from "./collector.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
@@ -31,15 +29,17 @@ const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
 // Fake Baileys message factories (inline copy — keep in sync with collector.test.ts)
 // ---------------------------------------------------------------------------
 
-function makeFakeWATextMessage(overrides: Partial<{
-  id: string;
-  remoteJid: string;
-  fromMe: boolean;
-  participant: string;
-  pushName: string;
-  timestampSeconds: number;
-  text: string;
-}> = {}): WAMessage {
+function makeFakeWATextMessage(
+  overrides: Partial<{
+    id: string;
+    remoteJid: string;
+    fromMe: boolean;
+    participant: string;
+    pushName: string;
+    timestampSeconds: number;
+    text: string;
+  }> = {},
+): WAMessage {
   const {
     id = "BF_TEXT_001",
     remoteJid = "backfill-group@g.us",
@@ -66,7 +66,7 @@ function makeBatch(
   count: number,
   remoteJid: string,
   baseTimestampSeconds: number,
-  idPrefix: string
+  idPrefix: string,
 ): WAMessage[] {
   return Array.from({ length: count }, (_, i) =>
     makeFakeWATextMessage({
@@ -74,7 +74,7 @@ function makeBatch(
       remoteJid,
       timestampSeconds: baseTimestampSeconds - i * 10, // progressively older
       text: `Backfill message ${idPrefix}-${i}`,
-    })
+    }),
   );
 }
 
@@ -118,14 +118,14 @@ describe("backfillGroup integration", () => {
           timestampSeconds: 1700100000 + i,
           text: `Satisfied msg ${i}`,
         }),
-        { dataDir }
+        { dataDir },
       );
     }
 
     // Get groupId via query
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM groups WHERE whatsapp_id = $1`,
-      [remoteJid]
+      [remoteJid],
     );
     const groupId = Number(rows[0]!.id);
 
@@ -199,12 +199,12 @@ describe("backfillGroup integration", () => {
         timestampSeconds: anchorTs,
         text: "Anchor message",
       }),
-      { dataDir }
+      { dataDir },
     );
 
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM groups WHERE whatsapp_id = $1`,
-      [remoteJid]
+      [remoteJid],
     );
     const groupId = Number(rows[0]!.id);
 
@@ -216,17 +216,22 @@ describe("backfillGroup integration", () => {
     const oldestBatch1Ts = anchorTs - 100 - (batch1.length - 1) * 10;
     const batch2 = makeBatch(2, remoteJid, oldestBatch1Ts - 100, "PAGI-B2");
 
-    const capturedFetchCalls: Array<{ anchor: { remoteJid: string; id: string; fromMe: boolean }; anchorTsMs: number }> = [];
+    const capturedFetchCalls: Array<{
+      anchor: { remoteJid: string; id: string; fromMe: boolean };
+      anchorTsMs: number;
+    }> = [];
     let callCount = 0;
 
-    const fetchHistory = vi.fn(async (
-      _count: number,
-      anchor: { remoteJid: string; id: string; fromMe: boolean },
-      anchorTsMs: number
-    ) => {
-      capturedFetchCalls.push({ anchor, anchorTsMs });
-      return "req-id";
-    });
+    const fetchHistory = vi.fn(
+      async (
+        _count: number,
+        anchor: { remoteJid: string; id: string; fromMe: boolean },
+        anchorTsMs: number,
+      ) => {
+        capturedFetchCalls.push({ anchor, anchorTsMs });
+        return "req-id";
+      },
+    );
 
     const awaitHistory = vi.fn(async () => {
       callCount++;
@@ -266,7 +271,7 @@ describe("backfillGroup integration", () => {
     // Verify messages actually in DB
     const { rows: msgRows } = await pool.query(
       `SELECT external_id FROM messages WHERE group_id = $1 ORDER BY sent_at DESC`,
-      [groupId]
+      [groupId],
     );
     const ids = msgRows.map((r: { external_id: string }) => r.external_id);
     expect(ids).toContain("PAGI-ANCHOR");
@@ -291,7 +296,7 @@ describe("backfillGroup integration", () => {
         timestampSeconds: anchorTs,
         text: "Dedup anchor",
       }),
-      { dataDir }
+      { dataDir },
     );
 
     // Also pre-seed one message that will appear in the batch
@@ -303,12 +308,12 @@ describe("backfillGroup integration", () => {
         timestampSeconds: anchorTs - 50,
         text: "Existing message",
       }),
-      { dataDir }
+      { dataDir },
     );
 
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM groups WHERE whatsapp_id = $1`,
-      [remoteJid]
+      [remoteJid],
     );
     const groupId = Number(rows[0]!.id);
 
@@ -352,7 +357,7 @@ describe("backfillGroup integration", () => {
     // DB should have exactly 1 row for DEDUP-EXISTING
     const { rows: dupeRows } = await pool.query(
       `SELECT COUNT(*) AS cnt FROM messages WHERE external_id = $1`,
-      ["DEDUP-EXISTING"]
+      ["DEDUP-EXISTING"],
     );
     expect(Number(dupeRows[0]!.cnt)).toBe(1);
   });
@@ -372,12 +377,12 @@ describe("backfillGroup integration", () => {
         timestampSeconds: anchorTs,
         text: "MaxFetch anchor",
       }),
-      { dataDir }
+      { dataDir },
     );
 
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM groups WHERE whatsapp_id = $1`,
-      [remoteJid]
+      [remoteJid],
     );
     const groupId = Number(rows[0]!.id);
 
@@ -419,12 +424,12 @@ describe("backfillGroup integration", () => {
         timestampSeconds: anchorTs,
         text: "Timeout anchor",
       }),
-      { dataDir }
+      { dataDir },
     );
 
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM groups WHERE whatsapp_id = $1`,
-      [remoteJid]
+      [remoteJid],
     );
     const groupId = Number(rows[0]!.id);
 
@@ -478,12 +483,12 @@ describe("backfillGroup integration", () => {
         timestampSeconds: anchorTs,
         text: "Empty batch anchor",
       }),
-      { dataDir }
+      { dataDir },
     );
 
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM groups WHERE whatsapp_id = $1`,
-      [remoteJid]
+      [remoteJid],
     );
     const groupId = Number(rows[0]!.id);
 
@@ -523,12 +528,12 @@ describe("backfillGroup integration", () => {
         timestampSeconds: anchorTs,
         text: "Never throw anchor",
       }),
-      { dataDir }
+      { dataDir },
     );
 
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM groups WHERE whatsapp_id = $1`,
-      [remoteJid]
+      [remoteJid],
     );
     const groupId = Number(rows[0]!.id);
 
@@ -546,7 +551,7 @@ describe("backfillGroup integration", () => {
         timeoutMs: 10_000,
         fetchHistory: rejectingFetch,
         awaitHistory: vi.fn(async () => []),
-      })
+      }),
     ).resolves.toMatchObject({ partial: true, fetched: 0 });
   });
 
@@ -562,12 +567,12 @@ describe("backfillGroup integration", () => {
         timestampSeconds: anchorTs,
         text: "Never throw2 anchor",
       }),
-      { dataDir }
+      { dataDir },
     );
 
     const { rows } = await pool.query<{ id: string }>(
       `SELECT id FROM groups WHERE whatsapp_id = $1`,
-      [remoteJid]
+      [remoteJid],
     );
     const groupId = Number(rows[0]!.id);
 
@@ -585,7 +590,7 @@ describe("backfillGroup integration", () => {
         timeoutMs: 10_000,
         fetchHistory: vi.fn(async () => "req-id"),
         awaitHistory: rejectingAwait,
-      })
+      }),
     ).resolves.toMatchObject({ partial: true, fetched: 0 });
   });
 });

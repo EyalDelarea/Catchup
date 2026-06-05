@@ -25,7 +25,7 @@ export type TranscribeVoicenoteHandlerDeps = {
  */
 export function makeTranscribeVoicenoteHandler(deps: TranscribeVoicenoteHandlerDeps) {
   return async function transcribeVoicenoteHandler(
-    job: Job<"transcribe.voicenote">
+    job: Job<"transcribe.voicenote">,
   ): Promise<void> {
     const { messageId } = job.payload;
 

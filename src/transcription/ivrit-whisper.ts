@@ -1,15 +1,11 @@
-import { spawn, execFile, type ChildProcess } from "node:child_process";
-import { createInterface, type Interface } from "node:readline";
-import { promisify } from "node:util";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import crypto from "node:crypto";
+import { createInterface, type Interface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import {
-  buildFfmpegArgs,
-  type Transcriber,
-  type TranscriptionResult,
-} from "./transcriber.js";
+import { promisify } from "node:util";
+import { buildFfmpegArgs, type Transcriber, type TranscriptionResult } from "./transcriber.js";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -69,7 +65,7 @@ export class IvritWhisperTranscriber implements Transcriber {
       rl.on("line", onLine);
       proc.once("error", reject);
       proc.once("exit", (code) =>
-        reject(new Error(`transcription worker exited before ready (code ${code})`))
+        reject(new Error(`transcription worker exited before ready (code ${code})`)),
       );
     });
   }
@@ -123,10 +119,7 @@ export class IvritWhisperTranscriber implements Transcriber {
  * Convert an audio file to a fresh temp 16 kHz mono WAV. Returns the temp path;
  * the caller is responsible for deleting it.
  */
-export async function convertToWav(
-  ffmpegPath: string,
-  inputPath: string
-): Promise<string> {
+export async function convertToWav(ffmpegPath: string, inputPath: string): Promise<string> {
   const outPath = path.join(os.tmpdir(), `wsum-${crypto.randomUUID()}.wav`);
   await execFileAsync(ffmpegPath, buildFfmpegArgs(inputPath, outPath));
   return outPath;

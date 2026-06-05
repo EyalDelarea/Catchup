@@ -1,11 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroup } from "../db/repositories/groups.js";
 import { insertMessages } from "../db/repositories/messages.js";
@@ -44,11 +41,26 @@ describe("runSummarize", () => {
     await container?.stop();
   }, 30_000);
 
-  async function seedText(groupId: number, content: string, dedupeKey: string, sentAt = new Date()): Promise<void> {
+  async function seedText(
+    groupId: number,
+    content: string,
+    dedupeKey: string,
+    sentAt = new Date(),
+  ): Promise<void> {
     const row: NormalizedMessage & { participantId: number | null } = {
-      groupId, importId: null, source: "import", senderName: "Dana",
-      messageType: "text", textContent: content, mediaFilename: null, mediaPath: null,
-      mediaStatus: null, externalId: null, participantId: null, sentAt, dedupeKey,
+      groupId,
+      importId: null,
+      source: "import",
+      senderName: "Dana",
+      messageType: "text",
+      textContent: content,
+      mediaFilename: null,
+      mediaPath: null,
+      mediaStatus: null,
+      externalId: null,
+      participantId: null,
+      sentAt,
+      dedupeKey,
     };
     await insertMessages(pool, [row]);
   }
@@ -60,11 +72,14 @@ describe("runSummarize", () => {
 
     const result = await runSummarize(
       { groupName: "SUM-ok", selection: { last: 100 } },
-      { databaseUrl: uri, summarizer: fake, model: "fake", tokenBudget: 24000 }
+      { databaseUrl: uri, summarizer: fake, model: "fake", tokenBudget: 24000 },
     );
 
     expect(result).toMatchObject({ kind: "ok", output: FAKE_OUT });
-    const { rows } = await pool.query(`SELECT summary_type, parameters, model FROM summaries WHERE group_id=$1`, [g]);
+    const { rows } = await pool.query(
+      `SELECT summary_type, parameters, model FROM summaries WHERE group_id=$1`,
+      [g],
+    );
     expect(rows[0]).toMatchObject({ summary_type: "last_n", model: "fake" });
     expect(rows[0].parameters).toMatchObject({ n: 100 });
   });
@@ -74,7 +89,7 @@ describe("runSummarize", () => {
     const fake = new FakeSummarizer(FAKE_OUT);
     const result = await runSummarize(
       { groupName: "SUM-empty", selection: { last: 100 } },
-      { databaseUrl: uri, summarizer: fake, model: "fake", tokenBudget: 24000 }
+      { databaseUrl: uri, summarizer: fake, model: "fake", tokenBudget: 24000 },
     );
     expect(result).toEqual({ kind: "empty" });
     expect(fake.calls).toBe(0);
@@ -83,7 +98,10 @@ describe("runSummarize", () => {
   it("throws for an unknown chat", async () => {
     const fake = new FakeSummarizer(FAKE_OUT);
     await expect(
-      runSummarize({ groupName: "nope", selection: { last: 100 } }, { databaseUrl: uri, summarizer: fake, model: "fake", tokenBudget: 24000 })
+      runSummarize(
+        { groupName: "nope", selection: { last: 100 } },
+        { databaseUrl: uri, summarizer: fake, model: "fake", tokenBudget: 24000 },
+      ),
     ).rejects.toThrow(/Unknown chat "nope"/);
   });
 
@@ -92,7 +110,10 @@ describe("runSummarize", () => {
     await seedText(g, "x".repeat(500), "big1");
     const fake = new FakeSummarizer(FAKE_OUT);
     await expect(
-      runSummarize({ groupName: "SUM-big", selection: { last: 100 } }, { databaseUrl: uri, summarizer: fake, model: "fake", tokenBudget: 10 })
+      runSummarize(
+        { groupName: "SUM-big", selection: { last: 100 } },
+        { databaseUrl: uri, summarizer: fake, model: "fake", tokenBudget: 10 },
+      ),
     ).rejects.toThrow(/too large/i);
     expect(fake.calls).toBe(0);
   });

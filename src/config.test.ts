@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { loadConfig } from "./config.js";
 
 describe("loadConfig broker block", () => {
@@ -73,7 +73,9 @@ describe("loadConfig transcription block", () => {
 
   it("provides web defaults and honors WEB_PORT", () => {
     expect(loadConfig({} as NodeJS.ProcessEnv).web).toEqual({ port: 8787 });
-    expect(loadConfig({ WEB_PORT: "9000" } as unknown as NodeJS.ProcessEnv).web).toEqual({ port: 9000 });
+    expect(loadConfig({ WEB_PORT: "9000" } as unknown as NodeJS.ProcessEnv).web).toEqual({
+      port: 9000,
+    });
   });
 
   it("provides summarization defaults and honors env overrides", () => {

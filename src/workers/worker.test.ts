@@ -1,8 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
-import { buildWorker, opForJobType } from "./worker.js";
+import { describe, expect, it, vi } from "vitest";
 import { InMemoryJobBus } from "../jobs/in-memory-bus.js";
 import { InMemoryJobRunRecorder } from "../jobs/job-run-recorder.js";
 import type { Job } from "../jobs/job-types.js";
+import { buildWorker, opForJobType } from "./worker.js";
 
 describe("opForJobType", () => {
   it("maps job types to coarse operation labels for dashboards", () => {
@@ -37,9 +37,13 @@ describe("buildWorker", () => {
     await bus.enqueue("import.file", { filePath: "/export.zip" });
 
     // consume is triggered by drain — in InMemoryJobBus consume drains synchronously
-    await bus.consume("import.file", async (job) => {
-      handled.push(job.payload.filePath + "-consume");
-    }, { prefetch: 1 });
+    await bus.consume(
+      "import.file",
+      async (job) => {
+        handled.push(job.payload.filePath + "-consume");
+      },
+      { prefetch: 1 },
+    );
 
     // The worker registered the handler; we just verify the wiring is set up
     // Note: InMemoryJobBus.consume() drains the queue when called, so we
@@ -60,11 +64,7 @@ describe("buildWorker", () => {
       concurrency: 2,
     });
 
-    expect(consumeSpy).toHaveBeenCalledWith(
-      "import.file",
-      expect.any(Function),
-      { prefetch: 2 }
-    );
+    expect(consumeSpy).toHaveBeenCalledWith("import.file", expect.any(Function), { prefetch: 2 });
   });
 
   it("calls bus.consume for each registered handler", async () => {
@@ -86,7 +86,9 @@ describe("buildWorker", () => {
     expect(consumeSpy).toHaveBeenCalledTimes(2);
     expect(consumeSpy).toHaveBeenCalledWith("import.file", expect.any(Function), { prefetch: 3 });
     // transcribe.voicenote always uses prefetch=1 regardless of concurrency
-    expect(consumeSpy).toHaveBeenCalledWith("transcribe.voicenote", expect.any(Function), { prefetch: 1 });
+    expect(consumeSpy).toHaveBeenCalledWith("transcribe.voicenote", expect.any(Function), {
+      prefetch: 1,
+    });
   });
 
   it("only registers handlers for the provided handler types", async () => {
@@ -120,11 +122,9 @@ describe("buildWorker", () => {
       concurrency: 5, // high concurrency — but transcription must still be prefetch=1
     });
 
-    expect(consumeSpy).toHaveBeenCalledWith(
-      "transcribe.voicenote",
-      expect.any(Function),
-      { prefetch: 1 }
-    );
+    expect(consumeSpy).toHaveBeenCalledWith("transcribe.voicenote", expect.any(Function), {
+      prefetch: 1,
+    });
   });
 
   it("import.file uses the configured concurrency as its prefetch", async () => {
@@ -141,11 +141,7 @@ describe("buildWorker", () => {
       concurrency: 4,
     });
 
-    expect(consumeSpy).toHaveBeenCalledWith(
-      "import.file",
-      expect.any(Function),
-      { prefetch: 4 }
-    );
+    expect(consumeSpy).toHaveBeenCalledWith("import.file", expect.any(Function), { prefetch: 4 });
   });
 
   it("handler is actually invoked when job flows through the bus", async () => {
@@ -182,7 +178,7 @@ describe("buildWorker", () => {
         bus,
         handlers: { "import.file": vi.fn() },
         concurrency: 1,
-      })
+      }),
     ).rejects.toThrow("broker down");
   });
 });

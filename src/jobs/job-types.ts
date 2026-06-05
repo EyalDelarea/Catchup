@@ -1,4 +1,9 @@
-export type JobType = "import.file" | "transcribe.voicenote" | "analyze.image" | "analyze.video" | "summarize.group";
+export type JobType =
+  | "import.file"
+  | "transcribe.voicenote"
+  | "analyze.image"
+  | "analyze.video"
+  | "summarize.group";
 
 /**
  * Single source of truth for all valid job types at runtime.

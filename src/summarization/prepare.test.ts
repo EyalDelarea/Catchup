@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroup } from "../db/repositories/groups.js";
 import { insertMessages } from "../db/repositories/messages.js";
@@ -21,13 +21,26 @@ describe("prepareSummary", () => {
     pool = new pg.Pool({ connectionString: container.getConnectionUri() });
     await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
   }, 120_000);
-  afterAll(async () => { await pool?.end(); await container?.stop(); }, 30_000);
+  afterAll(async () => {
+    await pool?.end();
+    await container?.stop();
+  }, 30_000);
 
   async function seedText(groupId: number, content: string, dedupeKey: string): Promise<void> {
     const row: NormalizedMessage & { participantId: number | null } = {
-      groupId, importId: null, source: "import", senderName: "Dana", messageType: "text",
-      textContent: content, mediaFilename: null, mediaPath: null, mediaStatus: null,
-      externalId: null, participantId: null, sentAt: new Date("2026-01-01T10:00:00Z"), dedupeKey,
+      groupId,
+      importId: null,
+      source: "import",
+      senderName: "Dana",
+      messageType: "text",
+      textContent: content,
+      mediaFilename: null,
+      mediaPath: null,
+      mediaStatus: null,
+      externalId: null,
+      participantId: null,
+      sentAt: new Date("2026-01-01T10:00:00Z"),
+      dedupeKey,
     };
     await insertMessages(pool, [row]);
   }
@@ -48,11 +61,15 @@ describe("prepareSummary", () => {
 
   it("returns empty when nothing is selected", async () => {
     await upsertGroup(pool, { name: "PREP-empty", source: "import" });
-    expect(await prepareSummary(pool, "PREP-empty", { last: 100 }, 24000)).toEqual({ kind: "empty" });
+    expect(await prepareSummary(pool, "PREP-empty", { last: 100 }, 24000)).toEqual({
+      kind: "empty",
+    });
   });
 
   it("throws for an unknown chat", async () => {
-    await expect(prepareSummary(pool, "nope", { last: 100 }, 24000)).rejects.toThrow(/Unknown chat "nope"/);
+    await expect(prepareSummary(pool, "nope", { last: 100 }, 24000)).rejects.toThrow(
+      /Unknown chat "nope"/,
+    );
   });
 
   it("throws over-budget", async () => {
@@ -64,10 +81,17 @@ describe("prepareSummary", () => {
   it("derives since type/params", async () => {
     const g = await upsertGroup(pool, { name: "PREP-since", source: "import" });
     await seedText(g, "hi", "psince");
-    const prepared = await prepareSummary(pool, "PREP-since", { since: new Date("2025-12-01T00:00:00Z") }, 24000);
+    const prepared = await prepareSummary(
+      pool,
+      "PREP-since",
+      { since: new Date("2025-12-01T00:00:00Z") },
+      24000,
+    );
     if (prepared.kind === "ready") {
       expect(prepared.summaryType).toBe("since");
       expect(prepared.parameters).toMatchObject({ since: "2025-12-01" });
-    } else { throw new Error("expected ready"); }
+    } else {
+      throw new Error("expected ready");
+    }
   });
 });

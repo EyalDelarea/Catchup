@@ -7,20 +7,18 @@
  * - Re-import of the same file → 0 new (SC-002 idempotency)
  * - Zip: media files written to disk, at least one message has media_status='present'
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
-import path from "node:path";
+
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../db/migrate.js";
-import { runImport } from "./run-import.js";
-import { parseWhatsAppTextExport } from "./parse-whatsapp-text.js";
 import { extractWhatsAppZip } from "./extract-whatsapp-zip.js";
+import { parseWhatsAppTextExport } from "./parse-whatsapp-text.js";
+import { runImport } from "./run-import.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "../db/migrations");
@@ -66,7 +64,7 @@ describe("import pipeline integration", () => {
 
     const result = await runImport(
       { filePath, name: "Android Chat" },
-      { databaseUrl: connectionString, dataDir }
+      { databaseUrl: connectionString, dataDir },
     );
 
     expect(result.inserted).toBe(expected);
@@ -78,20 +76,20 @@ describe("import pipeline integration", () => {
 
     // Get original DB count
     const { rows: before } = await pool.query(
-      `SELECT COUNT(*) AS cnt FROM messages WHERE group_id IN (SELECT id FROM groups WHERE name = 'Android Chat')`
+      `SELECT COUNT(*) AS cnt FROM messages WHERE group_id IN (SELECT id FROM groups WHERE name = 'Android Chat')`,
     );
     const countBefore = Number(before[0].cnt);
 
     const result = await runImport(
       { filePath, name: "Android Chat" },
-      { databaseUrl: connectionString, dataDir }
+      { databaseUrl: connectionString, dataDir },
     );
 
     expect(result.inserted).toBe(0);
 
     // DB count must not have changed
     const { rows: after } = await pool.query(
-      `SELECT COUNT(*) AS cnt FROM messages WHERE group_id IN (SELECT id FROM groups WHERE name = 'Android Chat')`
+      `SELECT COUNT(*) AS cnt FROM messages WHERE group_id IN (SELECT id FROM groups WHERE name = 'Android Chat')`,
     );
     const countAfter = Number(after[0].cnt);
     expect(countAfter).toBe(countBefore);
@@ -110,7 +108,7 @@ describe("import pipeline integration", () => {
 
     const result = await runImport(
       { filePath, name: "iOS Chat" },
-      { databaseUrl: connectionString, dataDir }
+      { databaseUrl: connectionString, dataDir },
     );
 
     expect(result.inserted).toBe(expected);
@@ -121,19 +119,19 @@ describe("import pipeline integration", () => {
     const filePath = path.join(FIXTURES_DIR, "ios-chat.txt");
 
     const { rows: before } = await pool.query(
-      `SELECT COUNT(*) AS cnt FROM messages WHERE group_id IN (SELECT id FROM groups WHERE name = 'iOS Chat')`
+      `SELECT COUNT(*) AS cnt FROM messages WHERE group_id IN (SELECT id FROM groups WHERE name = 'iOS Chat')`,
     );
     const countBefore = Number(before[0].cnt);
 
     const result = await runImport(
       { filePath, name: "iOS Chat" },
-      { databaseUrl: connectionString, dataDir }
+      { databaseUrl: connectionString, dataDir },
     );
 
     expect(result.inserted).toBe(0);
 
     const { rows: after } = await pool.query(
-      `SELECT COUNT(*) AS cnt FROM messages WHERE group_id IN (SELECT id FROM groups WHERE name = 'iOS Chat')`
+      `SELECT COUNT(*) AS cnt FROM messages WHERE group_id IN (SELECT id FROM groups WHERE name = 'iOS Chat')`,
     );
     expect(Number(after[0].cnt)).toBe(countBefore);
   });
@@ -151,7 +149,7 @@ describe("import pipeline integration", () => {
 
     const result = await runImport(
       { filePath, name: "Zip Chat" },
-      { databaseUrl: connectionString, dataDir }
+      { databaseUrl: connectionString, dataDir },
     );
 
     expect(result.inserted).toBe(expected);
@@ -162,19 +160,19 @@ describe("import pipeline integration", () => {
     const filePath = path.join(FIXTURES_DIR, "sample-chat.zip");
 
     const { rows: before } = await pool.query(
-      `SELECT COUNT(*) AS cnt FROM messages WHERE group_id IN (SELECT id FROM groups WHERE name = 'Zip Chat')`
+      `SELECT COUNT(*) AS cnt FROM messages WHERE group_id IN (SELECT id FROM groups WHERE name = 'Zip Chat')`,
     );
     const countBefore = Number(before[0].cnt);
 
     const result = await runImport(
       { filePath, name: "Zip Chat" },
-      { databaseUrl: connectionString, dataDir }
+      { databaseUrl: connectionString, dataDir },
     );
 
     expect(result.inserted).toBe(0);
 
     const { rows: after } = await pool.query(
-      `SELECT COUNT(*) AS cnt FROM messages WHERE group_id IN (SELECT id FROM groups WHERE name = 'Zip Chat')`
+      `SELECT COUNT(*) AS cnt FROM messages WHERE group_id IN (SELECT id FROM groups WHERE name = 'Zip Chat')`,
     );
     expect(Number(after[0].cnt)).toBe(countBefore);
   });
@@ -182,7 +180,7 @@ describe("import pipeline integration", () => {
   it("zip import: media files written to disk under dataDir", async () => {
     // The zip import was done in the earlier test; query the DB for the import id
     const { rows } = await pool.query(
-      `SELECT i.id FROM imports i JOIN groups g ON g.id = i.group_id WHERE g.name = 'Zip Chat' ORDER BY i.id LIMIT 1`
+      `SELECT i.id FROM imports i JOIN groups g ON g.id = i.group_id WHERE g.name = 'Zip Chat' ORDER BY i.id LIMIT 1`,
     );
     expect(rows.length).toBeGreaterThan(0);
     const importId = rows[0].id;
@@ -198,7 +196,7 @@ describe("import pipeline integration", () => {
     const { rows } = await pool.query(
       `SELECT COUNT(*) AS cnt FROM messages m
        JOIN groups g ON g.id = m.group_id
-       WHERE g.name = 'Zip Chat' AND m.media_status = 'present'`
+       WHERE g.name = 'Zip Chat' AND m.media_status = 'present'`,
     );
     expect(Number(rows[0].cnt)).toBeGreaterThan(0);
   });
@@ -209,7 +207,7 @@ describe("import pipeline integration", () => {
 
   it("import records have non-null original_file_path after completion", async () => {
     const { rows } = await pool.query(
-      `SELECT original_file_path, status FROM imports WHERE status = 'completed'`
+      `SELECT original_file_path, status FROM imports WHERE status = 'completed'`,
     );
     expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) {

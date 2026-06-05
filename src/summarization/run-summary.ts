@@ -1,7 +1,7 @@
 import type pg from "pg";
-import type { PreparedCatchup } from "./prepare-catchup.js";
-import type { InsertSummaryInput } from "../db/repositories/summaries.js";
 import type { Cursor } from "../db/repositories/read-watermarks.js";
+import type { InsertSummaryInput } from "../db/repositories/summaries.js";
+import type { PreparedCatchup } from "./prepare-catchup.js";
 import type { SummaryPrompt } from "./summarizer.js";
 
 export type { InsertSummaryInput };
@@ -69,7 +69,7 @@ export type SummarizeAndPersistDeps = {
     pool: pg.Pool,
     groupName: string,
     fallbackN: number,
-    tokenBudget: number
+    tokenBudget: number,
   ) => Promise<PreparedCatchup>;
   /** Calls the summarization model and returns the full output text. */
   summarize: (prompt: SummaryPrompt) => Promise<string>;
@@ -101,9 +101,18 @@ export type SummarizeResult = { status: "generated" | "cache-hit" };
  */
 export async function summarizeAndPersist(
   deps: SummarizeAndPersistDeps,
-  groupId: number
+  groupId: number,
 ): Promise<SummarizeResult> {
-  const { pool, prepareCatchup, summarize, insertSummary, updateWatermark, model, tokenBudget, groupName } = deps;
+  const {
+    pool,
+    prepareCatchup,
+    summarize,
+    insertSummary,
+    updateWatermark,
+    model,
+    tokenBudget,
+    groupName,
+  } = deps;
 
   const FALLBACK_N = 25;
   const prepared = await prepareCatchup(pool, groupName, FALLBACK_N, tokenBudget);

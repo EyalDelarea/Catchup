@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import pg from "pg";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runMigrationsUp, runMigrationsDown } from "./migrate.js";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { runMigrationsDown, runMigrationsUp } from "./migrate.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "migrations");
@@ -48,13 +48,13 @@ describe("database migrations", () => {
     try {
       // Insert a group
       const groupResult = await client.query<{ id: string }>(
-        `INSERT INTO groups (name, source) VALUES ('Test Group', 'import') RETURNING id`
+        `INSERT INTO groups (name, source) VALUES ('Test Group', 'import') RETURNING id`,
       );
       const groupId = groupResult.rows[0].id;
 
       // Insert a participant
       const partResult = await client.query<{ id: string }>(
-        `INSERT INTO participants (display_name) VALUES ('Alice') RETURNING id`
+        `INSERT INTO participants (display_name) VALUES ('Alice') RETURNING id`,
       );
       const participantId = partResult.rows[0].id;
 
@@ -78,7 +78,7 @@ describe("database migrations", () => {
       // Confirm only one row exists
       const count = await client.query(
         `SELECT COUNT(*) AS cnt FROM messages WHERE group_id = $1 AND dedupe_key = $2`,
-        [groupId, dedupeKey]
+        [groupId, dedupeKey],
       );
       expect(Number(count.rows[0].cnt)).toBe(1);
     } finally {
@@ -91,12 +91,12 @@ describe("database migrations", () => {
     try {
       // Insert a fresh group
       const groupResult = await client.query<{ id: string }>(
-        `INSERT INTO groups (name, source) VALUES ('Test Group Dupe', 'import') RETURNING id`
+        `INSERT INTO groups (name, source) VALUES ('Test Group Dupe', 'import') RETURNING id`,
       );
       const groupId = groupResult.rows[0].id;
 
       const partResult = await client.query<{ id: string }>(
-        `INSERT INTO participants (display_name) VALUES ('Bob') RETURNING id`
+        `INSERT INTO participants (display_name) VALUES ('Bob') RETURNING id`,
       );
       const participantId = partResult.rows[0].id;
 
@@ -110,9 +110,9 @@ describe("database migrations", () => {
 
       await client.query(insertMsg, [groupId, participantId, dedupeKey]);
 
-      await expect(
-        client.query(insertMsg, [groupId, participantId, dedupeKey])
-      ).rejects.toThrow(/unique/i);
+      await expect(client.query(insertMsg, [groupId, participantId, dedupeKey])).rejects.toThrow(
+        /unique/i,
+      );
     } finally {
       client.release();
     }

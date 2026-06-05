@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { JobBus } from "./job-bus.js";
-import type { Job, JobPayloads, JobType, ConsumeOptions } from "./job-types.js";
 import type { JobRunRecorder } from "./job-run-recorder.js";
+import type { ConsumeOptions, Job, JobPayloads, JobType } from "./job-types.js";
 
 const DEFAULT_MAX_ATTEMPTS = 3;
 
@@ -16,10 +16,7 @@ export class InMemoryJobBus implements JobBus {
   private readonly recorder: JobRunRecorder;
   private readonly idGenerator: () => string;
 
-  constructor(
-    recorder: JobRunRecorder,
-    idGenerator: () => string = randomUUID
-  ) {
+  constructor(recorder: JobRunRecorder, idGenerator: () => string = randomUUID) {
     this.recorder = recorder;
     this.idGenerator = idGenerator;
   }
@@ -27,7 +24,7 @@ export class InMemoryJobBus implements JobBus {
   async enqueue<T extends JobType>(
     type: T,
     payload: JobPayloads[T],
-    opts?: { maxAttempts?: number }
+    opts?: { maxAttempts?: number },
   ): Promise<{ id: string }> {
     const id = this.idGenerator();
     const maxAttempts = opts?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
@@ -51,7 +48,7 @@ export class InMemoryJobBus implements JobBus {
   async consume<T extends JobType>(
     type: T,
     handler: (job: Job<T>) => Promise<void>,
-    _opts: ConsumeOptions
+    _opts: ConsumeOptions,
   ): Promise<void> {
     const queue = this.getQueue(type);
 
@@ -74,24 +71,15 @@ export class InMemoryJobBus implements JobBus {
         await handler(deliveryJob);
         await this.recorder.recordStatus(deliveryJob.id, "done");
       } catch (err) {
-        const errorMessage =
-          err instanceof Error ? err.message : String(err);
+        const errorMessage = err instanceof Error ? err.message : String(err);
 
         if (deliveryJob.attempts >= maxAttempts) {
           // Exhausted — dead-letter
-          await this.recorder.recordStatus(
-            deliveryJob.id,
-            "dead",
-            errorMessage
-          );
+          await this.recorder.recordStatus(deliveryJob.id, "dead", errorMessage);
           this.getDlq(type).push(deliveryJob);
         } else {
           // Retryable — record failed and re-enqueue
-          await this.recorder.recordStatus(
-            deliveryJob.id,
-            "failed",
-            errorMessage
-          );
+          await this.recorder.recordStatus(deliveryJob.id, "failed", errorMessage);
           queue.push({
             job: deliveryJob,
             maxAttempts,

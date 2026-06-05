@@ -1,27 +1,30 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import pg from "pg";
-import path from "node:path";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
-import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
-import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroup } from "../db/repositories/groups.js";
-import { insertMessages } from "../db/repositories/messages.js";
 import { upsertJobRun } from "../db/repositories/job-runs.js";
+import { insertMessages } from "../db/repositories/messages.js";
 import { insertSummary } from "../db/repositories/summaries.js";
 import type { NormalizedMessage } from "../importer/types.js";
-import { createServer } from "./server.js";
-import type { StreamingSummarizer, SummaryPrompt } from "../summarization/summarizer.js";
 import type { JobType } from "../jobs/job-types.js";
+import type { StreamingSummarizer, SummaryPrompt } from "../summarization/summarizer.js";
+import { createServer } from "./server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
 
 class FakeStreaming implements StreamingSummarizer {
-  async *summarizeStream() { yield "שלום "; yield "עולם"; }
+  async *summarizeStream() {
+    yield "שלום ";
+    yield "עולם";
+  }
 }
 
 describe("web server", () => {
@@ -34,20 +37,36 @@ describe("web server", () => {
     container = await new PostgreSqlContainer("postgres:16-alpine").start();
     pool = new pg.Pool({ connectionString: container.getConnectionUri() });
     await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
-    server = createServer({ pool, summarizer: new FakeStreaming(), tokenBudget: 24000, model: "fake" });
+    server = createServer({
+      pool,
+      summarizer: new FakeStreaming(),
+      tokenBudget: 24000,
+      model: "fake",
+    });
     await new Promise<void>((r) => server.listen(0, r));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   }, 120_000);
   afterAll(async () => {
     await new Promise<void>((r) => server.close(() => r()));
-    await pool?.end(); await container?.stop();
+    await pool?.end();
+    await container?.stop();
   }, 30_000);
 
   async function seedText(groupId: number, content: string, dedupeKey: string): Promise<void> {
     const row: NormalizedMessage & { participantId: number | null } = {
-      groupId, importId: null, source: "import", senderName: "Dana", messageType: "text",
-      textContent: content, mediaFilename: null, mediaPath: null, mediaStatus: null,
-      externalId: null, participantId: null, sentAt: new Date("2026-01-01T10:00:00Z"), dedupeKey,
+      groupId,
+      importId: null,
+      source: "import",
+      senderName: "Dana",
+      messageType: "text",
+      textContent: content,
+      mediaFilename: null,
+      mediaPath: null,
+      mediaStatus: null,
+      externalId: null,
+      participantId: null,
+      sentAt: new Date("2026-01-01T10:00:00Z"),
+      dedupeKey,
     };
     await insertMessages(pool, [row]);
   }
@@ -60,20 +79,20 @@ describe("web server", () => {
 
   it("GET / serves the Glacier app shell (module entry, manifest, stale banner, mount point)", async () => {
     const html = await (await fetch(`${base}/`)).text();
-    expect(html).toContain('<script type="module" src="/app.js"');  // ES-module entry
-    expect(html).toContain('rel="manifest"');                        // add-to-home-screen
-    expect(html).toContain('href="/styles.css"');                    // Glacier styles
-    expect(html).toContain('id="stale-banner"');                     // unhealthy banner region
-    expect(html).toContain('id="app"');                              // view mount point
+    expect(html).toContain('<script type="module" src="/app.js"'); // ES-module entry
+    expect(html).toContain('rel="manifest"'); // add-to-home-screen
+    expect(html).toContain('href="/styles.css"'); // Glacier styles
+    expect(html).toContain('id="stale-banner"'); // unhealthy banner region
+    expect(html).toContain('id="app"'); // view mount point
   });
 
   it("serves the JS modules that wire catch-up and the status/groups endpoints", async () => {
     const appJs = await (await fetch(`${base}/app.js`)).text();
-    expect(appJs).toContain('mode: "catchup"');                      // catch-up default wired
+    expect(appJs).toContain('mode: "catchup"'); // catch-up default wired
     const apiJs = await (await fetch(`${base}/lib/api.js`)).text();
-    expect(apiJs).toContain("/api/status");                          // health polling
-    expect(apiJs).toContain("/api/groups");                          // feed
-    expect(apiJs).toContain("/api/summarize");                       // summary stream
+    expect(apiJs).toContain("/api/status"); // health polling
+    expect(apiJs).toContain("/api/groups"); // feed
+    expect(apiJs).toContain("/api/summarize"); // summary stream
   });
 
   it("GET /api/groups returns the stored chats as JSON", async () => {
@@ -112,9 +131,15 @@ describe("web server", () => {
   // ── catchup tests ────────────────────────────────────────────────────────────
 
   it("catchup mutual-exclusion: mode=catchup with last= emits error event", async () => {
-    const g = await upsertGroup(pool, { name: `WEB-catchup-mutex-${randomUUID()}`, source: "import" });
-    const name = (await pool.query<{ name: string }>(`SELECT name FROM groups WHERE id=$1`, [g])).rows[0]!.name;
-    const text = await (await fetch(`${base}/api/summarize?group=${encodeURIComponent(name)}&mode=catchup&last=100`)).text();
+    const g = await upsertGroup(pool, {
+      name: `WEB-catchup-mutex-${randomUUID()}`,
+      source: "import",
+    });
+    const name = (await pool.query<{ name: string }>(`SELECT name FROM groups WHERE id=$1`, [g]))
+      .rows[0]!.name;
+    const text = await (
+      await fetch(`${base}/api/summarize?group=${encodeURIComponent(name)}&mode=catchup&last=100`)
+    ).text();
     expect(text).toContain("event: error");
     expect(text).toContain("Use only one of");
   });
@@ -122,7 +147,9 @@ describe("web server", () => {
   it("catchup empty: new group with no messages emits empty event", async () => {
     const name = `WEB-catchup-empty-${randomUUID()}`;
     await upsertGroup(pool, { name, source: "import" });
-    const text = await (await fetch(`${base}/api/summarize?group=${encodeURIComponent(name)}&mode=catchup`)).text();
+    const text = await (
+      await fetch(`${base}/api/summarize?group=${encodeURIComponent(name)}&mode=catchup`)
+    ).text();
     expect(text).toContain("event: empty");
     expect(text).not.toContain("event: token");
     expect(text).not.toContain("event: done");
@@ -133,7 +160,9 @@ describe("web server", () => {
     const g = await upsertGroup(pool, { name, source: "import" });
     await seedText(g, "hello catchup", `catchup-fr-${randomUUID()}`);
 
-    const text = await (await fetch(`${base}/api/summarize?group=${encodeURIComponent(name)}&mode=catchup`)).text();
+    const text = await (
+      await fetch(`${base}/api/summarize?group=${encodeURIComponent(name)}&mode=catchup`)
+    ).text();
     expect(text).toContain("event: status");
     expect(text).toContain("event: token");
     expect(text).toContain("event: done");
@@ -142,14 +171,14 @@ describe("web server", () => {
     // Watermark row was written
     const { rows: wmRows } = await pool.query(
       `SELECT group_id FROM read_watermarks WHERE group_id=$1`,
-      [g]
+      [g],
     );
     expect(wmRows.length).toBe(1);
 
     // Summary row with summary_type='watermark' was written
     const { rows: sumRows } = await pool.query(
       `SELECT output FROM summaries WHERE group_id=$1 AND summary_type='watermark'`,
-      [g]
+      [g],
     );
     expect(sumRows.length).toBe(1);
     expect(sumRows[0].output).toMatchObject({ overview: "שלום עולם" });
@@ -168,19 +197,21 @@ describe("web server", () => {
     // Count summaries before the second request
     const { rows: before } = await pool.query(
       `SELECT COUNT(*) AS cnt FROM summaries WHERE group_id=$1 AND summary_type='watermark'`,
-      [g]
+      [g],
     );
     const countBefore = Number(before[0].cnt);
 
     // Watermark before
     const { rows: wmBefore } = await pool.query(
       `SELECT watermark_sent_at, watermark_message_id FROM read_watermarks WHERE group_id=$1`,
-      [g]
+      [g],
     );
     expect(wmBefore.length).toBe(1);
 
     // Second request — no new messages, should be a cache-hit
-    const text = await (await fetch(`${base}/api/summarize?group=${encodeURIComponent(name)}&mode=catchup`)).text();
+    const text = await (
+      await fetch(`${base}/api/summarize?group=${encodeURIComponent(name)}&mode=catchup`)
+    ).text();
     expect(text).toContain("event: cached");
     expect(text).not.toContain("event: token");
     expect(text).not.toContain("event: done");
@@ -188,14 +219,14 @@ describe("web server", () => {
     // No additional summary row inserted
     const { rows: after } = await pool.query(
       `SELECT COUNT(*) AS cnt FROM summaries WHERE group_id=$1 AND summary_type='watermark'`,
-      [g]
+      [g],
     );
     expect(Number(after[0].cnt)).toBe(countBefore);
 
     // Watermark unchanged
     const { rows: wmAfter } = await pool.query(
       `SELECT watermark_sent_at, watermark_message_id FROM read_watermarks WHERE group_id=$1`,
-      [g]
+      [g],
     );
     expect(wmAfter[0].watermark_sent_at).toEqual(wmBefore[0].watermark_sent_at);
     expect(wmAfter[0].watermark_message_id).toEqual(wmBefore[0].watermark_message_id);
@@ -222,9 +253,19 @@ describe("handleSummarize with backfill deps", () => {
 
   async function seedText(groupId: number, content: string, dedupeKey: string): Promise<void> {
     const row: NormalizedMessage & { participantId: number | null } = {
-      groupId, importId: null, source: "import", senderName: "Dana", messageType: "text",
-      textContent: content, mediaFilename: null, mediaPath: null, mediaStatus: null,
-      externalId: null, participantId: null, sentAt: new Date("2026-01-01T10:00:00Z"), dedupeKey,
+      groupId,
+      importId: null,
+      source: "import",
+      senderName: "Dana",
+      messageType: "text",
+      textContent: content,
+      mediaFilename: null,
+      mediaPath: null,
+      mediaStatus: null,
+      externalId: null,
+      participantId: null,
+      sentAt: new Date("2026-01-01T10:00:00Z"),
+      dedupeKey,
     };
     await insertMessages(pool, [row]);
   }
@@ -313,7 +354,9 @@ describe("handleSummarize with backfill deps", () => {
     const srvBase = `http://localhost:${(srv.address() as AddressInfo).port}`;
 
     try {
-      const text = await (await fetch(`${srvBase}/api/summarize?group=${encodeURIComponent(name)}&last=100`)).text();
+      const text = await (
+        await fetch(`${srvBase}/api/summarize?group=${encodeURIComponent(name)}&last=100`)
+      ).text();
       expect(text).not.toContain("event: syncing");
       expect(backfillCalled).toBe(false);
     } finally {
@@ -346,7 +389,9 @@ describe("handleSummarize with backfill deps", () => {
     const srvBase = `http://localhost:${(srv.address() as AddressInfo).port}`;
 
     try {
-      const text = await (await fetch(`${srvBase}/api/summarize?group=${encodeURIComponent(name)}&last=100`)).text();
+      const text = await (
+        await fetch(`${srvBase}/api/summarize?group=${encodeURIComponent(name)}&last=100`)
+      ).text();
 
       // no syncing
       expect(text).not.toContain("event: syncing");
@@ -384,7 +429,9 @@ describe("handleSummarize with backfill deps", () => {
     const srvBase = `http://localhost:${(srv.address() as AddressInfo).port}`;
 
     try {
-      const text = await (await fetch(`${srvBase}/api/summarize?group=${encodeURIComponent(name)}&last=100`)).text();
+      const text = await (
+        await fetch(`${srvBase}/api/summarize?group=${encodeURIComponent(name)}&last=100`)
+      ).text();
       expect(text).not.toContain("event: syncing");
 
       const doneMatch = text.match(/event: done\ndata: (.+)/);
@@ -412,10 +459,20 @@ describe("handleSummarize with backfill deps", () => {
     prefix: string,
   ): Promise<void> {
     for (let i = 0; i < count; i++) {
-      const row: import("../importer/types.js").NormalizedMessage & { participantId: number | null } = {
-        groupId, importId: null, source: "import", senderName: "Bot", messageType: "text",
-        textContent: `msg ${i}`, mediaFilename: null, mediaPath: null, mediaStatus: null,
-        externalId: null, participantId: null,
+      const row: import("../importer/types.js").NormalizedMessage & {
+        participantId: number | null;
+      } = {
+        groupId,
+        importId: null,
+        source: "import",
+        senderName: "Bot",
+        messageType: "text",
+        textContent: `msg ${i}`,
+        mediaFilename: null,
+        mediaPath: null,
+        mediaStatus: null,
+        externalId: null,
+        participantId: null,
         sentAt: new Date(baseDate.getTime() + i * 1000),
         dedupeKey: `${prefix}-${i}-${randomUUID()}`,
       };
@@ -442,8 +499,13 @@ describe("handleSummarize with backfill deps", () => {
     const getLivenessFake = () => ({ healthy: true, lastHeartbeatAt: new Date() });
 
     const srv = createServer({
-      pool, summarizer: new FakeStreaming(), tokenBudget: 24000, model: "fake",
-      backfill: backfillFake, getLiveness: getLivenessFake, backfillTargetWindow: 25,
+      pool,
+      summarizer: new FakeStreaming(),
+      tokenBudget: 24000,
+      model: "fake",
+      backfill: backfillFake,
+      getLiveness: getLivenessFake,
+      backfillTargetWindow: 25,
     });
     await new Promise<void>((r) => srv.listen(0, r));
     const srvBase = `http://localhost:${(srv.address() as AddressInfo).port}`;
@@ -476,15 +538,24 @@ describe("handleSummarize with backfill deps", () => {
     const getLivenessFake = () => ({ healthy: true, lastHeartbeatAt: new Date() });
 
     const srv = createServer({
-      pool, summarizer: new FakeStreaming(), tokenBudget: 24000, model: "fake",
-      backfill: backfillFake, getLiveness: getLivenessFake, backfillTargetWindow: 25,
+      pool,
+      summarizer: new FakeStreaming(),
+      tokenBudget: 24000,
+      model: "fake",
+      backfill: backfillFake,
+      getLiveness: getLivenessFake,
+      backfillTargetWindow: 25,
     });
     await new Promise<void>((r) => srv.listen(0, r));
     const srvBase = `http://localhost:${(srv.address() as AddressInfo).port}`;
 
     try {
       const sinceParam = encodeURIComponent(oneHourAgo.toISOString());
-      const text = await (await fetch(`${srvBase}/api/summarize?group=${encodeURIComponent(name)}&since=${sinceParam}`)).text();
+      const text = await (
+        await fetch(
+          `${srvBase}/api/summarize?group=${encodeURIComponent(name)}&since=${sinceParam}`,
+        )
+      ).text();
       expect(text).not.toContain("event: syncing");
       expect(backfillCalled).toBe(false);
     } finally {
@@ -507,14 +578,21 @@ describe("handleSummarize with backfill deps", () => {
     const getLivenessFake = () => ({ healthy: true, lastHeartbeatAt: new Date() });
 
     const srv = createServer({
-      pool, summarizer: new FakeStreaming(), tokenBudget: 24000, model: "fake",
-      backfill: backfillFake, getLiveness: getLivenessFake, backfillTargetWindow: 25,
+      pool,
+      summarizer: new FakeStreaming(),
+      tokenBudget: 24000,
+      model: "fake",
+      backfill: backfillFake,
+      getLiveness: getLivenessFake,
+      backfillTargetWindow: 25,
     });
     await new Promise<void>((r) => srv.listen(0, r));
     const srvBase = `http://localhost:${(srv.address() as AddressInfo).port}`;
 
     try {
-      const text = await (await fetch(`${srvBase}/api/summarize?group=${encodeURIComponent(name)}&last=100`)).text();
+      const text = await (
+        await fetch(`${srvBase}/api/summarize?group=${encodeURIComponent(name)}&last=100`)
+      ).text();
       expect(text).toContain("event: syncing");
       expect(backfillCalled).toBe(true);
     } finally {
@@ -539,12 +617,17 @@ describe("/api/status", () => {
   beforeAll(async () => {
     container = await new PostgreSqlContainer("postgres:16-alpine").start();
     pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    const migrDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "db", "migrations");
+    const migrDir = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "db",
+      "migrations",
+    );
     await runMigrationsUp(container.getConnectionUri(), migrDir);
 
     // Seed service_status (singleton row already exists from migration seed)
     await pool.query(
-      `UPDATE service_status SET collector_connected = true, last_heartbeat_at = now() WHERE id = 1`
+      `UPDATE service_status SET collector_connected = true, last_heartbeat_at = now() WHERE id = 1`,
     );
 
     // Seed job_runs rows: 2 pending, 1 running, 3 done, 1 failed, 1 dead
@@ -572,7 +655,9 @@ describe("/api/status", () => {
     server = createServer({
       pool,
       summarizer: new (class implements StreamingSummarizer {
-        async *summarizeStream() { yield "x"; }
+        async *summarizeStream() {
+          yield "x";
+        }
       })(),
       tokenBudget: 24000,
       model: "fake",
@@ -593,7 +678,7 @@ describe("/api/status", () => {
     const r = await fetch(`${base}/api/status`);
     expect(r.status).toBe(200);
     expect(r.headers.get("content-type")).toContain("application/json");
-    const body = await r.json() as Record<string, unknown>;
+    const body = (await r.json()) as Record<string, unknown>;
 
     // service
     expect(body["service"]).toMatchObject({
@@ -628,11 +713,15 @@ describe("/api/status", () => {
     brokerServer = createServer({
       pool: brokerPool,
       summarizer: new (class implements StreamingSummarizer {
-        async *summarizeStream() { yield "x"; }
+        async *summarizeStream() {
+          yield "x";
+        }
       })(),
       tokenBudget: 24000,
       model: "fake",
-      getQueueDepths: async () => { throw new Error("broker down"); },
+      getQueueDepths: async () => {
+        throw new Error("broker down");
+      },
       stalenessMs: 60_000,
     });
     await new Promise<void>((r) => brokerServer.listen(0, r));
@@ -641,7 +730,7 @@ describe("/api/status", () => {
     try {
       const r = await fetch(`${brokerBase}/api/status`);
       expect(r.status).toBe(200);
-      const body = await r.json() as Record<string, unknown>;
+      const body = (await r.json()) as Record<string, unknown>;
       const queues = body["queues"] as Record<string, { depth: number | null }>;
       expect(queues["import.file"]).toEqual({ depth: null });
       expect(queues["transcribe.voicenote"]).toEqual({ depth: null });
@@ -661,7 +750,9 @@ describe("/api/status", () => {
     dbDownServer = createServer({
       pool: badPool,
       summarizer: new (class implements StreamingSummarizer {
-        async *summarizeStream() { yield "x"; }
+        async *summarizeStream() {
+          yield "x";
+        }
       })(),
       tokenBudget: 24000,
       model: "fake",
@@ -674,7 +765,7 @@ describe("/api/status", () => {
     try {
       const r = await fetch(`${dbBase}/api/status`);
       expect(r.status).toBe(503);
-      const body = await r.json() as Record<string, unknown>;
+      const body = (await r.json()) as Record<string, unknown>;
       expect(body["error"]).toBe("status unavailable");
     } finally {
       await new Promise<void>((r) => dbDownServer.close(() => r()));
@@ -689,7 +780,9 @@ describe("/api/status", () => {
     const liveServer = createServer({
       pool: livePool,
       summarizer: new (class implements StreamingSummarizer {
-        async *summarizeStream() { yield "x"; }
+        async *summarizeStream() {
+          yield "x";
+        }
       })(),
       tokenBudget: 24000,
       model: "fake",
@@ -702,7 +795,7 @@ describe("/api/status", () => {
     try {
       const r = await fetch(`${liveBase}/api/status`);
       expect(r.status).toBe(200);
-      const body = await r.json() as Record<string, unknown>;
+      const body = (await r.json()) as Record<string, unknown>;
       const liveness = body["liveness"] as Record<string, unknown>;
       expect(liveness).not.toBeNull();
       expect(liveness["healthy"]).toBe(true);
@@ -718,7 +811,9 @@ describe("/api/status", () => {
     const liveServer = createServer({
       pool: livePool,
       summarizer: new (class implements StreamingSummarizer {
-        async *summarizeStream() { yield "x"; }
+        async *summarizeStream() {
+          yield "x";
+        }
       })(),
       tokenBudget: 24000,
       model: "fake",
@@ -731,7 +826,7 @@ describe("/api/status", () => {
     try {
       const r = await fetch(`${liveBase}/api/status`);
       expect(r.status).toBe(200);
-      const body = await r.json() as Record<string, unknown>;
+      const body = (await r.json()) as Record<string, unknown>;
       const liveness = body["liveness"] as Record<string, unknown>;
       expect(liveness).not.toBeNull();
       expect(liveness["healthy"]).toBe(false);
@@ -746,7 +841,7 @@ describe("/api/status", () => {
     // The main server in this suite was created without getLiveness
     const r = await fetch(`${base}/api/status`);
     expect(r.status).toBe(200);
-    const body = await r.json() as Record<string, unknown>;
+    const body = (await r.json()) as Record<string, unknown>;
     expect(body["liveness"]).toBeNull();
   });
 });
@@ -763,7 +858,12 @@ describe("GET /api/summaries", () => {
     container = await new PostgreSqlContainer("postgres:16-alpine").start();
     pool = new pg.Pool({ connectionString: container.getConnectionUri() });
     await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
-    server = createServer({ pool, summarizer: new FakeStreaming(), tokenBudget: 24000, model: "fake" });
+    server = createServer({
+      pool,
+      summarizer: new FakeStreaming(),
+      tokenBudget: 24000,
+      model: "fake",
+    });
     await new Promise<void>((r) => server.listen(0, r));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   }, 120_000);
@@ -781,18 +881,18 @@ describe("GET /api/summaries", () => {
     await pool.query(
       `INSERT INTO summaries (group_id, summary_type, parameters, output, model, created_at)
        VALUES ($1, 'last_n', '{"n":5}', '{"overview":"older"}', 'fake', '2026-01-01T10:00:00Z')`,
-      [groupId]
+      [groupId],
     );
     await pool.query(
       `INSERT INTO summaries (group_id, summary_type, parameters, output, model, created_at)
        VALUES ($1, 'watermark', '{"messageCount":10}', '{"overview":"newer"}', 'fake', '2026-01-02T10:00:00Z')`,
-      [groupId]
+      [groupId],
     );
 
     const r = await fetch(`${base}/api/summaries?group=API-sum-order`);
     expect(r.status).toBe(200);
     expect(r.headers.get("content-type")).toContain("application/json");
-    const body = await r.json() as Record<string, unknown>[];
+    const body = (await r.json()) as Record<string, unknown>[];
     expect(body).toHaveLength(2);
     expect(body[0].output).toMatchObject({ overview: "newer" });
     expect(body[1].output).toMatchObject({ overview: "older" });
@@ -819,7 +919,7 @@ describe("GET /api/summaries", () => {
 
     const r = await fetch(`${base}/api/summaries?group=API-sum-limit&limit=2`);
     expect(r.status).toBe(200);
-    const body = await r.json() as unknown[];
+    const body = (await r.json()) as unknown[];
     expect(body).toHaveLength(2);
   });
 
@@ -828,7 +928,7 @@ describe("GET /api/summaries", () => {
     // Just check it doesn't error and returns valid JSON — the cap is server-side behavior
     const r = await fetch(`${base}/api/summaries?group=API-sum-cap&limit=9999`);
     expect(r.status).toBe(200);
-    const body = await r.json() as unknown[];
+    const body = (await r.json()) as unknown[];
     // empty group → 0 results (cap means max 200 rows, not that it errors)
     expect(Array.isArray(body)).toBe(true);
   });
@@ -837,21 +937,21 @@ describe("GET /api/summaries", () => {
     const groupId = await upsertGroup(pool, { name: "API-sum-badlimit", source: "import" });
     const r = await fetch(`${base}/api/summaries?group=API-sum-badlimit&limit=notanumber`);
     expect(r.status).toBe(200);
-    const body = await r.json() as unknown[];
+    const body = (await r.json()) as unknown[];
     expect(Array.isArray(body)).toBe(true);
   });
 
   it("unknown group returns 200 with empty array", async () => {
     const r = await fetch(`${base}/api/summaries?group=totally-unknown-group-xyz`);
     expect(r.status).toBe(200);
-    const body = await r.json() as unknown[];
+    const body = (await r.json()) as unknown[];
     expect(body).toEqual([]);
   });
 
   it("missing group returns 400 with error message", async () => {
     const r = await fetch(`${base}/api/summaries`);
     expect(r.status).toBe(400);
-    const body = await r.json() as Record<string, unknown>;
+    const body = (await r.json()) as Record<string, unknown>;
     expect(body["error"]).toBe("Missing group.");
   });
 
@@ -859,7 +959,7 @@ describe("GET /api/summaries", () => {
     const r = await fetch(`${base}/api/groups`);
     expect(r.status).toBe(200);
     expect(r.headers.get("content-type")).toContain("application/json");
-    const body = await r.json() as unknown[];
+    const body = (await r.json()) as unknown[];
     expect(Array.isArray(body)).toBe(true);
   });
 });
@@ -888,9 +988,19 @@ describe("handleSummarize — client disconnect aborts summarizer, no commit", (
 
   async function seedText(groupId: number, content: string, dedupeKey: string): Promise<void> {
     const row: NormalizedMessage & { participantId: number | null } = {
-      groupId, importId: null, source: "import", senderName: "Dana", messageType: "text",
-      textContent: content, mediaFilename: null, mediaPath: null, mediaStatus: null,
-      externalId: null, participantId: null, sentAt: new Date("2026-01-01T10:00:00Z"), dedupeKey,
+      groupId,
+      importId: null,
+      source: "import",
+      senderName: "Dana",
+      messageType: "text",
+      textContent: content,
+      mediaFilename: null,
+      mediaPath: null,
+      mediaStatus: null,
+      externalId: null,
+      participantId: null,
+      sentAt: new Date("2026-01-01T10:00:00Z"),
+      dedupeKey,
     };
     await insertMessages(pool, [row]);
   }
@@ -907,7 +1017,10 @@ describe("handleSummarize — client disconnect aborts summarizer, no commit", (
         yield "partial-token";
         // Hang until signal fires (or 10s safety)
         await new Promise<void>((resolve) => {
-          if (opts?.signal?.aborted) { resolve(); return; }
+          if (opts?.signal?.aborted) {
+            resolve();
+            return;
+          }
           if (opts?.signal) {
             opts.signal.addEventListener("abort", () => resolve(), { once: true });
           } else {
@@ -932,7 +1045,7 @@ describe("handleSummarize — client disconnect aborts summarizer, no commit", (
               resolve();
             });
             res.on("error", () => resolve());
-          }
+          },
         );
         req.on("error", () => resolve());
         setTimeout(resolve, 5000);
@@ -946,10 +1059,9 @@ describe("handleSummarize — client disconnect aborts summarizer, no commit", (
       // expect(signalAborted).toBe(true); // nice-to-have, not strictly required
 
       // No summary row should have been committed
-      const { rows } = await pool.query(
-        `SELECT COUNT(*) AS cnt FROM summaries WHERE group_id=$1`,
-        [g]
-      );
+      const { rows } = await pool.query(`SELECT COUNT(*) AS cnt FROM summaries WHERE group_id=$1`, [
+        g,
+      ]);
       expect(Number(rows[0].cnt)).toBe(0);
     } finally {
       await new Promise<void>((r) => srv.close(() => r()));
@@ -967,7 +1079,10 @@ describe("handleSummarize — client disconnect aborts summarizer, no commit", (
         signalReceived = opts?.signal != null;
         yield "partial-token";
         await new Promise<void>((resolve) => {
-          if (opts?.signal?.aborted) { resolve(); return; }
+          if (opts?.signal?.aborted) {
+            resolve();
+            return;
+          }
           if (opts?.signal) {
             opts.signal.addEventListener("abort", () => resolve(), { once: true });
           } else {
@@ -991,7 +1106,7 @@ describe("handleSummarize — client disconnect aborts summarizer, no commit", (
               resolve();
             });
             res.on("error", () => resolve());
-          }
+          },
         );
         req.on("error", () => resolve());
         setTimeout(resolve, 5000);
@@ -1005,14 +1120,14 @@ describe("handleSummarize — client disconnect aborts summarizer, no commit", (
       // No summary row
       const { rows: sumRows } = await pool.query(
         `SELECT COUNT(*) AS cnt FROM summaries WHERE group_id=$1`,
-        [g]
+        [g],
       );
       expect(Number(sumRows[0].cnt)).toBe(0);
 
       // No watermark row
       const { rows: wmRows } = await pool.query(
         `SELECT COUNT(*) AS cnt FROM read_watermarks WHERE group_id=$1`,
-        [g]
+        [g],
       );
       expect(Number(wmRows[0].cnt)).toBe(0);
     } finally {
@@ -1041,14 +1156,23 @@ describe("static asset handler", () => {
     container = await new PostgreSqlContainer("postgres:16-alpine").start();
     pool = new pg.Pool({ connectionString: container.getConnectionUri() });
     await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
-    server = createServer({ pool, summarizer: new FakeStreaming(), tokenBudget: 24000, model: "fake" });
+    server = createServer({
+      pool,
+      summarizer: new FakeStreaming(),
+      tokenBudget: 24000,
+      model: "fake",
+    });
     await new Promise<void>((r) => server.listen(0, r));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   }, 120_000);
 
   afterAll(async () => {
     // Clean up fixture
-    try { fs.unlinkSync(FIXTURE_PATH); } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(FIXTURE_PATH);
+    } catch {
+      /* ignore */
+    }
     await new Promise<void>((r) => server.close(() => r()));
     await pool?.end();
     await container?.stop();

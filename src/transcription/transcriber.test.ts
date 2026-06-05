@@ -1,8 +1,8 @@
-import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildFfmpegArgs } from "./transcriber.js";
+import { describe, expect, it } from "vitest";
 import { IvritWhisperTranscriber } from "./ivrit-whisper.js";
+import { buildFfmpegArgs } from "./transcriber.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_WORKER = path.resolve(__dirname, "__fixtures__/fake-worker.mjs");
@@ -11,10 +11,14 @@ describe("buildFfmpegArgs", () => {
   it("builds 16kHz mono WAV conversion args", () => {
     const args = buildFfmpegArgs("/in/voice.opus", "/tmp/out.wav");
     expect(args).toEqual([
-      "-i", "/in/voice.opus",
-      "-ar", "16000",
-      "-ac", "1",
-      "-f", "wav",
+      "-i",
+      "/in/voice.opus",
+      "-ar",
+      "16000",
+      "-ac",
+      "1",
+      "-f",
+      "wav",
       "-y",
       "/tmp/out.wav",
     ]);

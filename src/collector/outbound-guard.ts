@@ -50,7 +50,7 @@ export function applyOutboundGuard<T>(sock: T, allowSend: boolean): T {
       target[method] = async (): Promise<never> => {
         throw new Error(
           `Outbound WhatsApp send blocked: "${method}" is disabled (read-only mode). ` +
-            `Set WHATSAPP_ALLOW_SEND=true to explicitly enable sending.`
+            `Set WHATSAPP_ALLOW_SEND=true to explicitly enable sending.`,
         );
       };
     }

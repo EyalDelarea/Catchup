@@ -22,7 +22,7 @@ export type EnqueueFolderResult = {
 export async function enqueueFolder(
   bus: JobBus,
   dir: string,
-  files?: string[]
+  files?: string[],
 ): Promise<EnqueueFolderResult> {
   const entries: string[] =
     files ??

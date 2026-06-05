@@ -3,21 +3,19 @@
  * Tests that handleIncomingMessage persists live messages correctly,
  * including deduplication.
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  PostgreSqlContainer,
-  type StartedPostgreSqlContainer,
-} from "@testcontainers/postgresql";
-import pg from "pg";
+
 import fs from "node:fs";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runMigrationsUp } from "../db/migrate.js";
-import { handleIncomingMessage } from "./collector.js";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { WAMessage } from "@whiskeysockets/baileys";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { runMigrationsUp } from "../db/migrate.js";
 import { InMemoryJobBus } from "../jobs/in-memory-bus.js";
 import { InMemoryJobRunRecorder } from "../jobs/job-run-recorder.js";
+import { handleIncomingMessage } from "./collector.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
@@ -26,15 +24,17 @@ const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
 // Fake Baileys message factories
 // ---------------------------------------------------------------------------
 
-function makeFakeWATextMessage(overrides: Partial<{
-  id: string;
-  remoteJid: string;
-  fromMe: boolean;
-  participant: string;
-  pushName: string;
-  timestampSeconds: number;
-  text: string;
-}> = {}): WAMessage {
+function makeFakeWATextMessage(
+  overrides: Partial<{
+    id: string;
+    remoteJid: string;
+    fromMe: boolean;
+    participant: string;
+    pushName: string;
+    timestampSeconds: number;
+    text: string;
+  }> = {},
+): WAMessage {
   const {
     id = "LIVE_MSG_001",
     remoteJid = "111222333-444555666@g.us",
@@ -58,12 +58,14 @@ function makeFakeWATextMessage(overrides: Partial<{
   } as unknown as WAMessage;
 }
 
-function makeFakeWAVoiceNoteMessage(overrides: Partial<{
-  id: string;
-  remoteJid: string;
-  pushName: string;
-  timestampSeconds: number;
-}> = {}): WAMessage {
+function makeFakeWAVoiceNoteMessage(
+  overrides: Partial<{
+    id: string;
+    remoteJid: string;
+    pushName: string;
+    timestampSeconds: number;
+  }> = {},
+): WAMessage {
   const {
     id = "LIVE_VOICE_001",
     remoteJid = "111222333-444555666@g.us",
@@ -129,7 +131,7 @@ describe("collector integration", () => {
 
     const { rows } = await pool.query(
       `SELECT source, external_id, text_content, sent_at FROM messages WHERE external_id = $1`,
-      ["EXT_001"]
+      ["EXT_001"],
     );
     expect(rows.length).toBe(1);
     const row = rows[0];
@@ -152,7 +154,7 @@ describe("collector integration", () => {
 
     const { rows } = await pool.query(
       `SELECT whatsapp_id, source FROM groups WHERE whatsapp_id = $1`,
-      ["222@g.us"]
+      ["222@g.us"],
     );
     expect(rows.length).toBe(1);
     expect(rows[0].source).toBe("live");
@@ -175,7 +177,7 @@ describe("collector integration", () => {
 
     const { rows } = await pool.query(
       `SELECT COUNT(*) AS cnt FROM messages WHERE external_id = $1`,
-      ["EXT_DUPE_001"]
+      ["EXT_DUPE_001"],
     );
     expect(Number(rows[0].cnt)).toBe(1);
   });
@@ -193,7 +195,7 @@ describe("collector integration", () => {
 
     const { rows } = await pool.query(
       `SELECT p.display_name FROM messages m JOIN participants p ON p.id = m.participant_id WHERE m.external_id = $1`,
-      ["EXT_PART_001"]
+      ["EXT_PART_001"],
     );
     expect(rows.length).toBe(1);
     expect(rows[0].display_name).toBe("Dana");
@@ -201,10 +203,11 @@ describe("collector integration", () => {
 
   it("sets source to 'mixed' when an import group already exists for the same JID", async () => {
     // First, insert an import group with whatsapp_id set
-    await pool.query(
-      `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, $3)`,
-      ["555@g.us", "Pre-existing Import Group", "import"]
-    );
+    await pool.query(`INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, $3)`, [
+      "555@g.us",
+      "Pre-existing Import Group",
+      "import",
+    ]);
 
     const waMsg = makeFakeWATextMessage({
       id: "EXT_MIXED_001",
@@ -216,10 +219,9 @@ describe("collector integration", () => {
 
     await handleIncomingMessage(pool, waMsg, { dataDir });
 
-    const { rows } = await pool.query(
-      `SELECT source FROM groups WHERE whatsapp_id = $1`,
-      ["555@g.us"]
-    );
+    const { rows } = await pool.query(`SELECT source FROM groups WHERE whatsapp_id = $1`, [
+      "555@g.us",
+    ]);
     expect(rows.length).toBe(1);
     expect(rows[0].source).toBe("mixed");
   });
@@ -239,7 +241,11 @@ describe("collector integration", () => {
       timestampSeconds: 1700010000,
     });
 
-    const stored = await handleIncomingMessage(pool, waMsg, { dataDir, bus, downloadVoiceNote: fakeDownloader });
+    const stored = await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      bus,
+      downloadVoiceNote: fakeDownloader,
+    });
     expect(stored).toBe(true);
 
     // Exactly one job enqueued
@@ -256,7 +262,7 @@ describe("collector integration", () => {
     // downloaded, present media (so the worker can transcribe it).
     const { rows } = await pool.query(
       `SELECT id, media_filename, media_path, media_status FROM messages WHERE external_id = $1`,
-      ["EXT_VN_ENQUEUE_001"]
+      ["EXT_VN_ENQUEUE_001"],
     );
     expect(rows.length).toBe(1);
     expect(String(rows[0].id)).toBe(messageId);
@@ -273,12 +279,15 @@ describe("collector integration", () => {
       timestampSeconds: 1700020000,
     });
 
-    const stored = await handleIncomingMessage(pool, waMsg, { dataDir, downloadVoiceNote: fakeDownloader });
+    const stored = await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      downloadVoiceNote: fakeDownloader,
+    });
     expect(stored).toBe(true);
 
     const { rows } = await pool.query(
       `SELECT media_filename, media_path, media_status, message_type FROM messages WHERE external_id = $1`,
-      ["EXT_VN_DL_001"]
+      ["EXT_VN_DL_001"],
     );
     expect(rows.length).toBe(1);
     expect(rows[0].message_type).toBe("media");
@@ -292,7 +301,9 @@ describe("collector integration", () => {
   it("marks media 'missing' and does NOT enqueue when the download fails", async () => {
     const recorder = new InMemoryJobRunRecorder();
     const bus = new InMemoryJobBus(recorder);
-    const failingDownloader = async () => { throw new Error("download boom"); };
+    const failingDownloader = async () => {
+      throw new Error("download boom");
+    };
 
     const waMsg = makeFakeWAVoiceNoteMessage({
       id: "EXT_VN_DLFAIL_001",
@@ -301,12 +312,16 @@ describe("collector integration", () => {
       timestampSeconds: 1700021000,
     });
 
-    const stored = await handleIncomingMessage(pool, waMsg, { dataDir, bus, downloadVoiceNote: failingDownloader });
+    const stored = await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      bus,
+      downloadVoiceNote: failingDownloader,
+    });
     expect(stored).toBe(true); // the message row is still recorded
 
     const { rows } = await pool.query(
       `SELECT media_status, media_path FROM messages WHERE external_id = $1`,
-      ["EXT_VN_DLFAIL_001"]
+      ["EXT_VN_DLFAIL_001"],
     );
     expect(rows[0].media_status).toBe("missing");
     expect(rows[0].media_path).toBeNull();
@@ -359,12 +374,20 @@ describe("collector integration", () => {
     });
 
     // First insertion — should enqueue (media downloaded → present)
-    const first = await handleIncomingMessage(pool, waMsg, { dataDir, bus, downloadVoiceNote: fakeDownloader });
+    const first = await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      bus,
+      downloadVoiceNote: fakeDownloader,
+    });
     expect(first).toBe(true);
     expect(recorder.enqueuedJobs.length).toBe(1);
 
     // Second insertion (duplicate) — should NOT enqueue again
-    const second = await handleIncomingMessage(pool, waMsg, { dataDir, bus, downloadVoiceNote: fakeDownloader });
+    const second = await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      bus,
+      downloadVoiceNote: fakeDownloader,
+    });
     expect(second).toBe(false);
     expect(recorder.enqueuedJobs.length).toBe(1); // still only 1
   });
@@ -405,10 +428,7 @@ describe("collector integration", () => {
 
     await handleIncomingMessage(pool, waMsg, { dataDir, groupSubject });
 
-    const { rows } = await pool.query(
-      `SELECT name FROM groups WHERE whatsapp_id = $1`,
-      [jid]
-    );
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
     expect(rows[0].name).toBe("My Resolved Group");
     expect(groupSubjectCallCount).toBe(1);
   });
@@ -426,10 +446,7 @@ describe("collector integration", () => {
 
     await handleIncomingMessage(pool, waMsg, { dataDir });
 
-    const { rows } = await pool.query(
-      `SELECT name FROM groups WHERE whatsapp_id = $1`,
-      [jid]
-    );
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
     expect(rows[0].name).toBe("Alice");
   });
 
@@ -450,10 +467,7 @@ describe("collector integration", () => {
     const stored = await handleIncomingMessage(pool, waMsg, { dataDir, groupSubject });
     expect(stored).toBe(true); // message was still stored
 
-    const { rows } = await pool.query(
-      `SELECT name FROM groups WHERE whatsapp_id = $1`,
-      [jid]
-    );
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
     // Name stays as the raw JID (unchanged)
     expect(rows[0].name).toBe(jid);
   });
@@ -487,10 +501,7 @@ describe("collector integration", () => {
     // groupSubject called exactly once (first message) — gate prevents second call
     expect(groupSubjectCallCount).toBe(1);
 
-    const { rows } = await pool.query(
-      `SELECT name FROM groups WHERE whatsapp_id = $1`,
-      [jid]
-    );
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
     expect(rows[0].name).toBe("Resolved Once");
   });
 
@@ -507,10 +518,7 @@ describe("collector integration", () => {
 
     await handleIncomingMessage(pool, waMsg, { dataDir });
 
-    const { rows } = await pool.query(
-      `SELECT name FROM groups WHERE whatsapp_id = $1`,
-      [jid]
-    );
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
     expect(rows[0].name).toBe("Lid Person");
   });
 
@@ -534,10 +542,7 @@ describe("collector integration", () => {
 
     expect(groupSubjectCalled).toBe(false);
 
-    const { rows } = await pool.query(
-      `SELECT name FROM groups WHERE whatsapp_id = $1`,
-      [jid]
-    );
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
     expect(rows[0].name).toBe("Another Lid Person");
   });
 });

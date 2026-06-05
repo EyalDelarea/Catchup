@@ -17,9 +17,7 @@ export async function checkDocker(probe: () => Promise<boolean>): Promise<CheckR
   const name = "Docker running";
   try {
     const ok = await probe();
-    return ok
-      ? { name, ok: true }
-      : { name, ok: false, fix: "start Docker Desktop" };
+    return ok ? { name, ok: true } : { name, ok: false, fix: "start Docker Desktop" };
   } catch (err) {
     return { name, ok: false, fix: "start Docker Desktop" };
   }
@@ -30,9 +28,7 @@ export async function checkComposeServices(probe: () => Promise<boolean>): Promi
   const name = "Compose services up";
   try {
     const ok = await probe();
-    return ok
-      ? { name, ok: true }
-      : { name, ok: false, fix: "docker compose up -d" };
+    return ok ? { name, ok: true } : { name, ok: false, fix: "docker compose up -d" };
   } catch (err) {
     return { name, ok: false, fix: "docker compose up -d" };
   }
@@ -43,9 +39,7 @@ export async function checkPostgres(probe: () => Promise<boolean>): Promise<Chec
   const name = "Postgres reachable + migrations applied";
   try {
     const ok = await probe();
-    return ok
-      ? { name, ok: true }
-      : { name, ok: false, fix: "npm run migrate" };
+    return ok ? { name, ok: true } : { name, ok: false, fix: "npm run migrate" };
   } catch (err) {
     return { name, ok: false, fix: "npm run migrate" };
   }
@@ -56,9 +50,7 @@ export async function checkRabbitMQ(probe: () => Promise<boolean>): Promise<Chec
   const name = "RabbitMQ reachable";
   try {
     const ok = await probe();
-    return ok
-      ? { name, ok: true }
-      : { name, ok: false, fix: "docker compose up -d rabbitmq" };
+    return ok ? { name, ok: true } : { name, ok: false, fix: "docker compose up -d rabbitmq" };
   } catch (err) {
     return { name, ok: false, fix: "docker compose up -d rabbitmq" };
   }
@@ -67,7 +59,7 @@ export async function checkRabbitMQ(probe: () => Promise<boolean>): Promise<Chec
 /** 5. Ollama reachable AND SUMMARY_MODEL pulled */
 export async function checkOllama(
   model: string,
-  probe: () => Promise<boolean>
+  probe: () => Promise<boolean>,
 ): Promise<CheckResult> {
   const name = "Ollama reachable + model pulled";
   try {
@@ -106,9 +98,7 @@ export async function checkFfmpeg(probe: () => Promise<boolean>): Promise<CheckR
   const name = "ffmpeg on PATH";
   try {
     const ok = await probe();
-    return ok
-      ? { name, ok: true }
-      : { name, ok: false, fix: "brew install ffmpeg" };
+    return ok ? { name, ok: true } : { name, ok: false, fix: "brew install ffmpeg" };
   } catch (err) {
     return { name, ok: false, fix: "brew install ffmpeg" };
   }
@@ -120,9 +110,7 @@ export async function checkFfmpeg(probe: () => Promise<boolean>): Promise<CheckR
  * Run all checks and return one result per check. Never throws — each check
  * catches its own errors internally.
  */
-export async function runChecks(
-  checks: Array<() => Promise<CheckResult>>
-): Promise<CheckResult[]> {
+export async function runChecks(checks: Array<() => Promise<CheckResult>>): Promise<CheckResult[]> {
   return Promise.all(checks.map((c) => c()));
 }
 
@@ -147,7 +135,9 @@ function realComposeProbe(): Promise<boolean> {
   return new Promise((resolve) => {
     const child = spawn("docker", ["compose", "ps", "--quiet"], { stdio: "pipe" });
     let stdout = "";
-    child.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
+    child.stdout?.on("data", (d: Buffer) => {
+      stdout += d.toString();
+    });
     child.on("error", () => resolve(false));
     child.on("close", (code) => {
       // Exit 0 and at least one container ID line
@@ -198,9 +188,7 @@ async function realOllamaProbe(ollamaHost: string, model: string): Promise<boole
     const models = body.models ?? [];
     // Normalize by stripping tag for loose matching
     const modelBase = model.split(":")[0]!;
-    return models.some(
-      (m) => m.name === model || m.name.startsWith(modelBase)
-    );
+    return models.some((m) => m.name === model || m.name.startsWith(modelBase));
   } catch {
     return false;
   }
@@ -229,9 +217,8 @@ export function defaultChecks(config: AppConfig): Array<() => Promise<CheckResul
     () => checkPostgres(() => realPostgresProbe(config.databaseUrl)),
     () => checkRabbitMQ(() => realRabbitMqProbe(config.broker.url)),
     () =>
-      checkOllama(
-        config.summarization.model,
-        () => realOllamaProbe(config.summarization.ollamaHost, config.summarization.model)
+      checkOllama(config.summarization.model, () =>
+        realOllamaProbe(config.summarization.ollamaHost, config.summarization.model),
       ),
     () => checkPython(() => realPythonProbe(config.transcription.pythonPath)),
     () => checkFfmpeg(() => realFfmpegProbe(config.transcription.ffmpegPath)),

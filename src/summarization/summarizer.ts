@@ -38,7 +38,7 @@ export interface StreamingSummarizer {
  */
 type FetchImpl = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }
+  init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },
 ) => Promise<Response>;
 
 /** Default socket-inactivity timeout — generous for cold Ollama model loads. */
@@ -82,9 +82,9 @@ function nodeHttpTransport(timeoutMs: number): FetchImpl {
             new Response(body, {
               status,
               headers: { "content-type": res.headers["content-type"] ?? "application/json" },
-            }) as Response & { ok: boolean; status: number }
+            }) as Response & { ok: boolean; status: number },
           );
-        }
+        },
       );
       req.on("error", reject);
       req.setTimeout(timeoutMs, () => {
@@ -97,9 +97,13 @@ function nodeHttpTransport(timeoutMs: number): FetchImpl {
           req.destroy(new DOMException("aborted", "AbortError"));
           return;
         }
-        init.signal.addEventListener("abort", () => {
-          req.destroy(new DOMException("aborted", "AbortError"));
-        }, { once: true });
+        init.signal.addEventListener(
+          "abort",
+          () => {
+            req.destroy(new DOMException("aborted", "AbortError"));
+          },
+          { once: true },
+        );
       }
 
       req.write(init.body);
@@ -155,7 +159,9 @@ export class OllamaSummarizer implements Summarizer, StreamingSummarizer {
       });
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
-      throw new Error(`Ollama not reachable at ${this.host} (${m}). Is it running? Try 'ollama serve'.`);
+      throw new Error(
+        `Ollama not reachable at ${this.host} (${m}). Is it running? Try 'ollama serve'.`,
+      );
     }
 
     if (!res.ok) {
@@ -170,7 +176,10 @@ export class OllamaSummarizer implements Summarizer, StreamingSummarizer {
     return { overview: text };
   }
 
-  async *summarizeStream(prompt: SummaryPrompt, opts?: { signal?: AbortSignal }): AsyncGenerator<string> {
+  async *summarizeStream(
+    prompt: SummaryPrompt,
+    opts?: { signal?: AbortSignal },
+  ): AsyncGenerator<string> {
     // If already aborted before we even start, return immediately.
     if (opts?.signal?.aborted) return;
 
@@ -194,7 +203,9 @@ export class OllamaSummarizer implements Summarizer, StreamingSummarizer {
       // Treat AbortError as a clean stop — not a crash.
       if (err instanceof Error && err.name === "AbortError") return;
       const m = err instanceof Error ? err.message : String(err);
-      throw new Error(`Ollama not reachable at ${this.host} (${m}). Is it running? Try 'ollama serve'.`);
+      throw new Error(
+        `Ollama not reachable at ${this.host} (${m}). Is it running? Try 'ollama serve'.`,
+      );
     }
     if (!res.ok) throw new Error(`Ollama not reachable at ${this.host}: HTTP ${res.status}.`);
     if (!res.body) throw new Error("Ollama returned no response body.");
@@ -228,7 +239,11 @@ export class OllamaSummarizer implements Summarizer, StreamingSummarizer {
         buf = buf.slice(nl + 1);
         if (!line) continue;
         let obj: { message?: { content?: string }; done?: boolean };
-        try { obj = JSON.parse(line); } catch { continue; }
+        try {
+          obj = JSON.parse(line);
+        } catch {
+          continue;
+        }
         const delta = obj.message?.content;
         if (delta) yield delta;
         if (obj.done) return;

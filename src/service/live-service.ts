@@ -13,24 +13,20 @@
  * `setCollectorConnected` / `recordHeartbeat` from service-status / heartbeat
  * are the defaults; override them in unit tests via deps.
  */
-import type pg from "pg";
+
 import type { WAMessage } from "@whiskeysockets/baileys";
+import type pg from "pg";
 import type { CollectorSession } from "../collector/session.js";
 import type { JobBus } from "../jobs/job-bus.js";
-import { startHeartbeat, type HeartbeatHandle } from "./heartbeat.js";
+import { type HeartbeatHandle, startHeartbeat } from "./heartbeat.js";
 
 // ---------------------------------------------------------------------------
 // Injectable function types (for unit testing)
 // ---------------------------------------------------------------------------
 
-export type SetConnectedFn = (
-  pool: pg.Pool | pg.PoolClient,
-  connected: boolean
-) => Promise<void>;
+export type SetConnectedFn = (pool: pg.Pool | pg.PoolClient, connected: boolean) => Promise<void>;
 
-export type RecordHeartbeatFn = (
-  pool: pg.Pool | pg.PoolClient
-) => Promise<void>;
+export type RecordHeartbeatFn = (pool: pg.Pool | pg.PoolClient) => Promise<void>;
 
 export type HandleMessageFn = (
   pool: pg.Pool | pg.PoolClient,
@@ -42,7 +38,7 @@ export type HandleMessageFn = (
     downloadImage?: (m: WAMessage) => Promise<Buffer>;
     downloadVideo?: (m: WAMessage) => Promise<Buffer>;
     groupSubject?: (jid: string) => Promise<string>;
-  }
+  },
 ) => Promise<boolean>;
 
 // ---------------------------------------------------------------------------
@@ -102,9 +98,7 @@ export function attachCollector(deps: AttachCollectorDeps): LiveServiceHandle {
     // This is resolved on first event; safe because events don't fire until
     // the session connects.
     _setConnected = async (p, c) => {
-      const { setCollectorConnected } = await import(
-        "../db/repositories/service-status.js"
-      );
+      const { setCollectorConnected } = await import("../db/repositories/service-status.js");
       await setCollectorConnected(p, c);
     };
   }
@@ -113,9 +107,7 @@ export function attachCollector(deps: AttachCollectorDeps): LiveServiceHandle {
     _recordHeartbeat = deps.recordHeartbeat;
   } else {
     _recordHeartbeat = async (p) => {
-      const { recordHeartbeat } = await import(
-        "../db/repositories/service-status.js"
-      );
+      const { recordHeartbeat } = await import("../db/repositories/service-status.js");
       await recordHeartbeat(p);
     };
   }
@@ -124,9 +116,7 @@ export function attachCollector(deps: AttachCollectorDeps): LiveServiceHandle {
     _handleMessage = deps.handleMessage;
   } else {
     _handleMessage = async (p, msg, opts) => {
-      const { handleIncomingMessage } = await import(
-        "../collector/collector.js"
-      );
+      const { handleIncomingMessage } = await import("../collector/collector.js");
       return handleIncomingMessage(p, msg, opts);
     };
   }

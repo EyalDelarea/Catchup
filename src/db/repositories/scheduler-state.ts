@@ -6,7 +6,7 @@ import type pg from "pg";
  */
 export async function getLastRun(
   client: pg.Pool | pg.PoolClient,
-  slotKey: string
+  slotKey: string,
 ): Promise<Date | null> {
   const { rows } = await client.query<{ last_run_at: Date }>(
     `
@@ -14,7 +14,7 @@ export async function getLastRun(
     FROM scheduler_state
     WHERE slot_key = $1
     `,
-    [slotKey]
+    [slotKey],
   );
 
   if (rows.length === 0) return null;
@@ -31,7 +31,7 @@ export async function getLastRun(
 export async function recordRun(
   client: pg.Pool | pg.PoolClient,
   slotKey: string,
-  runAt: Date
+  runAt: Date,
 ): Promise<void> {
   await client.query(
     `
@@ -41,6 +41,6 @@ export async function recordRun(
       SET last_run_at = GREATEST(scheduler_state.last_run_at, EXCLUDED.last_run_at),
           updated_at  = now()
     `,
-    [slotKey, runAt]
+    [slotKey, runAt],
   );
 }

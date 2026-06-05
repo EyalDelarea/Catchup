@@ -13,15 +13,13 @@ import type { MigrationBuilder } from "node-pg-migrate";
  */
 export const up = (pgm: MigrationBuilder): void => {
   // Drop the old check constraint (auto-named by Postgres from the inline CHECK).
-  pgm.sql(
-    `ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_media_status_check`
-  );
+  pgm.sql(`ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_media_status_check`);
 
   // Add the updated named check constraint with 'pruned' included.
   pgm.addConstraint(
     "messages",
     "messages_media_status_check",
-    `CHECK (media_status IN ('present', 'missing', 'pruned') OR media_status IS NULL)`
+    `CHECK (media_status IN ('present', 'missing', 'pruned') OR media_status IS NULL)`,
   );
 };
 
@@ -33,6 +31,6 @@ export const down = (pgm: MigrationBuilder): void => {
   pgm.addConstraint(
     "messages",
     "messages_media_status_check",
-    `CHECK (media_status IN ('present', 'missing') OR media_status IS NULL)`
+    `CHECK (media_status IN ('present', 'missing') OR media_status IS NULL)`,
   );
 };
