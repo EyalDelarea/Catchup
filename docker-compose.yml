@@ -1,6 +1,9 @@
-# Postgres is part of this compose project (010) — `make dev` brings it up alongside
-# rabbitmq/loki/grafana. Data lives in the `pgdata` named volume. (The app's Node
-# worker/serve, Ollama, and the Python Whisper transcriber run on the host by design.)
+# Pinned project name so the stack is independent of the folder name (renaming the
+# directory won't orphan the containers/volumes). Postgres is part of this compose
+# project — `make dev` brings it up alongside rabbitmq/loki/grafana. Data lives in
+# the `pgdata` named volume. (The app's Node worker/serve, Ollama, and the Python
+# Whisper transcriber run on the host by design.)
+name: catchup
 
 services:
   postgres:

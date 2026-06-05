@@ -1,0 +1,50 @@
+<svg width="960" height="280" viewBox="0 0 960 280" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Catchup — local-first WhatsApp summaries">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="960" y2="280" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0b1320"/>
+      <stop offset="1" stop-color="#06090f"/>
+    </linearGradient>
+    <radialGradient id="bgglow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(250 80) rotate(35) scale(620 360)">
+      <stop stop-color="#38bdf8" stop-opacity="0.22"/>
+      <stop offset="0.7" stop-color="#38bdf8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tile2" x1="80" y1="64" x2="272" y2="216" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0d1626"/>
+      <stop offset="1" stop-color="#070a10"/>
+    </linearGradient>
+    <linearGradient id="bubble2" x1="104" y1="84" x2="248" y2="196" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#aee9ff"/>
+      <stop offset="0.5" stop-color="#7dd3fc"/>
+      <stop offset="1" stop-color="#38bdf8"/>
+    </linearGradient>
+    <linearGradient id="word" x1="340" y1="110" x2="720" y2="170" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#eaf7ff"/>
+      <stop offset="1" stop-color="#7dd3fc"/>
+    </linearGradient>
+    <filter id="soft2" x="40" y="40" width="280" height="220" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="6" stdDeviation="11" flood-color="#1ca3e0" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <rect width="960" height="280" rx="28" fill="url(#bg)"/>
+  <rect width="960" height="280" rx="28" fill="url(#bgglow)"/>
+
+  <!-- logo tile -->
+  <g transform="translate(80 64)">
+    <rect width="160" height="160" rx="38" fill="url(#tile2)"/>
+    <rect x="0.8" y="0.8" width="158.4" height="158.4" rx="37.2" stroke="#7dd3fc" stroke-opacity="0.16" stroke-width="1.6"/>
+    <g filter="url(#soft2)" transform="translate(-80 -64)">
+      <path d="M104 88H190a22 22 0 0 1 22 22v36a22 22 0 0 1-22 22h-44l-26 22 3-22h-22a22 22 0 0 1-22-22v-36a22 22 0 0 1 22-22Z" fill="url(#bubble2)"/>
+    </g>
+    <g transform="translate(-80 -64)" fill="#06243a">
+      <rect x="100" y="108" width="84" height="11" rx="5.5" fill-opacity="0.92"/>
+      <rect x="100" y="127" width="62" height="11" rx="5.5" fill-opacity="0.78"/>
+      <rect x="100" y="146" width="38" height="11" rx="5.5" fill-opacity="0.62"/>
+    </g>
+  </g>
+
+  <!-- wordmark -->
+  <text x="300" y="158" font-family="'Trebuchet MS', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="84" font-weight="700" letter-spacing="-2" fill="url(#word)">Catchup</text>
+  <!-- tagline -->
+  <text x="304" y="194" font-family="'Trebuchet MS', 'Segoe UI', Helvetica, Arial, sans-serif" font-size="20" font-weight="500" letter-spacing="0" fill="#8aa0b6">Local-first WhatsApp summaries. Nothing leaves your machine.</text>
+</svg>

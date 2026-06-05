@@ -1,4 +1,18 @@
-# Catchup
+<p align="center">
+  <img src="assets/banner.png" alt="Catchup — local-first WhatsApp summaries" width="720" />
+</p>
+
+<p align="center">
+  <a href="#requirements"><img src="https://img.shields.io/badge/node-%E2%89%A522-3c873a?logo=node.js&logoColor=white" alt="Node ≥ 22" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-38bdf8" alt="MIT License" /></a>
+  <a href="https://github.com/EyalDelarea/Catchup/actions/workflows/ci.yml"><img src="https://github.com/EyalDelarea/Catchup/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <img src="https://img.shields.io/badge/privacy-100%25%20local-0ea5e9" alt="100% local" />
+  <img src="https://img.shields.io/badge/lang-TypeScript-3178c6?logo=typescript&logoColor=white" alt="TypeScript" />
+</p>
+
+# 🧊 Catchup
+
+> 📨 **Wake up to 200 unread messages?** Catchup reads them for you — overnight, locally — so you open your phone to *the gist*, not the scroll.
 
 A **local-first** personal WhatsApp summarizer. Messages are collected passively via a read-only linked device (using [Baileys](https://github.com/WhiskeySockets/Baileys)), stored in your own Postgres, transcribed locally (faster-whisper), captioned locally (Ollama vision), and summarized locally (Ollama) — then displayed in a mobile-first, RTL Hebrew web UI. **Nothing leaves your machine.** No cloud API keys, no hosted service, no data sharing.
 
@@ -6,7 +20,19 @@ A **local-first** personal WhatsApp summarizer. Messages are collected passively
   <img src="assets/screenshot.png" alt="Catchup web UI — a structured Hebrew catch-up summary of a group" width="380" />
 </p>
 
-<p align="center"><sub>The mobile web UI showing a structured "what I missed" summary (demo data).</sub></p>
+<p align="center"><sub>📱 The mobile web UI showing a structured "what I missed" summary (demo data).</sub></p>
+
+---
+
+## ✨ How it works
+
+```
+📲 WhatsApp  →  🗄️  Postgres  →  🎙️ Whisper (voice)  →  👁️ Ollama vision (media)  →  🧠 Ollama summary  →  📱 Web UI
+   (Baileys,        (your own        transcribe            caption images/video        "what I missed"      (mobile, RTL,
+    read-only)       database)        Hebrew notes          locally                     digest               Hebrew)
+```
+
+Every arrow runs on **your machine**. The only thing that touches the network is the read-only WhatsApp link itself.
 
 ---
 
@@ -51,8 +77,8 @@ VISION_VIDEO_MODEL=gemma4:12b
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/your-org/catchup.git
-cd catchup
+git clone https://github.com/EyalDelarea/Catchup.git
+cd Catchup
 npm install
 
 # 2. Configure
