@@ -88,6 +88,18 @@ export type DigestConfig = {
   times: string;
 };
 
+export type OpsSweepConfig = {
+  /** When false, the ops-sweep scheduler does not start. Default true. */
+  enabled: boolean;
+  /**
+   * Comma-separated HH:MM times (local timezone) at which the ops sweep runs.
+   * Default "08:00,18:00".
+   */
+  times: string;
+  /** Maximum auto re-drives per work-item before flagging. Default 2. */
+  redriveCap: number;
+};
+
 export type AppConfig = {
   databaseUrl: string;
   dataDir: string;
@@ -100,6 +112,7 @@ export type AppConfig = {
   worker: WorkerConfig;
   whatsapp: WhatsAppConfig;
   digest: DigestConfig;
+  opsSweep: OpsSweepConfig;
   /**
    * When true, keep media files on disk even after a successful
    * analysis/transcription. Default false (prune after caption).
@@ -159,6 +172,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       // Default true — disable with DIGEST_ENABLED=false.
       enabled: env.DIGEST_ENABLED !== "false",
       times: env.DIGEST_TIMES ?? "08:00,18:00",
+    },
+    opsSweep: {
+      // Default true — disable with OPS_SWEEP_ENABLED=false.
+      enabled: env.OPS_SWEEP_ENABLED !== "false",
+      times: env.OPS_SWEEP_TIMES ?? "08:00,18:00",
+      redriveCap: Number(env.OPS_REDRIVE_CAP ?? 2),
     },
   };
 }

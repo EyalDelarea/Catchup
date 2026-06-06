@@ -17,7 +17,7 @@
 
 import type pg from "pg";
 import type { JobBus } from "../jobs/job-bus.js";
-import type { EnqueueScheduledRunOpts, EnqueueScheduledRunResult } from "./enqueue-run.js";
+import type { EnqueueScheduledRunOpts } from "./enqueue-run.js";
 import type { TimeSlot } from "./schedule.js";
 import { dueCatchup, nextRun } from "./schedule.js";
 
@@ -34,25 +34,30 @@ export type StartSchedulerOpts = {
   getLastRun: (pool: pg.Pool, slotKey: string) => Promise<Date | null>;
   /** Injected DB write — records that a slot ran at a given time. */
   recordRun: (pool: pg.Pool, slotKey: string, runAt: Date) => Promise<void>;
-  /** Injected enqueue function. */
-  enqueueRun: (
-    pool: pg.Pool,
-    bus: JobBus,
-    opts?: EnqueueScheduledRunOpts,
-  ) => Promise<EnqueueScheduledRunResult>;
+  /**
+   * Injected enqueue function. Return type is `unknown` so non-digest callers
+   * (e.g. the ops-sweep adapter) can return void — the runner already ignores
+   * the return value.
+   */
+  enqueueRun: (pool: pg.Pool, bus: JobBus, opts?: EnqueueScheduledRunOpts) => Promise<unknown>;
   logger?: {
     info: (msg: string) => void;
     error: (msg: string) => void;
   };
+  /**
+   * Prefix used in scheduler_state slot keys, e.g. "digest" → "digest@08:00".
+   * Defaults to "digest" for backward compatibility.
+   */
+  slotKeyPrefix?: string;
 };
 
 /**
- * Stable slot key for a time slot, e.g. "digest@08:00".
+ * Stable slot key for a time slot, e.g. "digest@08:00" or "ops@08:00".
  */
-function slotKey(slot: TimeSlot): string {
+function slotKey(slot: TimeSlot, prefix: string): string {
   const hh = String(slot.h).padStart(2, "0");
   const mm = String(slot.m).padStart(2, "0");
-  return `digest@${hh}:${mm}`;
+  return `${prefix}@${hh}:${mm}`;
 }
 
 export type SchedulerHandle = {
@@ -65,8 +70,19 @@ export type SchedulerHandle = {
  * If !enabled, returns a no-op stop() immediately.
  */
 export function startScheduler(opts: StartSchedulerOpts): SchedulerHandle {
-  const { pool, bus, times, enabled, now, setTimer, getLastRun, recordRun, enqueueRun, logger } =
-    opts;
+  const {
+    pool,
+    bus,
+    times,
+    enabled,
+    now,
+    setTimer,
+    getLastRun,
+    recordRun,
+    enqueueRun,
+    logger,
+    slotKeyPrefix = "digest",
+  } = opts;
 
   if (!enabled || times.length === 0) {
     return { stop: () => {} };
@@ -108,7 +124,7 @@ export function startScheduler(opts: StartSchedulerOpts): SchedulerHandle {
         // We record for every time slot that is <= firedAt and > their last run.
         // For simplicity (single catch-up slot per fire), record for each slot.
         for (const slot of times) {
-          const key = slotKey(slot);
+          const key = slotKey(slot, slotKeyPrefix);
           const slotInstant = new Date(firedAt);
           slotInstant.setHours(slot.h, slot.m, 0, 0);
           // If the slot has just passed (or is very close to now), record it.
@@ -159,7 +175,7 @@ export function startScheduler(opts: StartSchedulerOpts): SchedulerHandle {
       // Strategy: check if ANY slot is due, then enqueue once.
       let latestLastRun: Date | null = null;
       for (const slot of times) {
-        const key = slotKey(slot);
+        const key = slotKey(slot, slotKeyPrefix);
         try {
           const lr = await getLastRun(pool, key);
           if (lr !== null) {
@@ -169,7 +185,7 @@ export function startScheduler(opts: StartSchedulerOpts): SchedulerHandle {
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          log.error(`getLastRun for ${slotKey(slot)} failed: ${msg}`);
+          log.error(`getLastRun for ${slotKey(slot, slotKeyPrefix)} failed: ${msg}`);
         }
       }
 
@@ -181,7 +197,7 @@ export function startScheduler(opts: StartSchedulerOpts): SchedulerHandle {
 
         // Record the catch-up run for all slot keys (sets their last_run_at to now)
         for (const slot of times) {
-          const key = slotKey(slot);
+          const key = slotKey(slot, slotKeyPrefix);
           try {
             await recordRun(pool, key, nowDate);
           } catch (err) {

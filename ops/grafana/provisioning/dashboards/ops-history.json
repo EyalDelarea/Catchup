@@ -1,0 +1,99 @@
+{
+  "title": "Ops Sweep (history)",
+  "uid": "ops-history",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-7d", "to": "now" },
+  "timezone": "browser",
+  "tags": ["catchup", "ops"],
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Dead & Flagged over time",
+      "description": "Per ops sweep: jobs still dead, and work-items auto-recovery gave up on (flagged). Flagged > 0 means a real, persistent failure.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "pointSize": 6, "showPoints": "always" }, "min": 0 },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "flagged" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] },
+          { "matcher": { "id": "byName", "options": "dead" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "time_series", "editorMode": "code", "rawSql": "SELECT captured_at AS time, jobs_dead AS dead, flagged FROM status_snapshots WHERE $__timeFilter(captured_at) ORDER BY captured_at" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Re-driven per sweep",
+      "description": "Work-items auto-re-enqueued each sweep (transient recoveries).",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "bars", "lineWidth": 1, "fillOpacity": 60, "pointSize": 5 }, "min": 0, "color": { "mode": "fixed", "fixedColor": "green" } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "time_series", "editorMode": "code", "rawSql": "SELECT captured_at AS time, redriven FROM status_snapshots WHERE $__timeFilter(captured_at) ORDER BY captured_at" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Job-status counts trend",
+      "description": "pending / running / done / failed at each sweep.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "pointSize": 5, "showPoints": "auto" }, "min": 0 },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "time_series", "editorMode": "code", "rawSql": "SELECT captured_at AS time, jobs_pending AS pending, jobs_running AS running, jobs_done AS done, jobs_failed AS failed FROM status_snapshots WHERE $__timeFilter(captured_at) ORDER BY captured_at" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "state-timeline",
+      "title": "Collector connected",
+      "description": "Whether the WhatsApp collector was connected at each sweep.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "fillOpacity": 80 },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "down", "color": "red" }, "1": { "text": "up", "color": "green" } } }
+          ],
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": { "showValue": "never", "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "time_series", "editorMode": "code", "rawSql": "SELECT captured_at AS time, collector_connected::int AS connected FROM status_snapshots WHERE $__timeFilter(captured_at) ORDER BY captured_at" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Latest flagged work-items (cap exceeded)",
+      "description": "Items auto-recovery gave up on at the most recent sweep — these are what the daily escalation opens issues for.",
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showHeader": true },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "grafana-postgresql-datasource", "uid": "whatsapp_pg" }, "format": "table", "editorMode": "code", "rawSql": "SELECT f->>'type' AS job_type, f->>'messageId' AS message_id, (f->>'redriveCount')::int AS redrive_count, f->>'lastError' AS last_error FROM status_snapshots s, jsonb_array_elements(s.flagged_details) f WHERE s.captured_at = (SELECT max(captured_at) FROM status_snapshots WHERE jsonb_array_length(flagged_details) > 0)" }
+      ]
+    }
+  ]
+}

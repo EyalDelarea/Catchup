@@ -8,7 +8,7 @@ import { countReadableByGroup, getOldestSentAt } from "../db/repositories/messag
 import { upsertWatermark } from "../db/repositories/read-watermarks.js";
 import { insertSummary, listSummariesByGroup } from "../db/repositories/summaries.js";
 import type { JobType } from "../jobs/job-types.js";
-import { buildStatusReport } from "../service/status.js";
+import { buildStatusReport, DEFAULT_STALENESS_MS } from "../service/status.js";
 import { prepareSummary } from "../summarization/prepare.js";
 import { prepareCatchup } from "../summarization/prepare-catchup.js";
 import { persistCatchupResult } from "../summarization/run-summary.js";
@@ -19,7 +19,6 @@ import { sseFrame } from "./sse.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const INDEX_HTML = path.join(__dirname, "public", "index.html");
 
-const DEFAULT_STALENESS_MS = 5 * 60 * 1_000; // 5 minutes
 const CATCHUP_FALLBACK_N = 25;
 
 export type ServerDeps = {
