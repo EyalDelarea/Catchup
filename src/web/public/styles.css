@@ -1693,6 +1693,13 @@ body::after {
   margin-top: 4px;
 }
 
+.total-section-heading {
+  margin: 1.25rem 0 0.6rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--fg-dim);
+}
+
 .perchat {
   padding: 13px 15px;
 }

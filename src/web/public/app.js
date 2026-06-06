@@ -36,6 +36,9 @@ const staleBanner = document.getElementById("stale-banner");
 /** Currently open EventSource (cleaned up on view change). */
 let activeEventSource = null;
 
+/** Total-view loader elapsed-timer handle (cleaned up on teardown). */
+let totalLoaderTimer = null;
+
 /** Health poll interval id. */
 let healthInterval = null;
 
@@ -683,6 +686,10 @@ function teardownStream() {
     clearInterval(detailState.syncingTimer);
     detailState.syncingTimer = null;
   }
+  if (totalLoaderTimer) {
+    clearInterval(totalLoaderTimer);
+    totalLoaderTimer = null;
+  }
   if (activeEventSource) {
     activeEventSource.close();
     activeEventSource = null;
@@ -1319,27 +1326,71 @@ function buildTotalShell() {
         <button class="chip" data-since="${escHtml(sinceWeek)}" aria-pressed="false">שבוע</button>
       </div>
 
-      <!-- Progress status line -->
-      <p id="total-progress" class="detail-status" aria-live="polite"></p>
+      <!-- Animated loader (map phase) -->
+      <div id="total-loader" aria-live="polite"></div>
+
+      <!-- Inline error line -->
+      <p id="total-error" class="detail-status detail-status--error" role="alert" hidden></p>
 
       <!-- Streaming highlights output -->
       <div id="total-highlights" class="glass-card summary-card" hidden>
         <div id="total-highlights-body" class="summary-card__body summary-card__body--rendered"></div>
       </div>
 
-      <!-- Per-chat accordion -->
+      <!-- Per-chat accordion (all active chats, collapsible) -->
       <div id="total-perchat" class="total-perchat-list"></div>
     </div>
   `;
 }
 
+/** Render the animated Glacier loader in the total view. */
+function showTotalLoader(statusLine) {
+  const region = document.getElementById("total-loader");
+  if (region) {
+    region.innerHTML = buildGlacierLoader({ statusLine, elapsed: 0, phase: "analyzing" });
+  }
+}
+
+/** Remove the total-view loader and stop its elapsed timer. */
+function clearTotalLoader() {
+  const region = document.getElementById("total-loader");
+  if (region) region.innerHTML = "";
+  if (totalLoaderTimer) {
+    clearInterval(totalLoaderTimer);
+    totalLoaderTimer = null;
+  }
+}
+
 /**
- * Set the progress line text in the total view.
- * @param {string} text
+ * Render the per-chat breakdown: ALL active chats, busiest first, each a
+ * collapsed <details> so the less-important ones stay tucked away by default.
+ * @param {Array<{name:string, messageCount:number, summary:string}>} perChat
  */
-function setTotalProgress(text) {
-  const el = document.getElementById("total-progress");
-  if (el) el.textContent = text;
+function renderTotalPerChat(perChat) {
+  const perChatEl = document.getElementById("total-perchat");
+  if (!perChatEl) return;
+  if (perChat.length === 0) {
+    perChatEl.innerHTML = "";
+    return;
+  }
+  const chats = perChat
+    .slice()
+    .sort((a, b) => Number(b.messageCount) - Number(a.messageCount));
+  const heading = `<h3 class="total-section-heading">לפי צ׳אט · ${chats.length} צ׳אטים</h3>`;
+  const items = chats
+    .map(
+      (c) => `
+        <details class="perchat glass-card">
+          <summary class="perchat__summary">
+            <span class="perchat__name">${escHtml(c.name)}</span>
+            <span class="perchat__count">${Number(c.messageCount).toLocaleString("he-IL")} הודעות</span>
+          </summary>
+          <div class="perchat__body summary-card__body--rendered">${renderMarkdown(c.summary)}</div>
+        </details>
+      `,
+    )
+    .join("");
+  perChatEl.innerHTML = heading + items;
 }
 
 /**
@@ -1352,24 +1403,48 @@ function runTotal({ since }) {
   const highlightsCard = document.getElementById("total-highlights");
   const highlightsBody = document.getElementById("total-highlights-body");
   const perChatEl = document.getElementById("total-perchat");
+  const errorEl = document.getElementById("total-error");
 
   if (highlightsCard) highlightsCard.hidden = true;
   if (highlightsBody) highlightsBody.innerHTML = "";
   if (perChatEl) perChatEl.innerHTML = "";
-  setTotalProgress("טוען…");
+  if (errorEl) errorEl.hidden = true;
+
+  // Show the animated loader during the (slow) per-chat map phase, with a
+  // live elapsed counter.
+  const startedAt = Date.now();
+  showTotalLoader("סורק את הצ׳אטים…");
+  totalLoaderTimer = setInterval(() => {
+    const sec = Math.round((Date.now() - startedAt) / 1000);
+    const el = document.getElementById("gl-elapsed");
+    if (el) el.textContent = `${sec}ש׳`;
+  }, 1000);
 
   let raw = "";
+  let loaderActive = true;
   const es = new EventSource(`/api/total-summary?since=${encodeURIComponent(since)}`);
   activeEventSource = es;
 
   es.addEventListener("status", (e) => {
     const d = JSON.parse(e.data);
-    if (d.phase === "chat") {
-      setTotalProgress(`מסכם: ${d.name} (${d.index}/${d.total})`);
+    if (d.phase === "chat" && loaderActive) {
+      const status = document.querySelector("#total-loader .glacier-loader__status");
+      if (status) status.textContent = `מסכם את "${d.name}" · צ׳אט ${d.index} מתוך ${d.total}`;
+      // Determinate progress from real chat counts; reserve the tail (88→100%)
+      // for the cross-chat reduce step that follows the per-chat map phase.
+      const fill = document.querySelector("#total-loader .glacier-loader__bar-fill");
+      if (fill && d.total > 0) {
+        fill.style.width = `${Math.round(((d.index - 1) / d.total) * 88)}%`;
+      }
     }
   });
 
   es.addEventListener("token", (e) => {
+    // First token = the reduce phase started: drop the loader, reveal the card.
+    if (loaderActive) {
+      loaderActive = false;
+      clearTotalLoader();
+    }
     raw += JSON.parse(e.data).delta;
     if (highlightsCard) highlightsCard.hidden = false;
     if (highlightsBody) {
@@ -1379,24 +1454,11 @@ function runTotal({ since }) {
 
   es.addEventListener("done", (e) => {
     const d = JSON.parse(e.data);
-    setTotalProgress("");
+    loaderActive = false;
+    clearTotalLoader();
     if (highlightsCard) highlightsCard.hidden = false;
-    if (highlightsBody) {
-      highlightsBody.innerHTML = renderMarkdown(d.highlights);
-    }
-    if (perChatEl) {
-      perChatEl.innerHTML = (d.perChat || [])
-        .map((c) => `
-          <details class="perchat glass-card">
-            <summary class="perchat__summary">
-              <span class="perchat__name">${escHtml(c.name)}</span>
-              <span class="perchat__count">${Number(c.messageCount).toLocaleString("he-IL")} הודעות</span>
-            </summary>
-            <div class="perchat__body summary-card__body--rendered">${renderMarkdown(c.summary)}</div>
-          </details>
-        `)
-        .join("");
-    }
+    if (highlightsBody) highlightsBody.innerHTML = renderMarkdown(d.highlights);
+    renderTotalPerChat(d.perChat || []);
     teardownStream();
   });
 
@@ -1408,7 +1470,12 @@ function runTotal({ since }) {
     } catch (_) {
       // native EventSource connection error — no parseable data, keep default
     }
-    setTotalProgress(msg);
+    loaderActive = false;
+    clearTotalLoader();
+    if (errorEl) {
+      errorEl.textContent = msg;
+      errorEl.hidden = false;
+    }
     teardownStream();
   });
 }
