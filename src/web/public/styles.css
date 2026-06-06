@@ -1658,6 +1658,76 @@ body::after {
   }
 }
 
+/* ── Total summary pinned card ───────────────────────────── */
+.group-card--total {
+  border-color: rgba(125, 211, 252, 0.35);
+  background: rgba(125, 211, 252, 0.06);
+}
+
+.group-card--total .group-card__name {
+  color: var(--accent);
+}
+
+/* ── Per-chat accordion (total view) ────────────────────── */
+.total-perchat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.perchat {
+  padding: 13px 15px;
+}
+
+.perchat[open] > .perchat__summary {
+  margin-bottom: 12px;
+}
+
+.perchat__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Remove default disclosure marker */
+.perchat__summary::-webkit-details-marker {
+  display: none;
+}
+
+.perchat__summary::marker {
+  display: none;
+}
+
+.perchat__name {
+  flex: 1;
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--fg);
+  line-height: 1.3;
+}
+
+.perchat__count {
+  font-size: var(--text-xs);
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.perchat__body {
+  font-size: 0.84375rem;
+  line-height: 1.72;
+  color: var(--fg-card);
+  padding-top: 8px;
+  border-top: 1px solid rgba(200, 225, 255, 0.08);
+}
+
 /* ── No horizontal overflow at small widths ─────────────── */
 @media (max-width: 430px) {
   #app {

@@ -46,13 +46,16 @@ let cachedGroups = [];
 
 /**
  * Navigate to a view, pushing a history entry.
- * @param {"feed"|"detail"} view
+ * @param {"feed"|"detail"|"total"} view
  * @param {string} [group] — required for "detail"
  */
 function navigate(view, group) {
   if (view === "detail" && group) {
     history.pushState({ view: "detail", group }, "", `#group=${encodeURIComponent(group)}`);
     renderDetail(group, true);
+  } else if (view === "total") {
+    history.pushState({ view: "total" }, "", "#total");
+    renderTotal(true);
   } else {
     history.pushState({ view: "feed" }, "", location.pathname);
     renderFeed();
@@ -65,6 +68,8 @@ window.addEventListener("popstate", (e) => {
   const state = e.state;
   if (state?.view === "detail" && state.group) {
     renderDetail(state.group, false);
+  } else if (state?.view === "total") {
+    renderTotal(false);
   } else {
     renderFeed();
   }
@@ -200,22 +205,30 @@ function renderGroupList(groups, filter) {
     ? groups.filter((g) => g.name.toLowerCase().includes(q))
     : groups;
 
+  // Always prepend the pinned total card (not affected by search filter)
+  const totalCard = buildTotalCard();
+
   if (filtered.length === 0) {
-    list.innerHTML = `<p class="empty-state">${
+    list.innerHTML = totalCard + `<p class="empty-state">${
       q ? "לא נמצאו קבוצות תואמות." : "אין שיחות שמורות."
     }</p>`;
-    return;
+  } else {
+    list.innerHTML = totalCard + filtered
+      .map((g, i) => buildGroupCard(g, i))
+      .join("");
   }
 
-  list.innerHTML = filtered
-    .map((g, i) => buildGroupCard(g, i))
-    .join("");
+  // Wire the total card button
+  const totalBtn = list.querySelector(".group-card__cta--total");
+  if (totalBtn) {
+    totalBtn.addEventListener("click", () => navigate("total"));
+  }
 
-  // Wire CTA buttons
+  // Wire group CTA buttons
   list.querySelectorAll(".group-card__cta").forEach((btn) => {
     btn.addEventListener("click", () => {
       const group = btn.dataset.group;
-      navigate("detail", group);
+      if (group) navigate("detail", group);
     });
   });
 }
@@ -258,15 +271,26 @@ function wireSearchInput() {
   const input = document.getElementById("search-input");
   if (!input) return;
   input.addEventListener("input", () => {
+    // renderGroupList re-wires all buttons (including the pinned total card)
     renderGroupList(cachedGroups, input.value);
-    // Re-wire buttons after re-render
-    const list = document.getElementById("feed-list");
-    if (list) {
-      list.querySelectorAll(".group-card__cta").forEach((btn) => {
-        btn.addEventListener("click", () => navigate("detail", btn.dataset.group));
-      });
-    }
   });
+}
+
+/** Build the pinned "total summary" card HTML (always shown at top of feed). */
+function buildTotalCard() {
+  return `
+    <div class="glass-card group-card group-card--total" role="listitem">
+      <div class="group-card__name">📊 סיכום כללי</div>
+      <div class="group-card__meta">
+        <span class="group-card__dot"></span>
+        <span>מה קרה בכל הצ׳אטים</span>
+      </div>
+      <button
+        class="group-card__cta group-card__cta--total"
+        aria-label="פתח סיכום כללי לכל הצ׳אטים"
+      >סכם את כל הצ׳אטים ›</button>
+    </div>
+  `;
 }
 
 /** Build placeholder skeleton cards for loading state. */
@@ -1219,6 +1243,167 @@ function toggleHistoryRow(row) {
   if (chevron) {
     chevron.classList.toggle("history-row__chevron--open", !expanded);
   }
+}
+
+/* ── 5g. Total view ──────────────────────────────────────── */
+
+/**
+ * Render the total-summary view.
+ * @param {boolean} autoStart — if true, begin streaming immediately with the default 24h range
+ */
+function renderTotal(autoStart) {
+  teardownStream();
+  app.innerHTML = buildTotalShell();
+
+  const backBtn = document.getElementById("total-back-btn");
+  if (backBtn) {
+    backBtn.addEventListener("click", () => navigate("feed"));
+  }
+
+  // Wire range chips
+  const chipsContainer = document.getElementById("total-chips");
+  if (chipsContainer) {
+    chipsContainer.addEventListener("click", (e) => {
+      const btn = e.target.closest(".chip[data-since]");
+      if (!btn) return;
+      // Mark active
+      chipsContainer.querySelectorAll(".chip").forEach((c) => {
+        c.classList.toggle("chip--active", c === btn);
+        c.setAttribute("aria-pressed", c === btn ? "true" : "false");
+      });
+      runTotal({ since: btn.dataset.since });
+    });
+  }
+
+  if (autoStart) {
+    runTotal({ since: defaultTotalSince() });
+  }
+}
+
+/** Return the ISO timestamp for 24 hours ago (the default range). */
+function defaultTotalSince() {
+  return new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+}
+
+/** Build the total-view shell HTML. */
+function buildTotalShell() {
+  const since24h = defaultTotalSince();
+  const since3d  = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString();
+  const sinceWeek = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+
+  return `
+    <div class="detail-view">
+      <nav class="detail-nav" aria-label="ניווט">
+        <button class="back-btn" id="total-back-btn" aria-label="חזרה לרשימת הקבוצות">
+          <span class="back-btn__arrow" aria-hidden="true">‹</span>
+          חזרה
+        </button>
+        <div class="health-pill" role="status" aria-live="polite">
+          <span class="health-pill__dot"></span>
+          <span>טוען…</span>
+        </div>
+      </nav>
+
+      <div class="detail-ghead">
+        <h2 class="detail-gtitle">📊 סיכום כללי</h2>
+        <div class="detail-gfresh">
+          <span class="group-card__dot" aria-hidden="true"></span>
+          <span>מה קרה בכל הצ׳אטים</span>
+        </div>
+      </div>
+
+      <!-- Range chips for total view -->
+      <div class="chips mode-chips" role="group" aria-label="בחירת טווח זמן" id="total-chips">
+        <button class="chip chip--active" data-since="${escHtml(since24h)}" aria-pressed="true">24 שעות</button>
+        <button class="chip" data-since="${escHtml(since3d)}" aria-pressed="false">3 ימים</button>
+        <button class="chip" data-since="${escHtml(sinceWeek)}" aria-pressed="false">שבוע</button>
+      </div>
+
+      <!-- Progress status line -->
+      <p id="total-progress" class="detail-status" aria-live="polite"></p>
+
+      <!-- Streaming highlights output -->
+      <div id="total-highlights" class="glass-card summary-card" hidden>
+        <div id="total-highlights-body" class="summary-card__body summary-card__body--rendered"></div>
+      </div>
+
+      <!-- Per-chat accordion -->
+      <div id="total-perchat" class="total-perchat-list"></div>
+    </div>
+  `;
+}
+
+/**
+ * Set the progress line text in the total view.
+ * @param {string} text
+ */
+function setTotalProgress(text) {
+  const el = document.getElementById("total-progress");
+  if (el) el.textContent = text;
+}
+
+/**
+ * Start a total-summary SSE stream.
+ * @param {{ since: string }} params
+ */
+function runTotal({ since }) {
+  teardownStream();
+
+  const highlightsCard = document.getElementById("total-highlights");
+  const highlightsBody = document.getElementById("total-highlights-body");
+  const perChatEl = document.getElementById("total-perchat");
+
+  if (highlightsCard) highlightsCard.hidden = true;
+  if (highlightsBody) highlightsBody.innerHTML = "";
+  if (perChatEl) perChatEl.innerHTML = "";
+  setTotalProgress("טוען…");
+
+  let raw = "";
+  const es = new EventSource(`/api/total-summary?since=${encodeURIComponent(since)}`);
+  activeEventSource = es;
+
+  es.addEventListener("status", (e) => {
+    const d = JSON.parse(e.data);
+    if (d.phase === "chat") {
+      setTotalProgress(`מסכם: ${d.name} (${d.index}/${d.total})`);
+    }
+  });
+
+  es.addEventListener("token", (e) => {
+    raw += JSON.parse(e.data).delta;
+    if (highlightsCard) highlightsCard.hidden = false;
+    if (highlightsBody) {
+      highlightsBody.innerHTML = `${renderMarkdown(raw)}<span class="caret" aria-hidden="true"></span>`;
+    }
+  });
+
+  es.addEventListener("done", (e) => {
+    const d = JSON.parse(e.data);
+    setTotalProgress("");
+    if (highlightsCard) highlightsCard.hidden = false;
+    if (highlightsBody) {
+      highlightsBody.innerHTML = renderMarkdown(d.highlights);
+    }
+    if (perChatEl) {
+      perChatEl.innerHTML = d.perChat
+        .map((c) => `
+          <details class="perchat glass-card">
+            <summary class="perchat__summary">
+              <span class="perchat__name">${escHtml(c.name)}</span>
+              <span class="perchat__count">${Number(c.messageCount).toLocaleString("he-IL")} הודעות</span>
+            </summary>
+            <div class="perchat__body summary-card__body--rendered">${renderMarkdown(c.summary)}</div>
+          </details>
+        `)
+        .join("");
+    }
+    teardownStream();
+  });
+
+  es.addEventListener("error", () => {
+    setTotalProgress("שגיאה בהפקת הסיכום.");
+    teardownStream();
+  });
 }
 
 /* ── 6. Helpers ──────────────────────────────────────────── */
