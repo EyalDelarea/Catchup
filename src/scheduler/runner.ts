@@ -119,7 +119,23 @@ export function startScheduler(opts: StartSchedulerOpts): SchedulerHandle {
       if (stopped) return;
       const firedAt = now();
       try {
-        await enqueueRun(pool, bus);
+        // Find the most recent last-run across all slots to bound the total-summary window.
+        let periodicLatestLastRun: Date | null = null;
+        for (const slot of times) {
+          const key = slotKey(slot, slotKeyPrefix);
+          try {
+            const lr = await getLastRun(pool, key);
+            if (lr !== null && (periodicLatestLastRun === null || lr > periodicLatestLastRun)) {
+              periodicLatestLastRun = lr;
+            }
+          } catch {
+            // Ignore per-slot errors; fallback to 12h window below
+          }
+        }
+        // Total summary window = since the previous scheduled run (or last 12h on first fire).
+        const TWELVE_H_MS = 12 * 60 * 60 * 1000;
+        const sinceForTotal = periodicLatestLastRun ?? new Date(firedAt.getTime() - TWELVE_H_MS);
+        await enqueueRun(pool, bus, { sinceForTotal });
         // Record the run for the slot that just fired.
         // We record for every time slot that is <= firedAt and > their last run.
         // For simplicity (single catch-up slot per fire), record for each slot.
@@ -193,7 +209,11 @@ export function startScheduler(opts: StartSchedulerOpts): SchedulerHandle {
       if (dueCatchup(nowDate, latestLastRun, times)) {
         if (stopped) return;
         log.info(`Startup catch-up: running enqueueScheduledRun`);
-        await enqueueRun(pool, bus);
+        // Total summary window = since the previous scheduled run (or last 12h
+        // on first ever run, so the first digest is non-empty but bounded).
+        const TWELVE_H_MS = 12 * 60 * 60 * 1000;
+        const sinceForTotal = latestLastRun ?? new Date(nowDate.getTime() - TWELVE_H_MS);
+        await enqueueRun(pool, bus, { sinceForTotal });
 
         // Record the catch-up run for all slot keys (sets their last_run_at to now)
         for (const slot of times) {
