@@ -6,11 +6,13 @@ import {
   isDisplayNameUnresolved,
   listGroups,
   listUnresolvedGroups,
+  representativeSenderName,
   updateDisplayName,
   upsertGroup,
   upsertGroupByWhatsappId,
 } from "./groups.js";
 import { insertMessages } from "./messages.js";
+import { upsertParticipant } from "./participants.js";
 
 function makeMsg(
   groupId: number,
@@ -220,5 +222,81 @@ describe("listUnresolvedGroups", () => {
     expect(entry).toBeDefined();
     expect(typeof entry!.id).toBe("number");
     expect(entry!.whatsappId).toBe(jid);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// representativeSenderName — must name a DM after the OTHER party, never `from_me`
+// ---------------------------------------------------------------------------
+
+describe("representativeSenderName", () => {
+  let pool: pg.Pool;
+
+  beforeAll(async () => {
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
+  }, 120_000);
+
+  afterAll(async () => {
+    await pool?.end();
+  }, 30_000);
+
+  it("ignores from_me messages so a DM is named after the other party even when the owner sent last", async () => {
+    const groupId = await upsertGroup(pool, { name: "rsn-dm-owner-last", source: "import" });
+    const otherId = await upsertParticipant(pool, "Bar Hevr");
+    const ownerId = await upsertParticipant(pool, "Eyal Delarea");
+
+    // The OTHER party spoke earlier; the device owner sent the most-recent message.
+    await insertMessages(pool, [
+      makeMsg(groupId, "rsn-owner-1", new Date("2026-06-05T20:00:00Z"), {
+        senderName: "Bar Hevr",
+        participantId: otherId,
+        fromMe: false,
+      }),
+      makeMsg(groupId, "rsn-owner-2", new Date("2026-06-05T22:00:00Z"), {
+        senderName: "Eyal Delarea",
+        participantId: ownerId,
+        fromMe: true,
+      }),
+    ]);
+
+    const name = await representativeSenderName(pool, groupId);
+    expect(name).toBe("Bar Hevr");
+  });
+
+  it("returns the most-recent non-owner sender when several exist", async () => {
+    const groupId = await upsertGroup(pool, { name: "rsn-dm-multi", source: "import" });
+    const otherId = await upsertParticipant(pool, "Rivi Shimshi");
+    const ownerId = await upsertParticipant(pool, "Eyal Delarea");
+
+    await insertMessages(pool, [
+      makeMsg(groupId, "rsn-multi-1", new Date("2026-06-01T10:00:00Z"), {
+        senderName: "Rivi Shimshi",
+        participantId: otherId,
+        fromMe: false,
+      }),
+      makeMsg(groupId, "rsn-multi-2", new Date("2026-06-02T10:00:00Z"), {
+        senderName: "Eyal Delarea",
+        participantId: ownerId,
+        fromMe: true,
+      }),
+    ]);
+
+    const name = await representativeSenderName(pool, groupId);
+    expect(name).toBe("Rivi Shimshi");
+  });
+
+  it("returns null when the only messages are from the owner", async () => {
+    const groupId = await upsertGroup(pool, { name: "rsn-only-owner", source: "import" });
+    const ownerId = await upsertParticipant(pool, "Eyal Delarea");
+    await insertMessages(pool, [
+      makeMsg(groupId, "rsn-only-owner-1", new Date("2026-06-01T10:00:00Z"), {
+        senderName: "Eyal Delarea",
+        participantId: ownerId,
+        fromMe: true,
+      }),
+    ]);
+
+    const name = await representativeSenderName(pool, groupId);
+    expect(name).toBeNull();
   });
 });
