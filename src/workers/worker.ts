@@ -40,6 +40,7 @@ const PREFETCH_ONE_TYPES = new Set<JobType>([
   "analyze.image",
   "analyze.video",
   "summarize.group",
+  "summarize.total",
 ]);
 
 /**
@@ -57,6 +58,8 @@ export function opForJobType(type: JobType): string {
     case "import.file":
       return "import";
     case "summarize.group":
+      return "summary";
+    case "summarize.total":
       return "summary";
     default:
       return type;
@@ -349,6 +352,35 @@ async function main(): Promise<void> {
       updateWatermark: upsertWatermark,
       model: config.summarization.model,
       tokenBudget: config.summarization.tokenBudget,
+    });
+  }
+
+  if (requestedTypes.includes("summarize.total")) {
+    const { makeSummarizeTotalHandler } = await import("./handlers/summarize-total.js");
+    const { generateTotalSummary } = await import("../summarization/total-summary.js");
+    const { insertTotalSummary } = await import("../db/repositories/total-summaries.js");
+    const { OllamaSummarizer } = await import("../summarization/summarizer.js");
+    const totalSummarizer = new OllamaSummarizer({
+      host: config.summarization.ollamaHost,
+      model: config.summarization.model,
+      numCtx: config.summarization.numCtx,
+      temperature: config.summarization.temperature,
+      repeatPenalty: config.summarization.repeatPenalty,
+      numPredict: config.summarization.numPredict,
+    });
+    handlers["summarize.total"] = makeSummarizeTotalHandler({
+      pool,
+      generateTotalSummary: (range) =>
+        generateTotalSummary(
+          {
+            pool,
+            summarizeStream: (prompt, o) => totalSummarizer.summarizeStream(prompt, o),
+            tokenBudget: config.summarization.tokenBudget,
+          },
+          range,
+        ),
+      insertTotalSummary,
+      model: config.summarization.model,
     });
   }
 
