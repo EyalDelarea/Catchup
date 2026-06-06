@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc13",
-    "amqplib": "^0.10.7",
+    "amqplib": "^2.0.1",
     "commander": "^15.0.0",
     "dotenv": "^17.2.3",
     "pg": "^8.16.3",
