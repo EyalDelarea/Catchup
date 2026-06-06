@@ -84,14 +84,15 @@ describe("CLI contract — invalid inputs exit non-zero (SC-007)", () => {
   });
 
   it("import of an unsupported extension exits 1", () => {
-    const tmp = path.join(os.tmpdir(), `wsum-contract-${Date.now()}.pdf`);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "catchup-contract-"));
+    const tmp = path.join(dir, "unsupported.pdf");
     fs.writeFileSync(tmp, "x");
     try {
       const r = run(["import", tmp, "--name", "X"]);
       expect(r.status).toBe(1);
       expect(r.stderr.toLowerCase()).toContain("unsupported");
     } finally {
-      fs.rmSync(tmp, { force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 

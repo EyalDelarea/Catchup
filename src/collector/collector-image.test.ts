@@ -8,7 +8,9 @@
  * - No downloadImage provided: NOT enqueued
  */
 
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import type { WAMessage } from "@whiskeysockets/baileys";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -88,11 +90,12 @@ describe("collector image enqueue (T016)", () => {
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: await createTestDatabase() });
-    dataDir = os.tmpdir();
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "catchup-collector-image-test-"));
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
+    if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true });
   }, 30_000);
 
   it("enqueues analyze.image for a new non-sticker image when downloaded successfully", async () => {
