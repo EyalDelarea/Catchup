@@ -1385,7 +1385,7 @@ function runTotal({ since }) {
       highlightsBody.innerHTML = renderMarkdown(d.highlights);
     }
     if (perChatEl) {
-      perChatEl.innerHTML = d.perChat
+      perChatEl.innerHTML = (d.perChat || [])
         .map((c) => `
           <details class="perchat glass-card">
             <summary class="perchat__summary">
@@ -1400,8 +1400,15 @@ function runTotal({ since }) {
     teardownStream();
   });
 
-  es.addEventListener("error", () => {
-    setTotalProgress("שגיאה בהפקת הסיכום.");
+  es.addEventListener("error", (e) => {
+    let msg = "שגיאה בהפקת הסיכום.";
+    try {
+      const data = JSON.parse(e.data);
+      if (data?.message) msg = data.message;
+    } catch (_) {
+      // native EventSource connection error — no parseable data, keep default
+    }
+    setTotalProgress(msg);
     teardownStream();
   });
 }
