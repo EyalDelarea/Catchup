@@ -182,7 +182,11 @@ export async function listUnresolvedGroups(
  * Derive a representative sender name for a non-@g.us group (e.g. @lid / @s.whatsapp.net)
  * by looking up the most-recent non-null participant display_name among that group's messages.
  *
- * Returns null when no messages with a named participant exist yet.
+ * Excludes messages the device owner sent (from_me): a 1-on-1 DM must be named
+ * after the OTHER party, never after ourselves. Without this filter, a DM where
+ * we sent the most-recent message gets mislabeled with our own display name.
+ *
+ * Returns null when no inbound (non-from_me) named messages exist yet.
  */
 export async function representativeSenderName(
   client: pg.Pool | pg.PoolClient,
@@ -194,6 +198,7 @@ export async function representativeSenderName(
      JOIN participants p ON p.id = m.participant_id
      WHERE m.group_id = $1
        AND p.display_name IS NOT NULL
+       AND m.from_me IS NOT TRUE
      ORDER BY m.sent_at DESC
      LIMIT 1`,
     [groupId],
