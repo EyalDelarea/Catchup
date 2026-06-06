@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { OllamaVisionAnalyzer, sanitizeDescription } from "./ollama-analyzer.js";
 
 describe("sanitizeDescription", () => {
@@ -43,13 +43,20 @@ function makeErrorResponse(status: number, body: unknown): Response {
 
 /** Write a tiny temp file so OllamaVisionAnalyzer can read it as base64. */
 let tempFileCounter = 0;
+// A unique, private temp directory (0700) created lazily on first use, so test
+// files are never written to a predictable, world-readable path in the shared
+// os temp dir. Cleaned up in afterAll.
+let tempDir: string | undefined;
 function makeTempImageFile(content: string = "fake-image-bytes"): string {
-  const tmpDir = os.tmpdir();
-  // Unique per call: Date.now() alone collides when several files are made in the same ms.
-  const filePath = path.join(tmpDir, `test-img-${Date.now()}-${tempFileCounter++}.jpg`);
+  if (!tempDir) tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "catchup-ollama-test-"));
+  const filePath = path.join(tempDir, `test-img-${tempFileCounter++}.jpg`);
   fs.writeFileSync(filePath, Buffer.from(content, "utf8"));
   return filePath;
 }
+
+afterAll(() => {
+  if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+});
 
 // ---------------------------------------------------------------------------
 // Tests

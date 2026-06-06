@@ -58,8 +58,11 @@ export function createServer(deps: ServerDeps): http.Server {
           res.end(JSON.stringify(groups));
         })
         .catch((err) => {
+          process.stderr.write(
+            `Error handling /api/groups: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+          );
           res.writeHead(500, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          res.end(JSON.stringify({ error: "Internal server error." }));
         });
       return;
     }
@@ -114,15 +117,13 @@ async function handleStatic(pathname: string, res: http.ServerResponse): Promise
     res.end("Not found");
     return;
   }
-  let stat: fs.Stats;
+  // Read the file directly rather than stat-then-read: a separate existence
+  // check would be a TOCTOU race. A missing file or a directory both throw
+  // here (ENOENT / EISDIR) and resolve to 404.
+  let data: Buffer;
   try {
-    stat = fs.statSync(resolved);
+    data = fs.readFileSync(resolved);
   } catch {
-    res.writeHead(404, { "content-type": "text/plain" });
-    res.end("Not found");
-    return;
-  }
-  if (!stat.isFile()) {
     res.writeHead(404, { "content-type": "text/plain" });
     res.end("Not found");
     return;
@@ -131,7 +132,7 @@ async function handleStatic(pathname: string, res: http.ServerResponse): Promise
   const contentType = CONTENT_TYPES[ext] ?? "application/octet-stream";
   // Single-user LAN tool: revalidate every load so a redeploy never serves stale JS/CSS.
   res.writeHead(200, { "content-type": contentType, "cache-control": "no-cache" });
-  res.end(fs.readFileSync(resolved));
+  res.end(data);
 }
 
 async function handleSummaries(
@@ -171,8 +172,11 @@ async function handleSummaries(
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(serialized));
   } catch (err) {
+    process.stderr.write(
+      `Error handling /api/summaries: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+    );
     res.writeHead(500, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+    res.end(JSON.stringify({ error: "Internal server error." }));
   }
 }
 
