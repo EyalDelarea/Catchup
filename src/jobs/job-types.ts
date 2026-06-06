@@ -3,7 +3,8 @@ export type JobType =
   | "transcribe.voicenote"
   | "analyze.image"
   | "analyze.video"
-  | "summarize.group";
+  | "summarize.group"
+  | "summarize.total";
 
 /**
  * Single source of truth for all valid job types at runtime.
@@ -18,6 +19,7 @@ export const ALL_JOB_TYPES = [
   "analyze.image",
   "analyze.video",
   "summarize.group",
+  "summarize.total",
 ] as const satisfies readonly JobType[];
 
 export interface JobPayloads {
@@ -26,6 +28,7 @@ export interface JobPayloads {
   "analyze.image": { messageId: string };
   "analyze.video": { messageId: string };
   "summarize.group": { groupId: string };
+  "summarize.total": { since: string };
 }
 
 export interface Job<T extends JobType = JobType> {
