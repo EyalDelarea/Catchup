@@ -334,6 +334,9 @@ async function main(): Promise<void> {
       host: config.summarization.ollamaHost,
       model: config.summarization.model,
       numCtx: config.summarization.numCtx,
+      temperature: config.summarization.temperature,
+      repeatPenalty: config.summarization.repeatPenalty,
+      numPredict: config.summarization.numPredict,
     });
     handlers["summarize.group"] = makeSummarizeGroupHandler({
       pool,

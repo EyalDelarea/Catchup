@@ -36,6 +36,9 @@ export async function runSummarize(
       host: config.summarization.ollamaHost,
       model: config.summarization.model,
       numCtx: config.summarization.numCtx,
+      temperature: config.summarization.temperature,
+      repeatPenalty: config.summarization.repeatPenalty,
+      numPredict: config.summarization.numPredict,
     });
 
   const pool = new pg.Pool({ connectionString: databaseUrl });

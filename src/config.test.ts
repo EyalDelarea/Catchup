@@ -85,6 +85,9 @@ describe("loadConfig transcription block", () => {
       model: "gemma4:26b",
       numCtx: 32768,
       tokenBudget: 24000,
+      temperature: 0.7,
+      repeatPenalty: 1.1,
+      numPredict: 4096,
     });
 
     const overridden = loadConfig({
@@ -92,12 +95,18 @@ describe("loadConfig transcription block", () => {
       SUMMARY_MODEL: "gemma4:8b",
       SUMMARY_NUM_CTX: "65536",
       SUMMARY_TOKEN_BUDGET: "50000",
+      SUMMARY_TEMPERATURE: "0.9",
+      SUMMARY_REPEAT_PENALTY: "1.05",
+      SUMMARY_NUM_PREDICT: "2048",
     } as unknown as NodeJS.ProcessEnv);
     expect(overridden.summarization).toEqual({
       ollamaHost: "http://box:1234",
       model: "gemma4:8b",
       numCtx: 65536,
       tokenBudget: 50000,
+      temperature: 0.9,
+      repeatPenalty: 1.05,
+      numPredict: 2048,
     });
   });
 });

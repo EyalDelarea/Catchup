@@ -18,6 +18,12 @@ export type SummarizationConfig = {
   numCtx: number;
   /** Max estimated input tokens before a selection is rejected as too large. */
   tokenBudget: number;
+  /** Sampling temperature (default 0.7 — 0.2 produced terse summaries). */
+  temperature: number;
+  /** repeat_penalty (default 1.1 — 1.3 was too aggressive and suppressed detail). */
+  repeatPenalty: number;
+  /** Max tokens to generate (default 4096 — generous cap so summaries aren't truncated). */
+  numPredict: number;
 };
 
 export type WebConfig = {
@@ -117,6 +123,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       model: env.SUMMARY_MODEL ?? "gemma4:26b",
       numCtx: Number(env.SUMMARY_NUM_CTX ?? 32768),
       tokenBudget: Number(env.SUMMARY_TOKEN_BUDGET ?? 24000),
+      temperature: Number(env.SUMMARY_TEMPERATURE ?? 0.7),
+      repeatPenalty: Number(env.SUMMARY_REPEAT_PENALTY ?? 1.1),
+      numPredict: Number(env.SUMMARY_NUM_PREDICT ?? 4096),
     },
     vision: {
       model: env.VISION_MODEL ?? "gemma4:26b",
