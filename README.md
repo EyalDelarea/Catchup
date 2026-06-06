@@ -454,7 +454,7 @@ Tests use [Testcontainers](https://testcontainers.com/) for ephemeral Postgres a
 The worker can be started independently for debugging:
 
 ```bash
-npx tsx src/workers/worker.ts --types import.file,transcribe.voicenote,analyze.image,analyze.video,summarize.group
+npx tsx src/workers/worker.ts --types import.file,transcribe.voicenote,analyze.image,analyze.video,summarize.group,summarize.total
 ```
 
 </details>
