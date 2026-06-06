@@ -1,17 +1,12 @@
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroup } from "../db/repositories/groups.js";
 import { insertMessages } from "../db/repositories/messages.js";
 import type { NormalizedMessage } from "../importer/types.js";
+import { createTestDatabase } from "../test/db.js";
 import { runTranscription, transcribeOneNote } from "./run.js";
 import type { Transcriber } from "./transcriber.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
 
 // Stub: returns text, except for paths containing "bad" which throw (FR-013).
 class StubTranscriber implements Transcriber {
@@ -58,20 +53,16 @@ async function seedMedia(
 // ---------------------------------------------------------------------------
 
 describe("transcribeOneNote prune-after-caption", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
   let connectionString: string;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    connectionString = container.getConnectionUri();
+    connectionString = await createTestDatabase();
     pool = new pg.Pool({ connectionString });
-    await runMigrationsUp(connectionString, MIGRATIONS_DIR);
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   async function seedVoiceNote(groupName: string, dedupeKey: string): Promise<number> {
@@ -170,20 +161,16 @@ describe("transcribeOneNote prune-after-caption", () => {
 // ---------------------------------------------------------------------------
 
 describe("runTranscription", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
   let connectionString: string;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    connectionString = container.getConnectionUri();
+    connectionString = await createTestDatabase();
     pool = new pg.Pool({ connectionString });
-    await runMigrationsUp(connectionString, MIGRATIONS_DIR);
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   it("transcribes pending, records failures, and is resumable (FR-012, FR-013)", async () => {

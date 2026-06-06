@@ -1,15 +1,12 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroup } from "../db/repositories/groups.js";
 import { insertMediaAnalysis } from "../db/repositories/media-analyses.js";
 import { insertMessages } from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
 import { insertTranscript } from "../db/repositories/transcripts.js";
 import type { NormalizedMessage } from "../importer/types.js";
+import { createTestDatabase } from "../test/db.js";
 import {
   firstPendingVisualMediaAfter,
   firstPendingVoiceNoteAfter,
@@ -17,22 +14,15 @@ import {
   selectMessages,
 } from "./select.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
-
 describe("selectMessages", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   async function seed(
@@ -156,18 +146,14 @@ describe("selectMessages", () => {
 });
 
 describe("selectAfterCursor", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   async function seed(
@@ -317,18 +303,14 @@ describe("selectAfterCursor", () => {
 });
 
 describe("firstPendingVoiceNoteAfter", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   async function seed(
@@ -522,18 +504,14 @@ describe("firstPendingVoiceNoteAfter", () => {
 // ---------------------------------------------------------------------------
 
 describe("selectMessages with media_analyses", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   async function seed(
@@ -733,18 +711,14 @@ describe("selectMessages with media_analyses", () => {
 // ---------------------------------------------------------------------------
 
 describe("firstPendingVisualMediaAfter", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   async function seed(

@@ -12,30 +12,24 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runMigrationsUp } from "../db/migrate.js";
+import { createTestDatabase } from "../test/db.js";
 import { extractWhatsAppZip } from "./extract-whatsapp-zip.js";
 import { parseWhatsAppTextExport } from "./parse-whatsapp-text.js";
 import { runImport } from "./run-import.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_DIR = path.resolve(__dirname, "../db/migrations");
 const FIXTURES_DIR = path.resolve(__dirname, "../../fixtures");
 
 describe("import pipeline integration", () => {
-  let container: StartedPostgreSqlContainer;
   let connectionString: string;
   let pool: pg.Pool;
   let dataDir: string;
 
   beforeAll(async () => {
-    // Start a fresh Postgres container
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    connectionString = container.getConnectionUri();
+    connectionString = await createTestDatabase();
     pool = new pg.Pool({ connectionString });
-    await runMigrationsUp(connectionString, MIGRATIONS_DIR);
 
     // Use a temp dir as DATA_DIR so we don't pollute the repo
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "catchup-test-"));
@@ -43,7 +37,6 @@ describe("import pipeline integration", () => {
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
     // Clean up temp dir
     if (dataDir && fs.existsSync(dataDir)) {
       fs.rmSync(dataDir, { recursive: true, force: true });

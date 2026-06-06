@@ -1,17 +1,11 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroup } from "../db/repositories/groups.js";
 import { insertMessages } from "../db/repositories/messages.js";
 import type { NormalizedMessage } from "../importer/types.js";
+import { createTestDatabase } from "../test/db.js";
 import { runSummarize } from "./summarize.js";
 import type { Summarizer, SummaryOutput, SummaryPrompt } from "./summarizer.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
 
 class FakeSummarizer implements Summarizer {
   public calls = 0;
@@ -25,20 +19,16 @@ class FakeSummarizer implements Summarizer {
 const FAKE_OUT: SummaryOutput = { overview: "o" };
 
 describe("runSummarize", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
   let uri: string;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    uri = container.getConnectionUri();
+    uri = await createTestDatabase();
     pool = new pg.Pool({ connectionString: uri });
-    await runMigrationsUp(uri, MIGRATIONS_DIR);
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   async function seedText(
