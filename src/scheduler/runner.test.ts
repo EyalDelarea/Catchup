@@ -211,6 +211,88 @@ describe("startScheduler — startup catch-up", () => {
   });
 });
 
+describe("startScheduler — slotKeyPrefix", () => {
+  it("uses 'ops' prefix in state keys when slotKeyPrefix is 'ops'", async () => {
+    const pool = makeFakePool();
+    const bus = makeFakeBus();
+    const timer = makeFakeTimer();
+
+    const recordedKeys: string[] = [];
+    const getLastRun = vi.fn().mockImplementation((_pool: pg.Pool, key: string) => {
+      recordedKeys.push(key);
+      return Promise.resolve(null);
+    });
+    const recordRun = vi.fn().mockImplementation((_pool: pg.Pool, key: string) => {
+      recordedKeys.push(key);
+      return Promise.resolve(undefined);
+    });
+    const enqueue = vi.fn().mockResolvedValue(undefined);
+
+    const { stop } = startScheduler({
+      pool,
+      bus,
+      times: TIMES,
+      enabled: true,
+      now: () => NOW_AFTER_FIRST_SLOT,
+      setTimer: timer.setTimer,
+      getLastRun,
+      recordRun,
+      enqueueRun: enqueue,
+      slotKeyPrefix: "ops",
+    });
+
+    await vi.waitFor(() => expect(enqueue).toHaveBeenCalled(), { timeout: 2000 });
+
+    // All recorded state keys must start with "ops@"
+    const allKeys = recordedKeys;
+    expect(allKeys.length).toBeGreaterThan(0);
+    for (const key of allKeys) {
+      expect(key).toMatch(/^ops@\d{2}:\d{2}$/);
+    }
+
+    stop();
+  });
+
+  it("defaults to 'digest' prefix when slotKeyPrefix is not specified", async () => {
+    const pool = makeFakePool();
+    const bus = makeFakeBus();
+    const timer = makeFakeTimer();
+
+    const recordedKeys: string[] = [];
+    const getLastRun = vi.fn().mockImplementation((_pool: pg.Pool, key: string) => {
+      recordedKeys.push(key);
+      return Promise.resolve(null);
+    });
+    const recordRun = vi.fn().mockImplementation((_pool: pg.Pool, key: string) => {
+      recordedKeys.push(key);
+      return Promise.resolve(undefined);
+    });
+    const enqueue = vi.fn().mockResolvedValue({ enqueued: 1, skipped: 0 });
+
+    const { stop } = startScheduler({
+      pool,
+      bus,
+      times: TIMES,
+      enabled: true,
+      now: () => NOW_AFTER_FIRST_SLOT,
+      setTimer: timer.setTimer,
+      getLastRun,
+      recordRun,
+      enqueueRun: enqueue,
+    });
+
+    await vi.waitFor(() => expect(enqueue).toHaveBeenCalled(), { timeout: 2000 });
+
+    const allKeys = recordedKeys;
+    expect(allKeys.length).toBeGreaterThan(0);
+    for (const key of allKeys) {
+      expect(key).toMatch(/^digest@\d{2}:\d{2}$/);
+    }
+
+    stop();
+  });
+});
+
 describe("startScheduler — scheduled timer fire", () => {
   it("fires enqueueRun + recordRun + reschedules when timer fires", async () => {
     const pool = makeFakePool();

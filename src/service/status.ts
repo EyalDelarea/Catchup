@@ -3,6 +3,9 @@ import { countJobsByStatus } from "../db/repositories/job-runs.js";
 import { getServiceStatus, isStale } from "../db/repositories/service-status.js";
 import type { JobType } from "../jobs/job-types.js";
 
+/** Default staleness threshold: a service heartbeat older than 5 minutes is considered stale. */
+export const DEFAULT_STALENESS_MS = 5 * 60 * 1_000;
+
 export type QueueDepthEntry = { depth: number | null };
 
 export type StatusReport = {

@@ -465,6 +465,43 @@ program
       process.stderr.write(`[scheduler] startup error (web server continues): ${msg}\n`);
     }
 
+    // ── Ops-sweep scheduler ──────────────────────────────────────────────────
+    let opsSweepHandle: { stop: () => void } = { stop: () => {} };
+    try {
+      const { runOpsSweep } = await import("./ops/sweep.js");
+      const { DEFAULT_STALENESS_MS } = await import("./service/status.js");
+      const parsedOpsTimes = parseTimes(config.opsSweep.times);
+      opsSweepHandle = startScheduler({
+        pool,
+        bus: brokerBus,
+        times: parsedOpsTimes,
+        enabled: config.opsSweep.enabled,
+        now: () => new Date(),
+        setTimer: (cb, ms) => setTimeout(cb, ms),
+        getLastRun,
+        recordRun,
+        slotKeyPrefix: "ops",
+        enqueueRun: async (poolArg, busArg) => {
+          await runOpsSweep({
+            pool: poolArg,
+            bus: busArg,
+            getQueueDepths,
+            stalenessMs: DEFAULT_STALENESS_MS,
+            cap: config.opsSweep.redriveCap,
+            logger: webLogger,
+            now: () => new Date(),
+          });
+        },
+      });
+      if (config.opsSweep.enabled) {
+        console.log(`[scheduler] ops-sweep scheduler started (times: ${config.opsSweep.times})`);
+      }
+    } catch (err) {
+      // Ops-sweep scheduler startup failure must NOT crash the web server
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[scheduler] ops-sweep startup error (web server continues): ${msg}\n`);
+    }
+
     // ── --collect mode: start live collector in the same process ──────────────
     let liveHandle: { stop: () => void } | null = null;
 
@@ -539,8 +576,9 @@ program
 
     // ── Graceful shutdown (SIGINT + SIGTERM) ─────────────────────────────────
     const gracefulShutdown = () => {
-      // Stop scheduler first (prevents new enqueue calls)
+      // Stop schedulers first (prevents new enqueue calls)
       schedulerHandle.stop();
+      opsSweepHandle.stop();
       // Stop collector wiring (if started)
       liveHandle?.stop();
       server.close();
@@ -648,6 +686,71 @@ program
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`Error: digest-run failed: ${message}\n`);
+      process.exit(1);
+    } finally {
+      await pool.end();
+      await bus.close();
+    }
+  });
+
+program
+  .command("ops-sweep")
+  .description("Manually trigger one ops sweep: re-drive dead jobs and record a status snapshot")
+  .action(async () => {
+    const config = loadConfig();
+
+    const [
+      { RabbitMqJobBus },
+      { PostgresJobRunRecorder },
+      { createDbClient },
+      pg,
+      { runOpsSweep },
+      { DEFAULT_STALENESS_MS },
+    ] = await Promise.all([
+      import("./jobs/rabbitmq-bus.js"),
+      import("./jobs/job-run-recorder.js"),
+      import("./db/client.js"),
+      import("pg"),
+      import("./ops/sweep.js"),
+      import("./service/status.js"),
+    ]);
+
+    const pool = new pg.default.Pool({ connectionString: config.databaseUrl });
+    const dbClient = createDbClient();
+    const recorder = new PostgresJobRunRecorder(dbClient);
+    const bus = new RabbitMqJobBus({ url: config.broker.url, recorder });
+
+    const getQueueDepths = async () => {
+      const types = ["import.file", "transcribe.voicenote"] as const;
+      const result: Record<string, number> = {};
+      await Promise.all(
+        types.map(async (type) => {
+          try {
+            result[type] = await bus.depth(type);
+          } catch {
+            // broker unreachable for this type — omit so depth stays null
+          }
+        }),
+      );
+      return result as Partial<Record<(typeof types)[number], number>>;
+    };
+
+    try {
+      const snap = await runOpsSweep({
+        pool,
+        bus,
+        getQueueDepths,
+        stalenessMs: DEFAULT_STALENESS_MS,
+        cap: config.opsSweep.redriveCap,
+        logger: undefined,
+        now: () => new Date(),
+      });
+      console.log(
+        `Ops sweep complete: re-driven ${snap.redriven}, flagged ${snap.flagged}, dead ${snap.jobsDead} (snapshot ${snap.id}).`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`Error: ops-sweep failed: ${message}\n`);
       process.exit(1);
     } finally {
       await pool.end();

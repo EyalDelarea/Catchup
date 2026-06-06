@@ -52,6 +52,30 @@ describe("loadConfig whatsapp block (safety guardrail)", () => {
   });
 });
 
+describe("loadConfig opsSweep block", () => {
+  it("provides sensible defaults when env is empty", () => {
+    const cfg = loadConfig({});
+    expect(cfg.opsSweep.enabled).toBe(true);
+    expect(cfg.opsSweep.times).toBe("08:00,18:00");
+    expect(cfg.opsSweep.redriveCap).toBe(2);
+  });
+
+  it("honors OPS_SWEEP_ENABLED=false override", () => {
+    const cfg = loadConfig({ OPS_SWEEP_ENABLED: "false" });
+    expect(cfg.opsSweep.enabled).toBe(false);
+  });
+
+  it("honors OPS_SWEEP_TIMES override", () => {
+    const cfg = loadConfig({ OPS_SWEEP_TIMES: "06:00,20:00" });
+    expect(cfg.opsSweep.times).toBe("06:00,20:00");
+  });
+
+  it("honors OPS_REDRIVE_CAP=5 override", () => {
+    const cfg = loadConfig({ OPS_REDRIVE_CAP: "5" });
+    expect(cfg.opsSweep.redriveCap).toBe(5);
+  });
+});
+
 describe("loadConfig transcription block", () => {
   it("provides sensible defaults when env is empty", () => {
     const cfg = loadConfig({});
