@@ -40,7 +40,15 @@ function escapeHtml(text) {
  */
 function applyInline(text) {
   // **bold** → <strong>bold</strong> (non-greedy, within a line)
-  return text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  const bolded = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  // [Chat name] → bidi-isolated chip. In RTL Hebrew text an inline bracketed
+  // tag (often a Latin name with emoji/dates) gets mirrored and scrambled by
+  // the bidi algorithm — the brackets flip and the run breaks the line. <bdi>
+  // isolates the run so it renders correctly, and the chip styling visually
+  // separates "which chat" from "what happened". The literal brackets are
+  // dropped in favour of the chip. Applied after bold so it never splits a
+  // <strong> tag.
+  return bolded.replace(/\[([^\]\n]+)\]/g, '<bdi class="chat-tag">$1</bdi>');
 }
 
 /**

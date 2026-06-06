@@ -36,6 +36,25 @@ describe("renderMarkdown — bold", () => {
   });
 });
 
+describe("renderMarkdown — chat tags (bidi isolation)", () => {
+  it("[Chat] → bidi-isolated chip without the literal brackets", () => {
+    const out = renderMarkdown("- [Bar Hevr] בדיקה");
+    expect(out).toContain('<bdi class="chat-tag">Bar Hevr</bdi>');
+    expect(out).not.toContain("[Bar Hevr]");
+  });
+
+  it("isolates a tag containing emoji and dates", () => {
+    const out = renderMarkdown("- [Flopi 06.06.26 🎉] משהו קרה");
+    expect(out).toContain('<bdi class="chat-tag">Flopi 06.06.26 🎉</bdi>');
+  });
+
+  it("wraps multiple tags on one line", () => {
+    const out = renderMarkdown("- [A] ו [B] גם");
+    const count = (out.match(/class="chat-tag"/g) || []).length;
+    expect(count).toBe(2);
+  });
+});
+
 describe("renderMarkdown — bullet lists", () => {
   it("consecutive '- ' lines → <ul> with <li> per item", () => {
     const out = renderMarkdown("- א\n- ב");

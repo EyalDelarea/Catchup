@@ -751,11 +751,28 @@ body::after {
   list-style: disc;
 }
 .summary-card__body--rendered li {
-  margin: 0.15em 0;
+  margin: 0.35em 0;
+  line-height: 1.7;
 }
 .summary-card__body--rendered strong {
   color: var(--fg);
   font-weight: 700;
+}
+
+/* Bidi-isolated chat-name chip used in cross-chat highlights ([Chat] tags).
+   <bdi> keeps the (often Latin) name + emoji/dates from scrambling the RTL line. */
+.chat-tag {
+  display: inline-block;
+  unicode-bidi: isolate;
+  margin-inline-end: 0.4em;
+  padding: 0.05em 0.5em;
+  border-radius: 999px;
+  background: rgba(125, 211, 252, 0.14);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.85em;
+  white-space: nowrap;
+  vertical-align: baseline;
 }
 
 /* ── Blinking caret ─────────────────────────────────────── */
