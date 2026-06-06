@@ -69,6 +69,34 @@ describe("generateTotalSummary", () => {
     expect(statuses.sort()).toEqual(["Family", "Work"]);
   });
 
+  it("isolates per-chat failures: one failing chat does not abort the others", async () => {
+    const since = new Date("2026-06-07T00:00:00.000Z");
+    const aaa = await upsertGroup(pool, { name: "Aaa", source: "import" });
+    const bbb = await upsertGroup(pool, { name: "Bbb", source: "import" });
+    await seed(aaa, new Date("2026-06-07T09:00:00.000Z"), "a1", "BOOM");
+    await seed(bbb, new Date("2026-06-07T09:30:00.000Z"), "b1", "hello");
+
+    async function* fakeStreamWithFailure(prompt: SummaryPrompt): AsyncGenerator<string> {
+      if (prompt.system.includes("דורש תשומת לב")) {
+        yield "## דורש תשומת לב\n- [x] reduced";
+      } else if (prompt.user.includes("BOOM")) {
+        throw new Error("over-budget for Aaa");
+      } else {
+        yield "## תקציר\nmapped";
+      }
+    }
+
+    const out = await generateTotalSummary(
+      { pool, summarizeStream: fakeStreamWithFailure, tokenBudget: 100_000 },
+      { since },
+    );
+
+    expect(out.perChat.length).toBeGreaterThanOrEqual(1);
+    expect(out.perChat.map((c) => c.name)).toContain("Bbb");
+    expect(out.perChat.map((c) => c.name)).not.toContain("Aaa");
+    expect(out.highlights).toContain("reduced");
+  });
+
   it("returns the empty-range message when no chat is active", async () => {
     const since = new Date("2999-01-01T00:00:00.000Z");
     const out = await generateTotalSummary(

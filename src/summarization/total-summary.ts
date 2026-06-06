@@ -61,21 +61,27 @@ export async function generateTotalSummary(
     const g = groups[i]!;
     opts.onChatStart?.({ index: i + 1, total: groups.length, name: g.name });
 
-    const prepared = await prepareSummary(
-      deps.pool,
-      g.name,
-      { since: range.since },
-      deps.tokenBudget,
-    );
-    if (prepared.kind === "empty") continue;
+    try {
+      const prepared = await prepareSummary(
+        deps.pool,
+        g.name,
+        { since: range.since },
+        deps.tokenBudget,
+      );
+      if (prepared.kind === "empty") continue;
 
-    const summary = await collect(deps.summarizeStream(prepared.prompt, { signal: opts.signal }));
-    perChat.push({
-      groupId: g.id,
-      name: g.name,
-      messageCount: prepared.messageCount,
-      summary,
-    });
+      const summary = await collect(deps.summarizeStream(prepared.prompt, { signal: opts.signal }));
+      perChat.push({
+        groupId: g.id,
+        name: g.name,
+        messageCount: prepared.messageCount,
+        summary,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[generateTotalSummary] chat "${g.name}" failed, skipping: ${msg}\n`);
+      if (opts.signal?.aborted) break;
+    }
   }
 
   if (perChat.length === 0) {
