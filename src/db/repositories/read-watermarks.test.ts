@@ -1,31 +1,21 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { NormalizedMessage } from "../../importer/types.js";
-import { runMigrationsUp } from "../migrate.js";
+import { createTestDatabase } from "../../test/db.js";
 import { upsertGroup } from "./groups.js";
 import { insertMessages } from "./messages.js";
 import { upsertParticipant } from "./participants.js";
 import { getWatermark, upsertWatermark } from "./read-watermarks.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_DIR = path.resolve(__dirname, "..", "migrations");
-
 describe("read-watermarks repository", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   /** Insert a single message and return its id. */

@@ -4,10 +4,8 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runMigrationsUp } from "../db/migrate.js";
 import { upsertGroup } from "../db/repositories/groups.js";
 import { upsertJobRun } from "../db/repositories/job-runs.js";
 import { insertMessages } from "../db/repositories/messages.js";
@@ -15,10 +13,8 @@ import { insertSummary } from "../db/repositories/summaries.js";
 import type { NormalizedMessage } from "../importer/types.js";
 import type { JobType } from "../jobs/job-types.js";
 import type { StreamingSummarizer, SummaryPrompt } from "../summarization/summarizer.js";
+import { createTestDatabase } from "../test/db.js";
 import { createServer } from "./server.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_DIR = path.resolve(__dirname, "..", "db", "migrations");
 
 class FakeStreaming implements StreamingSummarizer {
   async *summarizeStream() {
@@ -28,15 +24,12 @@ class FakeStreaming implements StreamingSummarizer {
 }
 
 describe("web server", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
   let base: string;
   let server: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
     server = createServer({
       pool,
       summarizer: new FakeStreaming(),
@@ -49,7 +42,6 @@ describe("web server", () => {
   afterAll(async () => {
     await new Promise<void>((r) => server.close(() => r()));
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   async function seedText(groupId: number, content: string, dedupeKey: string): Promise<void> {
@@ -236,19 +228,15 @@ describe("web server", () => {
 // ── backfill + liveness injection tests ──────────────────────────────────────
 
 describe("handleSummarize with backfill deps", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
   let base: string;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   async function seedText(groupId: number, content: string, dedupeKey: string): Promise<void> {
@@ -604,8 +592,8 @@ describe("handleSummarize with backfill deps", () => {
 // ── /api/status ──────────────────────────────────────────────────────────────
 
 describe("/api/status", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
+  let connectionString: string;
   let base: string;
   let server: ReturnType<typeof createServer>;
 
@@ -615,15 +603,8 @@ describe("/api/status", () => {
   });
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    const migrDir = path.resolve(
-      path.dirname(fileURLToPath(import.meta.url)),
-      "..",
-      "db",
-      "migrations",
-    );
-    await runMigrationsUp(container.getConnectionUri(), migrDir);
+    connectionString = await createTestDatabase();
+    pool = new pg.Pool({ connectionString });
 
     // Seed service_status (singleton row already exists from migration seed)
     await pool.query(
@@ -671,7 +652,6 @@ describe("/api/status", () => {
   afterAll(async () => {
     await new Promise<void>((r) => server.close(() => r()));
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   it("happy path: returns 200 with correct shape and seeded counts", async () => {
@@ -709,7 +689,7 @@ describe("/api/status", () => {
   it("broker down: queue depths are null but job counts still present (200)", async () => {
     // Create a server whose getQueueDepths throws
     let brokerServer: ReturnType<typeof createServer>;
-    const brokerPool = new pg.Pool({ connectionString: container.getConnectionUri() });
+    const brokerPool = new pg.Pool({ connectionString: connectionString });
     brokerServer = createServer({
       pool: brokerPool,
       summarizer: new (class implements StreamingSummarizer {
@@ -776,7 +756,7 @@ describe("/api/status", () => {
   // T015: /api/status liveness field ─────────────────────────────────────────
 
   it("liveness healthy: /api/status includes liveness.healthy === true", async () => {
-    const livePool = new pg.Pool({ connectionString: container.getConnectionUri() });
+    const livePool = new pg.Pool({ connectionString: connectionString });
     const liveServer = createServer({
       pool: livePool,
       summarizer: new (class implements StreamingSummarizer {
@@ -807,7 +787,7 @@ describe("/api/status", () => {
   });
 
   it("liveness unhealthy: /api/status includes liveness.healthy === false", async () => {
-    const livePool = new pg.Pool({ connectionString: container.getConnectionUri() });
+    const livePool = new pg.Pool({ connectionString: connectionString });
     const liveServer = createServer({
       pool: livePool,
       summarizer: new (class implements StreamingSummarizer {
@@ -849,15 +829,12 @@ describe("/api/status", () => {
 // ── GET /api/summaries ────────────────────────────────────────────────────────
 
 describe("GET /api/summaries", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
   let base: string;
   let server: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
     server = createServer({
       pool,
       summarizer: new FakeStreaming(),
@@ -871,7 +848,6 @@ describe("GET /api/summaries", () => {
   afterAll(async () => {
     await new Promise<void>((r) => server.close(() => r()));
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   it("populated group returns array newest-first with output.overview and ISO createdAt", async () => {
@@ -972,18 +948,14 @@ describe("GET /api/summaries", () => {
 //  3. Not throw an unhandled error
 
 describe("handleSummarize — client disconnect aborts summarizer, no commit", () => {
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   async function seedText(groupId: number, content: string, dedupeKey: string): Promise<void> {
@@ -1144,7 +1116,6 @@ describe("static asset handler", () => {
   const FIXTURE_NAME = "__test_asset__.css";
   const FIXTURE_PATH = path.join(PUBLIC_DIR, FIXTURE_NAME);
 
-  let container: StartedPostgreSqlContainer;
   let pool: pg.Pool;
   let base: string;
   let server: ReturnType<typeof createServer>;
@@ -1153,9 +1124,7 @@ describe("static asset handler", () => {
     // Write a small fixture CSS file into public/
     fs.writeFileSync(FIXTURE_PATH, "body { color: red; }", "utf8");
 
-    container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    pool = new pg.Pool({ connectionString: container.getConnectionUri() });
-    await runMigrationsUp(container.getConnectionUri(), MIGRATIONS_DIR);
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
     server = createServer({
       pool,
       summarizer: new FakeStreaming(),
@@ -1175,7 +1144,6 @@ describe("static asset handler", () => {
     }
     await new Promise<void>((r) => server.close(() => r()));
     await pool?.end();
-    await container?.stop();
   }, 30_000);
 
   it("serves existing CSS file with correct content-type and body", async () => {

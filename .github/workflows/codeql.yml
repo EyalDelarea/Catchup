@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # Skip docs-only / asset-only PRs — no code to analyze. CodeQL is NOT a
+    # required status check, so a skipped run here does not block merges.
+    paths-ignore:
+      - "**/*.md"
+      - "assets/**"
+      - "LICENSE"
   schedule:
     # Weekly, Monday 06:00 UTC.
     - cron: "0 6 * * 1"
@@ -22,16 +28,16 @@ jobs:
       security-events: write
       actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
           queries: security-extended
 
       # JS/TS is interpreted — no build step needed for analysis.
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:javascript-typescript"

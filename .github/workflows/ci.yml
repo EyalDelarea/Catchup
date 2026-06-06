@@ -19,9 +19,9 @@ jobs:
     name: lint (biome)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -34,10 +34,10 @@ jobs:
     name: typecheck · build · test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -57,10 +57,11 @@ jobs:
         run: npm run build
 
       # Integration tests use Testcontainers (Postgres, RabbitMQ). Docker is
-      # available on ubuntu-latest. Run test files serially (--no-file-parallelism)
-      # so concurrent container startups don't contend and flake under CI load.
+      # available on ubuntu-latest. A single shared Postgres is booted once in
+      # globalSetup (src/test/db.ts) and each file gets an isolated DB clone, so
+      # files run in parallel without container-startup contention.
       - name: Test
-        run: npm test -- --no-file-parallelism
+        run: npm test
 
   # Single durable required status check. Branch protection requires `ci-ok`,
   # so adding/renaming jobs above never needs a branch-protection edit.
