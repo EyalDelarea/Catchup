@@ -115,6 +115,12 @@ export type OllamaSummarizerOptions = {
   host: string;
   model: string;
   numCtx: number;
+  /** Sampling temperature. Default 0.7 (gemma's native default is 1.0; 0.2 was too terse). */
+  temperature?: number;
+  /** repeat_penalty. Default 1.1 — guards loops without suppressing detail (1.3 was too aggressive). */
+  repeatPenalty?: number;
+  /** Max tokens to generate. Default 4096 — a generous cap so summaries are never truncated. */
+  numPredict?: number;
   /**
    * Injectable for tests; defaults to the node:http transport (avoids
    * undici's 300s headersTimeout on cold/large model loads).
@@ -124,17 +130,38 @@ export type OllamaSummarizerOptions = {
   timeoutMs?: number;
 };
 
+/** Tuned sampling defaults — see docs thin-summaries-design. */
+const DEFAULT_TEMPERATURE = 0.7;
+const DEFAULT_REPEAT_PENALTY = 1.1;
+const DEFAULT_NUM_PREDICT = 4096;
+
 export class OllamaSummarizer implements Summarizer, StreamingSummarizer {
   private readonly host: string;
   private readonly model: string;
   private readonly numCtx: number;
+  private readonly temperature: number;
+  private readonly repeatPenalty: number;
+  private readonly numPredict: number;
   private readonly fetchImpl: FetchImpl;
 
   constructor(opts: OllamaSummarizerOptions) {
     this.host = opts.host.replace(/\/$/, "");
     this.model = opts.model;
     this.numCtx = opts.numCtx;
+    this.temperature = opts.temperature ?? DEFAULT_TEMPERATURE;
+    this.repeatPenalty = opts.repeatPenalty ?? DEFAULT_REPEAT_PENALTY;
+    this.numPredict = opts.numPredict ?? DEFAULT_NUM_PREDICT;
     this.fetchImpl = opts.fetchImpl ?? nodeHttpTransport(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  }
+
+  /** Sampling options shared by the streaming and non-streaming requests. */
+  private requestOptions() {
+    return {
+      num_ctx: this.numCtx,
+      temperature: this.temperature,
+      repeat_penalty: this.repeatPenalty,
+      num_predict: this.numPredict,
+    };
   }
 
   async summarize(prompt: SummaryPrompt, opts?: { signal?: AbortSignal }): Promise<SummaryOutput> {
@@ -146,10 +173,13 @@ export class OllamaSummarizer implements Summarizer, StreamingSummarizer {
         // No `format`: requesting JSON/structured output makes some models
         // (gemma4:26b) degenerate into repetition loops on short Hebrew input.
         // Plain prose is reliable; repeat_penalty>1 further guards against loops.
+        // think:false — gemma4 thinks by default, which burns the generation
+        // budget on hidden reasoning and yields SHORTER, ~5x slower summaries.
         body: JSON.stringify({
           model: this.model,
           stream: false,
-          options: { num_ctx: this.numCtx, temperature: 0.2, repeat_penalty: 1.3 },
+          think: false,
+          options: this.requestOptions(),
           messages: [
             { role: "system", content: prompt.system },
             { role: "user", content: prompt.user },
@@ -191,7 +221,8 @@ export class OllamaSummarizer implements Summarizer, StreamingSummarizer {
         body: JSON.stringify({
           model: this.model,
           stream: true,
-          options: { num_ctx: this.numCtx, temperature: 0.2, repeat_penalty: 1.3 },
+          think: false,
+          options: this.requestOptions(),
           messages: [
             { role: "system", content: prompt.system },
             { role: "user", content: prompt.user },

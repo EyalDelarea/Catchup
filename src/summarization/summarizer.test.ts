@@ -28,7 +28,42 @@ describe("OllamaSummarizer", () => {
     expect(captured.body.options.repeat_penalty).toBeGreaterThan(1);
     expect(captured.body.format).toBeUndefined();
     expect(captured.body.model).toBe("gemma4:26b");
+    // thinking is disabled — gemma4 thinks by default, which eats the generation
+    // budget and produces SHORTER, slower summaries (see thin-summaries fix).
+    expect(captured.body.think).toBe(false);
     expect(out.overview).toBe("השיחה עסקה בטיול ובמסיבה."); // trimmed
+  });
+
+  it("applies sampling defaults and forwards overrides (temperature, repeat_penalty, num_predict)", async () => {
+    const captured: { body?: any } = {};
+    const engine = new OllamaSummarizer({
+      host: "http://localhost:11434",
+      model: "gemma4:26b",
+      numCtx: 32768,
+      temperature: 0.9,
+      repeatPenalty: 1.05,
+      numPredict: 1234,
+      fetchImpl: fakeFetch(captured, "ok"),
+    });
+    await engine.summarize({ system: "S", user: "U" });
+    expect(captured.body.options.temperature).toBe(0.9);
+    expect(captured.body.options.repeat_penalty).toBe(1.05);
+    expect(captured.body.options.num_predict).toBe(1234);
+  });
+
+  it("uses tuned sampling defaults when not overridden", async () => {
+    const captured: { body?: any } = {};
+    const engine = new OllamaSummarizer({
+      host: "http://localhost:11434",
+      model: "gemma4:26b",
+      numCtx: 32768,
+      fetchImpl: fakeFetch(captured, "ok"),
+    });
+    await engine.summarize({ system: "S", user: "U" });
+    // Defaults relaxed from the old terse 0.2 / 1.3 to richer output.
+    expect(captured.body.options.temperature).toBe(0.7);
+    expect(captured.body.options.repeat_penalty).toBe(1.1);
+    expect(captured.body.options.num_predict).toBe(4096);
   });
 
   it("throws a clear error when the model returns empty output", async () => {
@@ -93,6 +128,8 @@ describe("OllamaSummarizer.summarizeStream", () => {
     expect(body.stream).toBe(true);
     expect(body.options.num_ctx).toBe(32768);
     expect(body.options.repeat_penalty).toBeGreaterThan(1);
+    expect(body.options.num_predict).toBe(4096);
+    expect(body.think).toBe(false);
     expect(body.format).toBeUndefined();
   });
 

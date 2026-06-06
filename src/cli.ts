@@ -358,6 +358,9 @@ program
       host: config.summarization.ollamaHost,
       model: config.summarization.model,
       numCtx: config.summarization.numCtx,
+      temperature: config.summarization.temperature,
+      repeatPenalty: config.summarization.repeatPenalty,
+      numPredict: config.summarization.numPredict,
     });
 
     // Build a RabbitMQ bus for best-effort queue depth queries.

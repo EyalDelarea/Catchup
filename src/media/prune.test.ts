@@ -62,13 +62,16 @@ async function insertMediaMessage(
 
 describe("pruneMediaFile", () => {
   let pool: pg.Pool;
+  let tmpDir: string;
 
   beforeAll(async () => {
     pool = new pg.Pool({ connectionString: await createTestDatabase() });
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "catchup-prune-test-"));
   }, 120_000);
 
   afterAll(async () => {
     await pool?.end();
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   }, 30_000);
 
   // -------------------------------------------------------------------------
@@ -79,7 +82,7 @@ describe("pruneMediaFile", () => {
     const groupId = await upsertGroup(pool, { name: "prune-core-group", source: "import" });
 
     // Create a real temp file on disk
-    const tmpFile = path.join(os.tmpdir(), `prune-test-${Date.now()}.opus`);
+    const tmpFile = path.join(tmpDir, `prune-test-${Date.now()}.opus`);
     fs.writeFileSync(tmpFile, "fake audio data");
     expect(fs.existsSync(tmpFile)).toBe(true);
 
@@ -157,7 +160,7 @@ describe("pruneMediaFile", () => {
   it("does NOT delete file and leaves status 'present' when retainMedia=true", async () => {
     const groupId = await upsertGroup(pool, { name: "prune-retain-group", source: "import" });
 
-    const tmpFile = path.join(os.tmpdir(), `prune-retain-${Date.now()}.opus`);
+    const tmpFile = path.join(tmpDir, `prune-retain-${Date.now()}.opus`);
     fs.writeFileSync(tmpFile, "keep me");
 
     const messageId = await insertMediaMessage(pool, groupId, tmpFile, "prune-retain-001");
