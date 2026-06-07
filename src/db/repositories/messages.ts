@@ -248,10 +248,9 @@ export async function insertMessages(
       // differ in dedupe_key (should not happen in practice, but we log and skip).
       const pgErr = err as { code?: string };
       if (pgErr.code === "23505") {
-        // Unique violation — treat as a skipped duplicate, do not crash the process.
-        console.warn(
-          `[insertMessages] skipped duplicate row (unique violation): external_id=${row.externalId ?? "null"}`,
-        );
+        // Unique violation — silently treat as a skipped duplicate (counted in the
+        // returned `skipped` total). Logging per-row floods bulk history syncs, which
+        // legitimately re-receive thousands of already-stored messages.
       } else {
         throw err;
       }

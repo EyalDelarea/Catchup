@@ -41,6 +41,10 @@ export type SessionEvents = {
   contacts: [contacts: Contact[]];
   /** Chat/group directory entries (with subjects) delivered on history sync. */
   chats: [chats: Chat[]];
+  /** Emitted per history-sync chunk — carries WhatsApp's own progress (0–100). */
+  "history-progress": [
+    info: { progress: number | null; isLatest: boolean; syncType: number | null; count: number },
+  ];
 };
 
 /**
@@ -55,14 +59,24 @@ export class CollectorSession extends EventEmitter {
   private allowSend: boolean;
   /** Collapses the per-batch history-sync flood into throttled progress + a summary. */
   private historyProgress: HistorySyncProgress;
+  /** When true, request WhatsApp's full history sync on link (one-time bulk pull). */
+  private syncFullHistory: boolean;
+  /** When true, accept ALL history chunks incl. FULL (Baileys default drops FULL). */
+  private acceptAllHistory: boolean;
 
-  constructor(authDir: string, allowSend = false) {
+  constructor(
+    authDir: string,
+    allowSend = false,
+    opts: { syncFullHistory?: boolean; acceptAllHistory?: boolean } = {},
+  ) {
     super();
     this.authDir = authDir;
     this.allowSend = allowSend;
     this.historyProgress = createHistorySyncProgress({
       log: (line) => process.stderr.write(`${line}\n`),
     });
+    this.syncFullHistory = opts.syncFullHistory ?? false;
+    this.acceptAllHistory = opts.acceptAllHistory ?? false;
   }
 
   /** Total messages reported as stored (updated by caller via incrementStored). */
@@ -261,13 +275,17 @@ export class CollectorSession extends EventEmitter {
 
     const sock = makeWASocket({
       auth: state,
-      // Disable browser history fetch — forward-only (research R3)
-      syncFullHistory: false,
+      // Forward-only by default (research R3). full-sync mode flips this to pull the
+      // one-time bulk history WhatsApp pushes on link.
+      syncFullHistory: this.syncFullHistory,
       // Do NOT announce presence/online on connect — stay an invisible observer
       // (also avoids stealing notifications from the phone). Safety guardrail.
       markOnlineOnConnect: false,
       // Print connection logs to stderr to keep stdout clean for QR/heartbeat
       logger: makeSilentLogger(),
+      // Baileys' default shouldSyncHistoryMessage DROPS FULL-history chunks; in
+      // full-sync mode accept everything so deep history is actually delivered.
+      ...(this.acceptAllHistory ? { shouldSyncHistoryMessage: () => true } : {}),
     });
 
     // SAFETY: unless sending is explicitly enabled, neutralize all outbound
@@ -362,11 +380,17 @@ export class CollectorSession extends EventEmitter {
         chats,
         contacts,
         lidPnMappings,
+        progress,
+        isLatest,
+        syncType,
       }: {
         messages: WAMessage[];
         chats: Chat[];
         contacts: Contact[];
         lidPnMappings?: { pn: string; lid: string }[];
+        progress?: number | null;
+        isLatest?: boolean;
+        syncType?: number | null;
       }) => {
         diagHistory(chats, contacts, lidPnMappings);
 
@@ -382,6 +406,15 @@ export class CollectorSession extends EventEmitter {
         for (const msg of messages) {
           this.emit("message", msg);
         }
+
+        // Surface WhatsApp's own sync progress (0–100) + completion flag so a
+        // consumer (e.g. full-sync) can render a progress bar and auto-finish.
+        this.emit("history-progress", {
+          progress: progress ?? null,
+          isLatest: isLatest ?? false,
+          syncType: syncType ?? null,
+          count: messages.length,
+        });
       },
     );
   }
@@ -390,8 +423,12 @@ export class CollectorSession extends EventEmitter {
 /**
  * Start a CollectorSession and return it.
  */
-export async function startSession(authDir: string, allowSend = false): Promise<CollectorSession> {
-  const session = new CollectorSession(authDir, allowSend);
+export async function startSession(
+  authDir: string,
+  allowSend = false,
+  opts: { syncFullHistory?: boolean; acceptAllHistory?: boolean } = {},
+): Promise<CollectorSession> {
+  const session = new CollectorSession(authDir, allowSend, opts);
   await session.start();
   return session;
 }
