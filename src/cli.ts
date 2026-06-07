@@ -559,11 +559,8 @@ program
             maxFetch: 500,
             timeoutMs: 20_000,
             stopAtSentAt,
-            fetchHistory: (
-              c: number,
-              a: import("./collector/backfill.js").AnchorKey,
-              ts: number,
-            ) => liveSession.fetchMessageHistory(c, a, ts),
+            fetchHistory: (c: number, a: import("./collector/backfill.js").AnchorKey, ts: number) =>
+              liveSession.fetchMessageHistory(c, a, ts),
             awaitHistory: (toMs: number) => liveSession.awaitHistorySync(jid, toMs),
             downloadVoiceNote: (m: import("@whiskeysockets/baileys").WAMessage) =>
               liveSession.downloadMedia(m),

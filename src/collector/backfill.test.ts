@@ -606,15 +606,35 @@ describe("backfillGroup integration", () => {
 
     // stop 500s below the top. Batches walk older; the 3rd crosses the line.
     const batch1 = [
-      makeFakeWATextMessage({ id: "GAP-B1-0", remoteJid, timestampSeconds: topTs - 100, text: "b1-0" }),
-      makeFakeWATextMessage({ id: "GAP-B1-1", remoteJid, timestampSeconds: topTs - 200, text: "b1-1" }),
+      makeFakeWATextMessage({
+        id: "GAP-B1-0",
+        remoteJid,
+        timestampSeconds: topTs - 100,
+        text: "b1-0",
+      }),
+      makeFakeWATextMessage({
+        id: "GAP-B1-1",
+        remoteJid,
+        timestampSeconds: topTs - 200,
+        text: "b1-1",
+      }),
     ];
     const batch2 = [
-      makeFakeWATextMessage({ id: "GAP-B2-0", remoteJid, timestampSeconds: topTs - 400, text: "b2-0" }),
+      makeFakeWATextMessage({
+        id: "GAP-B2-0",
+        remoteJid,
+        timestampSeconds: topTs - 400,
+        text: "b2-0",
+      }),
     ];
     const batch3 = [
       // topTs-600 is below the stop (topTs-500) → loop should stop after this batch.
-      makeFakeWATextMessage({ id: "GAP-B3-0", remoteJid, timestampSeconds: topTs - 600, text: "b3-0" }),
+      makeFakeWATextMessage({
+        id: "GAP-B3-0",
+        remoteJid,
+        timestampSeconds: topTs - 600,
+        text: "b3-0",
+      }),
     ];
     const pages = [batch1, batch2, batch3];
     let call = 0;
@@ -657,7 +677,12 @@ describe("backfillGroup integration", () => {
     const fetchHistory = vi.fn(async () => "req");
     // Every batch stays above the stop → never crosses; maxFetch must cap it.
     const awaitHistory = vi.fn(async () => [
-      makeFakeWATextMessage({ id: `GAPCAP-${i++}`, remoteJid, timestampSeconds: topTs - 100, text: "above" }),
+      makeFakeWATextMessage({
+        id: `GAPCAP-${i++}`,
+        remoteJid,
+        timestampSeconds: topTs - 100,
+        text: "above",
+      }),
     ]);
 
     const res = await backfillGroup({

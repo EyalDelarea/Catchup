@@ -9,9 +9,7 @@ const baseDeps = () => ({
     { id: 2, name: "B" },
   ]),
   // group 2 has nothing stored → no lower bound → skipped
-  getNewestAnchorSentAt: vi.fn(async (groupId: number) =>
-    groupId === 1 ? new Date(1000) : null,
-  ),
+  getNewestAnchorSentAt: vi.fn(async (groupId: number) => (groupId === 1 ? new Date(1000) : null)),
   gapFill: vi.fn(async () => ({ fetched: 3, durationMs: 5, partial: false })),
   logger: { info: vi.fn() },
 });
