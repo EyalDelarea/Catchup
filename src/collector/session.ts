@@ -263,11 +263,22 @@ export class CollectorSession extends EventEmitter {
       }
     });
 
-    // Forward incoming messages to listeners
+    // Forward incoming messages to listeners.
+    // 'notify' = live messages; 'append' = messages WhatsApp queued while we were
+    // offline, replayed on reconnect. Both are recovered — handleIncomingMessage
+    // dedupes on dedupe_key, so replays/overlap are idempotent.
     sock.ev.on("messages.upsert", ({ messages, type }) => {
-      // type 'notify' = new incoming messages; 'append' = history backfill (ignore per R3)
-      if (type !== "notify") return;
+      if (type !== "notify" && type !== "append") return;
 
+      for (const msg of messages) {
+        this.emit("message", msg);
+      }
+    });
+
+    // On (re)connect WhatsApp pushes a bounded recent-history batch. Persist it so
+    // messages missed during downtime are recovered. syncFullHistory stays false, so
+    // this is the recent window only; dedup makes overlap with live/append idempotent.
+    sock.ev.on("messaging-history.set", ({ messages }: { messages: WAMessage[] }) => {
       for (const msg of messages) {
         this.emit("message", msg);
       }
