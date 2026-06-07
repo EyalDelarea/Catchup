@@ -162,6 +162,13 @@ async function renderFeed() {
   app.innerHTML = buildFeedShell("");
   renderGroupList(groups, "");
   wireSearchInput();
+
+  // Persistent header entry → total summary (reachable as a "menu" item, not just
+  // the inline pinned card).
+  const navTotalBtn = document.getElementById("nav-total-btn");
+  if (navTotalBtn) {
+    navTotalBtn.addEventListener("click", () => navigate("total"));
+  }
 }
 
 /** Build the static feed shell HTML (header, search, empty list). */
@@ -178,6 +185,10 @@ function buildFeedShell(searchValue, loading = false) {
           <span>טוען…</span>
         </div>
       </div>
+      <button id="nav-total-btn" class="nav-total" type="button"
+        aria-label="פתח סיכום כללי לכל הצ׳אטים">
+        📊 סיכום כללי · מה קרה בכל הצ׳אטים
+      </button>
     </div>
     <div class="search-wrap">
       <input
