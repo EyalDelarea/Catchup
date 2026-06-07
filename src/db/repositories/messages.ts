@@ -28,6 +28,32 @@ export async function countReadableByGroup(
   return Number(rows[0]?.count ?? 0);
 }
 
+/**
+ * Count readable messages for a group strictly newer than `since` — same readable
+ * predicate as countReadableByGroup, plus sent_at > since. Used as the boot-time
+ * recovery signal (how many messages came back after the pre-outage snapshot).
+ */
+export async function countReadableSince(
+  client: pg.Pool | pg.PoolClient,
+  groupId: number,
+  since: Date,
+): Promise<number> {
+  const { rows } = await client.query<{ count: string }>(
+    `
+    SELECT COUNT(*) AS count
+    FROM messages m
+    LEFT JOIN transcripts t ON t.message_id = m.id AND t.status = 'completed'
+    WHERE m.group_id = $1
+      AND m.sent_at > $2
+      AND m.message_type <> 'system'
+      AND COALESCE(t.transcript, m.text_content) IS NOT NULL
+      AND length(trim(COALESCE(t.transcript, m.text_content))) > 0
+    `,
+    [groupId, since],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
 export type Anchor = {
   externalId: string;
   sentAt: Date;

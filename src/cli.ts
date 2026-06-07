@@ -339,7 +339,7 @@ program
       { getLastRun, recordRun },
       { recoverOnReconnect },
       { selectActiveGroups },
-      { getNewestAnchor },
+      { getNewestAnchor, countReadableSince },
       { getServiceStatus, isStale },
     ] = await Promise.all([
       import("./web/server.js"),
@@ -542,6 +542,23 @@ program
         const bootWasStale = bootStatus ? isStale(bootStatus, 90_000) : true;
         let recoveryRan = false;
 
+        // Capture each active group's newest-stored timestamp NOW, before connecting —
+        // i.e. the pre-outage state. Recovery pages backward to this frozen value and
+        // measures messages newer than it. Must be read before the passive sync raises
+        // the newest, or the active fetch's anchor and stop would be identical (no-op).
+        const bootSnapshots: Array<{ id: number; name: string; tLast: Date | null }> = [];
+        if (bootWasStale) {
+          const activeSince = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+          const activeGroups = await selectActiveGroups(pool, { since: activeSince });
+          for (const g of activeGroups) {
+            const anchor = await getNewestAnchor(pool, g.id);
+            bootSnapshots.push({ id: g.id, name: g.name, tLast: anchor?.sentAt ?? null });
+          }
+          console.log(
+            `[reconnect-sync] armed: snapshotted ${bootSnapshots.length} active group(s) (pre-boot heartbeat stale).`,
+          );
+        }
+
         // Gap-mode backfill: fill a single group's history backward to a timestamp.
         const gapFillGroup = async (groupId: number, stopAtSentAt: Date) => {
           if (!liveSession) return { fetched: 0, durationMs: 0, partial: true };
@@ -597,19 +614,14 @@ program
             void (async () => {
               await new Promise((r) => setTimeout(r, 8000));
               const result = await recoverOnReconnect({
-                isStale: () => true, // already gated by bootWasStale above
-                activeSince: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000),
-                selectActiveGroups: (range) => selectActiveGroups(pool, range),
-                getNewestAnchorSentAt: async (groupId) =>
-                  (await getNewestAnchor(pool, groupId))?.sentAt ?? null,
+                snapshots: bootSnapshots,
                 gapFill: gapFillGroup,
+                countReadableSince: (groupId, since) => countReadableSince(pool, groupId, since),
                 logger: webLogger,
               });
-              if (result.recovered > 0) {
-                console.log(
-                  `[reconnect-sync] recovered ${result.recovered} message(s) across ${result.groups} group(s).`,
-                );
-              }
+              console.log(
+                `[reconnect-sync] done: recovered ${result.recovered} message(s) across ${result.groups} group(s).`,
+              );
             })().catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : String(err);
               process.stderr.write(`[reconnect-sync] error: ${msg}\n`);

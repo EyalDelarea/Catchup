@@ -270,6 +270,11 @@ export class CollectorSession extends EventEmitter {
     sock.ev.on("messages.upsert", ({ messages, type }) => {
       if (type !== "notify" && type !== "append") return;
 
+      // Diagnostic: 'append' is the offline-replay channel — log how much arrives so
+      // we can see whether WhatsApp actually delivers missed messages on reconnect.
+      if (type === "append" && messages.length > 0) {
+        process.stderr.write(`[history-sync] append: ${messages.length} message(s)\n`);
+      }
       for (const msg of messages) {
         this.emit("message", msg);
       }
@@ -279,6 +284,12 @@ export class CollectorSession extends EventEmitter {
     // messages missed during downtime are recovered. syncFullHistory stays false, so
     // this is the recent window only; dedup makes overlap with live/append idempotent.
     sock.ev.on("messaging-history.set", ({ messages }: { messages: WAMessage[] }) => {
+      // Diagnostic: surface whether/how much history WhatsApp delivers on connect.
+      if (messages.length > 0) {
+        process.stderr.write(
+          `[history-sync] messaging-history.set: ${messages.length} message(s)\n`,
+        );
+      }
       for (const msg of messages) {
         this.emit("message", msg);
       }
