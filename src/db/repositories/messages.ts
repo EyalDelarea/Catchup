@@ -29,6 +29,33 @@ export async function countReadableByGroup(
 }
 
 /**
+ * Newest readable message timestamp for a group (any source — live OR imported),
+ * using the same readable predicate as countReadableByGroup, or null when the group
+ * has no readable messages. This is the correct pre-outage baseline for the boot
+ * recovery signal: countReadableSince(group, getNewestReadableSentAt(group)) is ~0
+ * unless genuinely newer messages arrive. (getNewestAnchor is external_id-filtered
+ * for paging and is NOT a valid measurement baseline for imported groups.)
+ */
+export async function getNewestReadableSentAt(
+  client: pg.Pool | pg.PoolClient,
+  groupId: number,
+): Promise<Date | null> {
+  const { rows } = await client.query<{ newest: Date | null }>(
+    `
+    SELECT MAX(m.sent_at) AS newest
+    FROM messages m
+    LEFT JOIN transcripts t ON t.message_id = m.id AND t.status = 'completed'
+    WHERE m.group_id = $1
+      AND m.message_type <> 'system'
+      AND COALESCE(t.transcript, m.text_content) IS NOT NULL
+      AND length(trim(COALESCE(t.transcript, m.text_content))) > 0
+    `,
+    [groupId],
+  );
+  return rows[0]?.newest ?? null;
+}
+
+/**
  * Count readable messages for a group strictly newer than `since` — same readable
  * predicate as countReadableByGroup, plus sent_at > since. Used as the boot-time
  * recovery signal (how many messages came back after the pre-outage snapshot).

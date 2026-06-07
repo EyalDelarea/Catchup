@@ -339,7 +339,7 @@ program
       { getLastRun, recordRun },
       { recoverOnReconnect },
       { selectActiveGroups },
-      { getNewestAnchor, countReadableSince },
+      { getNewestReadableSentAt, countReadableSince },
       { getServiceStatus, isStale },
     ] = await Promise.all([
       import("./web/server.js"),
@@ -551,8 +551,10 @@ program
           const activeSince = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
           const activeGroups = await selectActiveGroups(pool, { since: activeSince });
           for (const g of activeGroups) {
-            const anchor = await getNewestAnchor(pool, g.id);
-            bootSnapshots.push({ id: g.id, name: g.name, tLast: anchor?.sentAt ?? null });
+            // Newest READABLE message (any source) — the correct measurement baseline.
+            // (The active fetch uses its own external_id anchor inside backfillGroup.)
+            const tLast = await getNewestReadableSentAt(pool, g.id);
+            bootSnapshots.push({ id: g.id, name: g.name, tLast });
           }
           console.log(
             `[reconnect-sync] armed: snapshotted ${bootSnapshots.length} active group(s) (pre-boot heartbeat stale).`,
