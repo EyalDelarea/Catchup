@@ -42,8 +42,9 @@ echo "▶ Starting worker + serve --collect…"
 # going forward (gemma4:26b + think:false, multi-frame video). It shares the model
 # with summaries (serial worker), so to catch up history use a bounded enqueue, e.g.
 # `npx tsx src/cli.ts analyze-backlog --limit 20`, rather than draining everything.
-# summarize.group runs the scheduled digest (feature 011).
-( npx tsx src/workers/worker.ts --types import.file,transcribe.voicenote,analyze.image,analyze.video,summarize.group 2>&1 \
+# summarize.group runs the scheduled per-chat digest (feature 011);
+# summarize.total runs the scheduled cross-chat total summary.
+( npx tsx src/workers/worker.ts --types import.file,transcribe.voicenote,analyze.image,analyze.video,summarize.group,summarize.total 2>&1 \
     | while IFS= read -r l; do printf '[worker] %s\n' "$l"; done ) &
 ( npx tsx src/cli.ts serve --collect 2>&1 \
     | while IFS= read -r l; do printf '[serve]  %s\n' "$l"; done ) &

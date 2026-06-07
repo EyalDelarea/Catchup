@@ -38,6 +38,13 @@ flowchart LR
 
 Every box runs on **your machine**. The only thing that touches the network is the read-only WhatsApp link itself.
 
+### 📊 Total summary (סיכום כללי)
+
+In addition to per-chat summaries, Catchup can produce a single digest across **all** your chats at once. It summarizes each active group and DM for the chosen time range, then reduces those into cross-cutting highlights — flagging things that need your attention — followed by a per-chat breakdown.
+
+- **On demand in the web UI:** a pinned "📊 סיכום כללי" card sits at the top of the chat list; pick a range (24 h / 3 days / week) and the summary streams in live.
+- **Automatically:** the twice-daily scheduler produces a total summary alongside the per-chat digests, so it's ready when you wake up.
+
 ---
 
 ## ⚠️ Disclaimer
@@ -447,7 +454,7 @@ Tests use [Testcontainers](https://testcontainers.com/) for ephemeral Postgres a
 The worker can be started independently for debugging:
 
 ```bash
-npx tsx src/workers/worker.ts --types import.file,transcribe.voicenote,analyze.image,analyze.video,summarize.group
+npx tsx src/workers/worker.ts --types import.file,transcribe.voicenote,analyze.image,analyze.video,summarize.group,summarize.total
 ```
 
 </details>

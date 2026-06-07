@@ -751,11 +751,28 @@ body::after {
   list-style: disc;
 }
 .summary-card__body--rendered li {
-  margin: 0.15em 0;
+  margin: 0.35em 0;
+  line-height: 1.7;
 }
 .summary-card__body--rendered strong {
   color: var(--fg);
   font-weight: 700;
+}
+
+/* Bidi-isolated chat-name chip used in cross-chat highlights ([Chat] tags).
+   <bdi> keeps the (often Latin) name + emoji/dates from scrambling the RTL line. */
+.chat-tag {
+  display: inline-block;
+  unicode-bidi: isolate;
+  margin-inline-end: 0.4em;
+  padding: 0.05em 0.5em;
+  border-radius: 999px;
+  background: rgba(125, 211, 252, 0.14);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.85em;
+  white-space: nowrap;
+  vertical-align: baseline;
 }
 
 /* ── Blinking caret ─────────────────────────────────────── */
@@ -1656,6 +1673,83 @@ body::after {
   .glacier-loader__bar-fill::after {
     display: none;
   }
+}
+
+/* ── Total summary pinned card ───────────────────────────── */
+.group-card--total {
+  border-color: rgba(125, 211, 252, 0.35);
+  background: rgba(125, 211, 252, 0.06);
+}
+
+.group-card--total .group-card__name {
+  color: var(--accent);
+}
+
+/* ── Per-chat accordion (total view) ────────────────────── */
+.total-perchat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.total-section-heading {
+  margin: 1.25rem 0 0.6rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--fg-dim);
+}
+
+.perchat {
+  padding: 13px 15px;
+}
+
+.perchat[open] > .perchat__summary {
+  margin-bottom: 12px;
+}
+
+.perchat__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Remove default disclosure marker */
+.perchat__summary::-webkit-details-marker {
+  display: none;
+}
+
+.perchat__summary::marker {
+  display: none;
+}
+
+.perchat__name {
+  flex: 1;
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--fg);
+  line-height: 1.3;
+}
+
+.perchat__count {
+  font-size: var(--text-xs);
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.perchat__body {
+  font-size: 0.84375rem;
+  line-height: 1.72;
+  color: var(--fg-card);
+  padding-top: 8px;
+  border-top: 1px solid rgba(200, 225, 255, 0.08);
 }
 
 /* ── No horizontal overflow at small widths ─────────────── */

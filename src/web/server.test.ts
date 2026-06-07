@@ -1108,6 +1108,108 @@ describe("handleSummarize — client disconnect aborts summarizer, no commit", (
   }, 30_000);
 });
 
+// ── GET /api/total-summary ────────────────────────────────────────────────────
+
+describe("GET /api/total-summary", () => {
+  let pool: pg.Pool;
+  let base: string;
+  let server: ReturnType<typeof createServer>;
+
+  // Fake summarizer that branches on the prompt system text:
+  //   - reduce phase: prompt.system contains "דורש תשומת לב" → yield reduce text
+  //   - map phase (per-chat): yield generic per-chat text
+  class BranchingFake implements StreamingSummarizer {
+    async *summarizeStream(prompt: SummaryPrompt) {
+      if (prompt.system.includes("דורש תשומת לב")) {
+        yield "## דורש תשומת לב\n- [X] do";
+      } else {
+        yield "## תקציר\nx";
+      }
+    }
+  }
+
+  beforeAll(async () => {
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
+    server = createServer({
+      pool,
+      summarizer: new BranchingFake(),
+      tokenBudget: 24000,
+      model: "fake",
+    });
+    await new Promise<void>((r) => server.listen(0, r));
+    base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  }, 120_000);
+
+  afterAll(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+    await pool?.end();
+  }, 30_000);
+
+  it("streams status/token events and returns perChat in done event", async () => {
+    // Seed two active chats with messages at or after `since`
+    const since = "2026-06-06T00:00:00.000Z";
+    const sinceDate = new Date(since);
+
+    const g1 = await upsertGroup(pool, { name: `TS-chat1-${randomUUID()}`, source: "import" });
+    const g2 = await upsertGroup(pool, { name: `TS-chat2-${randomUUID()}`, source: "import" });
+
+    // Seed at least one message per group after `since`
+    for (const [gid, key] of [
+      [g1, `ts-1-${randomUUID()}`],
+      [g2, `ts-2-${randomUUID()}`],
+    ] as [number, string][]) {
+      const row: NormalizedMessage & { participantId: number | null } = {
+        groupId: gid,
+        importId: null,
+        source: "import",
+        senderName: "Dana",
+        messageType: "text",
+        textContent: "hello total summary",
+        mediaFilename: null,
+        mediaPath: null,
+        mediaStatus: null,
+        externalId: null,
+        participantId: null,
+        sentAt: new Date(sinceDate.getTime() + 1000),
+        dedupeKey: key,
+      };
+      await insertMessages(pool, [row]);
+    }
+
+    const r = await fetch(`${base}/api/total-summary?since=${encodeURIComponent(since)}`);
+    const text = await r.text();
+
+    expect(r.headers.get("content-type")).toContain("text/event-stream");
+
+    // Parse SSE events from raw text
+    const events: { event: string; data: unknown }[] = [];
+    for (const block of text.split("\n\n")) {
+      const lines = block.split("\n");
+      const eventLine = lines.find((l) => l.startsWith("event: "));
+      const dataLine = lines.find((l) => l.startsWith("data: "));
+      if (eventLine && dataLine) {
+        events.push({
+          event: eventLine.slice("event: ".length).trim(),
+          data: JSON.parse(dataLine.slice("data: ".length)),
+        });
+      }
+    }
+
+    const done = events.find((e) => e.event === "done");
+    expect(done).toBeTruthy();
+    expect((done!.data as Record<string, unknown>).perChat).toBeDefined();
+    expect(
+      ((done!.data as Record<string, unknown>).perChat as unknown[]).length,
+    ).toBeGreaterThanOrEqual(1);
+
+    const tokens = events
+      .filter((e) => e.event === "token")
+      .map((e) => (e.data as Record<string, unknown>).delta as string)
+      .join("");
+    expect(tokens).toContain("דורש תשומת לב");
+  });
+});
+
 // ── Static asset handler ──────────────────────────────────────────────────────
 
 describe("static asset handler", () => {

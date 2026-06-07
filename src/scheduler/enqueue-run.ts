@@ -13,6 +13,11 @@ import type { JobBus } from "../jobs/job-bus.js";
 export type EnqueueScheduledRunOpts = {
   /** When true, enqueue all groups regardless of whether they have new messages. */
   all?: boolean;
+  /**
+   * When provided, also enqueue ONE summarize.total job for [since, now] after
+   * the per-group jobs. Omitted by callers that only want per-group behaviour.
+   */
+  sinceForTotal?: Date;
 };
 
 export type EnqueueScheduledRunResult = {
@@ -98,6 +103,15 @@ export async function enqueueScheduledRun(
     // Outer error (e.g. DB unreachable): log but never throw
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[enqueueScheduledRun] fatal error, returning partial result: ${msg}\n`);
+  }
+
+  if (opts?.sinceForTotal) {
+    try {
+      await bus.enqueue("summarize.total", { since: opts.sinceForTotal.toISOString() });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[enqueueScheduledRun] summarize.total enqueue failed: ${msg}\n`);
+    }
   }
 
   return { enqueued, skipped };

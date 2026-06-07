@@ -187,6 +187,21 @@ describe("enqueueScheduledRun", () => {
     expect(result.enqueued).toBeGreaterThanOrEqual(1);
   });
 
+  it("enqueues one summarize.total job when sinceForTotal is provided", async () => {
+    const bus = makeFakeBus();
+    const since = new Date("2026-06-06T00:00:00.000Z");
+    await enqueueScheduledRun(pool, bus, { all: true, sinceForTotal: since });
+    const totals = bus.calls.filter((e) => e.type === "summarize.total");
+    expect(totals.length).toBe(1);
+    expect(totals[0]!.payload).toEqual({ since: since.toISOString() });
+  });
+
+  it("does NOT enqueue a total when sinceForTotal is omitted", async () => {
+    const bus = makeFakeBus();
+    await enqueueScheduledRun(pool, bus, { all: true });
+    expect(bus.calls.filter((e) => e.type === "summarize.total").length).toBe(0);
+  });
+
   it("one failing group does not abort the batch (other groups still enqueued)", async () => {
     const bus = makeFakeBus();
 

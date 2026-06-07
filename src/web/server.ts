@@ -7,6 +7,7 @@ import { findGroupByName, listGroups } from "../db/repositories/groups.js";
 import { countReadableByGroup, getOldestSentAt } from "../db/repositories/messages.js";
 import { upsertWatermark } from "../db/repositories/read-watermarks.js";
 import { insertSummary, listSummariesByGroup } from "../db/repositories/summaries.js";
+import { insertTotalSummary } from "../db/repositories/total-summaries.js";
 import type { JobType } from "../jobs/job-types.js";
 import { buildStatusReport, DEFAULT_STALENESS_MS } from "../service/status.js";
 import { prepareSummary } from "../summarization/prepare.js";
@@ -14,6 +15,7 @@ import { prepareCatchup } from "../summarization/prepare-catchup.js";
 import { persistCatchupResult } from "../summarization/run-summary.js";
 import type { Selection } from "../summarization/select.js";
 import type { StreamingSummarizer } from "../summarization/summarizer.js";
+import { generateTotalSummary } from "../summarization/total-summary.js";
 import { sseFrame } from "./sse.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -67,6 +69,10 @@ export function createServer(deps: ServerDeps): http.Server {
     }
     if (req.method === "GET" && url.pathname === "/api/summarize") {
       void handleSummarize(url, req, res, deps);
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/total-summary") {
+      void handleTotalSummary(url, req, res, deps);
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/status") {
@@ -413,6 +419,82 @@ async function handleSummarize(
       fetched,
       partial: backfillPartial,
       stale,
+    });
+    res.end();
+  } catch (err) {
+    send("error", { message: err instanceof Error ? err.message : String(err) });
+    res.end();
+  }
+}
+
+async function handleTotalSummary(
+  url: URL,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: ServerDeps,
+): Promise<void> {
+  const ac = new AbortController();
+  const abortOnClose = () => ac.abort();
+  req.on("close", abortOnClose);
+  res.on("close", abortOnClose);
+
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+  });
+  const send = (event: string, data: unknown) => res.write(sseFrame(event, data));
+
+  try {
+    // since defaults to the last 24h when absent/invalid.
+    const sinceRaw = url.searchParams.get("since");
+    let since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    if (sinceRaw != null) {
+      const d = new Date(sinceRaw);
+      if (!Number.isNaN(d.getTime())) since = d;
+    }
+
+    const start = Date.now();
+    const output = await generateTotalSummary(
+      {
+        pool: deps.pool,
+        summarizeStream: (prompt, o) => deps.summarizer.summarizeStream(prompt, o),
+        tokenBudget: deps.tokenBudget,
+      },
+      { since },
+      {
+        signal: ac.signal,
+        onChatStart: (info) =>
+          send("status", { phase: "chat", index: info.index, total: info.total, name: info.name }),
+        onHighlightToken: (delta) => send("token", { delta }),
+      },
+    );
+
+    // Client disconnected mid-stream → do not persist a partial result.
+    if (ac.signal.aborted) return;
+
+    const summaryId = await insertTotalSummary(deps.pool, {
+      rangeKind: "since",
+      parameters: { since: since.toISOString() },
+      output,
+      model: deps.model,
+    });
+
+    deps.logger?.info(
+      {
+        evt: "total-summary",
+        op: "summary",
+        durationMs: Date.now() - start,
+        chats: output.perChat.length,
+      },
+      "total summary done",
+    );
+
+    send("done", {
+      summaryId,
+      elapsedMs: Date.now() - start,
+      highlights: output.highlights,
+      perChat: output.perChat,
     });
     res.end();
   } catch (err) {
