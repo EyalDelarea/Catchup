@@ -584,4 +584,95 @@ describe("backfillGroup integration", () => {
       }),
     ).resolves.toMatchObject({ partial: true, fetched: 0 });
   });
+
+  // -------------------------------------------------------------------------
+  // gap-mode: stop on timestamp boundary, not the count target
+  // -------------------------------------------------------------------------
+  it("gap-mode: pages backward until a batch crosses stopAtSentAt", async () => {
+    const remoteJid = "bf-gap@g.us";
+    const topTs = 1700300000;
+
+    // Seed the "top" anchor (getNewestAnchor starts here).
+    await handleIncomingMessage(
+      pool,
+      makeFakeWATextMessage({ id: "GAP-TOP", remoteJid, timestampSeconds: topTs, text: "top" }),
+      { dataDir },
+    );
+    const { rows } = await pool.query<{ id: string }>(
+      `SELECT id FROM groups WHERE whatsapp_id = $1`,
+      [remoteJid],
+    );
+    const groupId = Number(rows[0]!.id);
+
+    // stop 500s below the top. Batches walk older; the 3rd crosses the line.
+    const batch1 = [
+      makeFakeWATextMessage({ id: "GAP-B1-0", remoteJid, timestampSeconds: topTs - 100, text: "b1-0" }),
+      makeFakeWATextMessage({ id: "GAP-B1-1", remoteJid, timestampSeconds: topTs - 200, text: "b1-1" }),
+    ];
+    const batch2 = [
+      makeFakeWATextMessage({ id: "GAP-B2-0", remoteJid, timestampSeconds: topTs - 400, text: "b2-0" }),
+    ];
+    const batch3 = [
+      // topTs-600 is below the stop (topTs-500) → loop should stop after this batch.
+      makeFakeWATextMessage({ id: "GAP-B3-0", remoteJid, timestampSeconds: topTs - 600, text: "b3-0" }),
+    ];
+    const pages = [batch1, batch2, batch3];
+    let call = 0;
+    const fetchHistory = vi.fn(async () => "req");
+    const awaitHistory = vi.fn(async () => pages[call++] ?? []);
+
+    const res = await backfillGroup({
+      pool,
+      groupId,
+      dataDir,
+      targetWindow: 25, // would normally keep going to 25 held; gap-mode must ignore it
+      maxFetch: 200,
+      timeoutMs: 10_000,
+      stopAtSentAt: new Date((topTs - 500) * 1000),
+      fetchHistory,
+      awaitHistory,
+    });
+
+    expect(awaitHistory).toHaveBeenCalledTimes(3); // stopped right after crossing the boundary
+    expect(res.fetched).toBe(4); // 900,800,600,400-equivalents all newly inserted
+    expect(res.partial).toBe(false); // reached the stop boundary
+  });
+
+  it("gap-mode: returns partial:true when maxFetch is hit before crossing stopAtSentAt", async () => {
+    const remoteJid = "bf-gap-cap@g.us";
+    const topTs = 1700400000;
+
+    await handleIncomingMessage(
+      pool,
+      makeFakeWATextMessage({ id: "GAPCAP-TOP", remoteJid, timestampSeconds: topTs, text: "top" }),
+      { dataDir },
+    );
+    const { rows } = await pool.query<{ id: string }>(
+      `SELECT id FROM groups WHERE whatsapp_id = $1`,
+      [remoteJid],
+    );
+    const groupId = Number(rows[0]!.id);
+
+    let i = 0;
+    const fetchHistory = vi.fn(async () => "req");
+    // Every batch stays above the stop → never crosses; maxFetch must cap it.
+    const awaitHistory = vi.fn(async () => [
+      makeFakeWATextMessage({ id: `GAPCAP-${i++}`, remoteJid, timestampSeconds: topTs - 100, text: "above" }),
+    ]);
+
+    const res = await backfillGroup({
+      pool,
+      groupId,
+      dataDir,
+      targetWindow: 25,
+      maxFetch: 2,
+      timeoutMs: 10_000,
+      stopAtSentAt: new Date((topTs - 1000) * 1000),
+      fetchHistory,
+      awaitHistory,
+    });
+
+    expect(res.partial).toBe(true);
+    expect(res.fetched).toBeLessThanOrEqual(2);
+  });
 });

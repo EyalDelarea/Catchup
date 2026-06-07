@@ -28,6 +28,14 @@ export type BackfillDeps = {
   fetchHistory: (count: number, anchor: AnchorKey, anchorTsMs: number) => Promise<string>;
   /** Injected: resolve with WAMessages delivered for this chat, or [] on timeout. */
   awaitHistory: (timeoutMs: number) => Promise<WAMessage[]>;
+  /**
+   * Gap-mode: page backward until a fetched batch's oldest message is at/below this
+   * timestamp. When set, the count target (`targetWindow`) is NOT used as the stop
+   * condition — used by boot-time gap recovery to fill exactly the downtime window.
+   */
+  stopAtSentAt?: Date;
+  /** Page size for gap-mode fetch requests (default 50). Ignored in count-mode. */
+  pageSize?: number;
   /** Optional: download voice note media; passed through to handleIncomingMessage. */
   downloadVoiceNote?: (m: WAMessage) => Promise<Buffer>;
   /** Injected clock (defaults to Date.now). */
@@ -72,15 +80,19 @@ export async function backfillGroup(deps: BackfillDeps): Promise<BackfillResult>
     fetchHistory,
     awaitHistory,
     downloadVoiceNote,
+    stopAtSentAt,
+    pageSize = 50,
     now = Date.now,
   } = deps;
 
   const start = now();
+  const stopMs = stopAtSentAt ? stopAtSentAt.getTime() : null;
+  const gapMode = stopMs !== null;
 
   try {
-    // --- Step 1: Check if already satisfied ---
+    // --- Step 1: Check if already satisfied (count-mode only) ---
     let held = await countReadableByGroup(pool, groupId);
-    if (held >= targetWindow) {
+    if (!gapMode && held >= targetWindow) {
       return { fetched: 0, durationMs: now() - start, partial: false };
     }
 
@@ -99,8 +111,14 @@ export async function backfillGroup(deps: BackfillDeps): Promise<BackfillResult>
     };
     let anchorTsMs = anchor.sentAt.getTime();
 
-    while (held < targetWindow && totalFetched < maxFetch && now() - start < timeoutMs) {
-      const want = Math.max(1, Math.min(targetWindow - held, maxFetch - totalFetched));
+    while (
+      (gapMode ? anchorTsMs > stopMs! : held < targetWindow) &&
+      totalFetched < maxFetch &&
+      now() - start < timeoutMs
+    ) {
+      const want = gapMode
+        ? Math.max(1, Math.min(pageSize, maxFetch - totalFetched))
+        : Math.max(1, Math.min(targetWindow - held, maxFetch - totalFetched));
 
       const remaining = timeoutMs - (now() - start);
 
@@ -154,7 +172,7 @@ export async function backfillGroup(deps: BackfillDeps): Promise<BackfillResult>
       }
     }
 
-    const partial = held < targetWindow;
+    const partial = gapMode ? anchorTsMs > stopMs! : held < targetWindow;
     return { fetched: totalFetched, durationMs: now() - start, partial };
   } catch (err) {
     // Outer catch: DB errors or unexpected failures — never throw to caller
