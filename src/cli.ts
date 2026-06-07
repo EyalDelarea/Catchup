@@ -337,6 +337,10 @@ program
       { parseTimes },
       { enqueueScheduledRun },
       { getLastRun, recordRun },
+      { recoverOnReconnect },
+      { selectActiveGroups },
+      { getNewestAnchor },
+      { getServiceStatus, isStale },
     ] = await Promise.all([
       import("./web/server.js"),
       import("./summarization/summarizer.js"),
@@ -351,6 +355,10 @@ program
       import("./scheduler/schedule.js"),
       import("./scheduler/enqueue-run.js"),
       import("./db/repositories/scheduler-state.js"),
+      import("./collector/reconnect-recovery.js"),
+      import("./summarization/select-active-groups.js"),
+      import("./db/repositories/messages.js"),
+      import("./db/repositories/service-status.js"),
     ]);
     const webLogger = createLogger(config.logging);
     const pool = new pg.default.Pool({ connectionString: config.databaseUrl });
@@ -527,6 +535,41 @@ program
         const session = await startSession(authDir, config.whatsapp.allowSend);
         liveSession = session;
 
+        // Snapshot the heartbeat BEFORE the collector connects (the heartbeat loop
+        // writes a fresh value immediately on connect). A stale value means the
+        // server was genuinely down → run boot-time gap recovery once.
+        const bootStatus = await getServiceStatus(pool);
+        const bootWasStale = bootStatus ? isStale(bootStatus, 90_000) : true;
+        let recoveryRan = false;
+
+        // Gap-mode backfill: fill a single group's history backward to a timestamp.
+        const gapFillGroup = async (groupId: number, stopAtSentAt: Date) => {
+          if (!liveSession) return { fetched: 0, durationMs: 0, partial: true };
+          const { rows } = await pool.query<{ whatsapp_id: string }>(
+            "SELECT whatsapp_id FROM groups WHERE id=$1",
+            [groupId],
+          );
+          const jid = rows[0]?.whatsapp_id;
+          if (!jid) return { fetched: 0, durationMs: 0, partial: true };
+          return backfillGroup({
+            pool,
+            groupId,
+            dataDir: config.dataDir,
+            targetWindow: 25, // unused in gap-mode but required by the type
+            maxFetch: 500,
+            timeoutMs: 20_000,
+            stopAtSentAt,
+            fetchHistory: (
+              c: number,
+              a: import("./collector/backfill.js").AnchorKey,
+              ts: number,
+            ) => liveSession.fetchMessageHistory(c, a, ts),
+            awaitHistory: (toMs: number) => liveSession.awaitHistorySync(jid, toMs),
+            downloadVoiceNote: (m: import("@whiskeysockets/baileys").WAMessage) =>
+              liveSession.downloadMedia(m),
+          });
+        };
+
         session.on("qr", () => {
           console.log("Scan the QR code above with WhatsApp to link your account.");
         });
@@ -548,6 +591,33 @@ program
               const msg = err instanceof Error ? err.message : String(err);
               process.stderr.write(`[name-resolver] error: ${msg}\n`);
             });
+
+          // Boot-time gap recovery: once per process, only if the pre-boot heartbeat
+          // was stale (a real outage). Give the passive recent-sync (append /
+          // history-set) ~8s to land a fresh top anchor before extending backward.
+          if (!recoveryRan && bootWasStale) {
+            recoveryRan = true;
+            void (async () => {
+              await new Promise((r) => setTimeout(r, 8000));
+              const result = await recoverOnReconnect({
+                isStale: () => true, // already gated by bootWasStale above
+                activeSince: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000),
+                selectActiveGroups: (range) => selectActiveGroups(pool, range),
+                getNewestAnchorSentAt: async (groupId) =>
+                  (await getNewestAnchor(pool, groupId))?.sentAt ?? null,
+                gapFill: gapFillGroup,
+                logger: webLogger,
+              });
+              if (result.recovered > 0) {
+                console.log(
+                  `[reconnect-sync] recovered ${result.recovered} message(s) across ${result.groups} group(s).`,
+                );
+              }
+            })().catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              process.stderr.write(`[reconnect-sync] error: ${msg}\n`);
+            });
+          }
         });
         session.on("disconnected", () => {
           console.log("[collector] disconnected (will auto-reconnect).");
