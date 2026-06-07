@@ -25,6 +25,12 @@ backups/
 # Local dev / tooling artifacts
 .playwright-mcp/
 
+# Benchmark harness: generated/real fixtures + raw run output are local-only.
+# Committed: bench/*.ts, bench/*.sh, bench/fixtures/chat-he.json, bench/RESULTS.md.
+bench/fixtures/generated/
+bench/fixtures/local/
+bench/results/
+
 # Local design tooling — the committed deliverables are assets/*.svg + assets/*.png.
 # The banner generator and the raw Sora font (OFL) stay local; the PNG bakes the
 # rasterized wordmark so no font is redistributed.
