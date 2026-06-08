@@ -241,9 +241,11 @@ export class CollectorSession extends EventEmitter {
     // Contacts directory — the only source for SAVED contact names / push names.
     // Forwarded for the collector to resolve 1:1 chat display names.
     sock.ev.on("contacts.upsert", (contacts: Contact[]) => {
+      diagContacts("contacts.upsert", contacts);
       if (contacts.length > 0) this.emit("contacts", contacts);
     });
     sock.ev.on("contacts.update", (updates: Partial<Contact>[]) => {
+      diagContacts("contacts.update", updates);
       const contacts = updates.filter((c): c is Contact => typeof c.id === "string");
       if (contacts.length > 0) this.emit("contacts", contacts);
     });
@@ -311,11 +313,15 @@ export class CollectorSession extends EventEmitter {
         messages,
         chats,
         contacts,
+        lidPnMappings,
       }: {
         messages: WAMessage[];
         chats: Chat[];
         contacts: Contact[];
+        lidPnMappings?: { pn: string; lid: string }[];
       }) => {
+        diagHistory(chats, contacts, lidPnMappings);
+
         // The history payload also carries the chat + contact directory — the
         // only source for names of groups we can't fetch a subject for and for
         // saved 1:1 contact names. Forward both for resolution.
@@ -374,6 +380,49 @@ function printQr(qr: string): void {
       }
       console.log(`QR Code (scan with WhatsApp):\n${qr}`);
     });
+}
+
+// ---------------------------------------------------------------------------
+// Name-resolution diagnostics (opt-in via CATCHUP_DIAG_NAMES=1)
+// ---------------------------------------------------------------------------
+// 1:1 (@s.whatsapp.net) chats weren't resolving while groups did. These gated
+// probes report exactly what WhatsApp delivers — contact field coverage and the
+// lid↔pn mapping — so we can see whether contacts arrive and how they're keyed
+// before committing to a fix. No-ops unless the env flag is set.
+
+const DIAG_NAMES = process.env.CATCHUP_DIAG_NAMES === "1";
+
+function diagContacts(source: string, contacts: Partial<Contact>[]): void {
+  if (!DIAG_NAMES || contacts.length === 0) return;
+  const has = (pred: (c: Partial<Contact>) => unknown) => contacts.filter(pred).length;
+  const summary =
+    `[diag-names] ${source}: total=${contacts.length}` +
+    ` name=${has((c) => c.name?.trim())}` +
+    ` notify=${has((c) => c.notify?.trim())}` +
+    ` verifiedName=${has((c) => c.verifiedName?.trim())}` +
+    ` phoneNumber=${has((c) => c.phoneNumber)}` +
+    ` id@s=${has((c) => c.id?.endsWith("@s.whatsapp.net"))}` +
+    ` id@lid=${has((c) => c.id?.endsWith("@lid"))}`;
+  process.stderr.write(`${summary}\n`);
+  for (const c of contacts.slice(0, 3)) {
+    process.stderr.write(
+      `[diag-names]   sample id=${c.id} lid=${c.lid ?? "-"} phoneNumber=${c.phoneNumber ?? "-"} name=${c.name ?? "-"} notify=${c.notify ?? "-"}\n`,
+    );
+  }
+}
+
+function diagHistory(
+  chats: Chat[] | undefined,
+  contacts: Contact[] | undefined,
+  lidPnMappings: { pn: string; lid: string }[] | undefined,
+): void {
+  if (!DIAG_NAMES) return;
+  process.stderr.write(
+    `[diag-names] history.set: chats=${chats?.length ?? 0} contacts=${contacts?.length ?? 0} lidPnMappings=${lidPnMappings?.length ?? 0}\n`,
+  );
+  for (const m of (lidPnMappings ?? []).slice(0, 3)) {
+    process.stderr.write(`[diag-names]   lidPn pn=${m.pn} lid=${m.lid}\n`);
+  }
 }
 
 /**
