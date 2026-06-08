@@ -895,4 +895,94 @@ program
     if (!allOk) process.exit(1);
   });
 
+program
+  .command("merge-duplicate-chats")
+  .description(
+    "Merge @lid/@s.whatsapp.net duplicate chats of the same person (dry-run unless --apply)",
+  )
+  .option("--apply", "Actually perform the merges (default: dry-run, no writes)")
+  .action(async (options: { apply?: boolean }) => {
+    const config = loadConfig();
+    const pg = await import("pg");
+    const pool = new pg.default.Pool({ connectionString: config.databaseUrl });
+    const { startSession } = await import("./collector/session.js");
+    const { findMergeCandidates, mergeGroups } = await import("./db/repositories/merge.js");
+
+    const session = await startSession(path.join(config.dataDir, "baileys-auth"), false);
+    session.on("qr", () => {
+      console.log("Scan the QR code above with WhatsApp to link your account.");
+    });
+
+    const run = async () => {
+      // Give Baileys' lid<->pn mapping a moment to settle after connect.
+      await new Promise((r) => setTimeout(r, 6000));
+      const candidates = await findMergeCandidates(pool, {
+        lidForPn: (pn) => session.lidForPn(pn),
+        pnForLid: (lid) => session.pnForLid(lid),
+      });
+
+      if (candidates.length === 0) {
+        console.log("No duplicate-chat pairs found.");
+      } else {
+        console.log(`Found ${candidates.length} duplicate-chat pair(s):`);
+        for (const c of candidates) {
+          console.log(
+            `  "${c.name}"  keep ${c.survivorJid} (${c.survivorMsgs} msgs)  ⟵ merge ${c.dupJid} (${c.dupMsgs} msgs)`,
+          );
+        }
+        if (options.apply) {
+          let ok = 0;
+          let moved = 0;
+          let dropped = 0;
+          for (const c of candidates) {
+            const client = await pool.connect();
+            try {
+              await client.query("BEGIN");
+              const res = await mergeGroups(client, {
+                survivorId: c.survivorId,
+                dupId: c.dupId,
+                name: c.name,
+              });
+              await client.query("COMMIT");
+              ok++;
+              moved += res.movedMessages;
+              dropped += res.deletedDuplicateMessages;
+              console.log(
+                `  ✓ "${c.name}" — moved ${res.movedMessages}, dropped ${res.deletedDuplicateMessages} dup`,
+              );
+            } catch (err) {
+              await client.query("ROLLBACK").catch(() => {});
+              const msg = err instanceof Error ? err.message : String(err);
+              console.error(`  ✗ "${c.name}" (${c.survivorJid} ⟵ ${c.dupJid}): ${msg}`);
+            } finally {
+              client.release();
+            }
+          }
+          console.log(
+            `Applied ${ok}/${candidates.length} merge(s); moved ${moved} message(s), dropped ${dropped} duplicate(s).`,
+          );
+        } else {
+          console.log(
+            "\nDry-run only — no changes made. Re-run with --apply to perform these merges.",
+          );
+        }
+      }
+      session.stop();
+      await pool.end();
+    };
+
+    await new Promise<void>((resolve) => {
+      session.on("connected", () => {
+        run()
+          .catch(async (err) => {
+            console.error("merge-duplicate-chats error:", err);
+            session.stop();
+            await pool.end().catch(() => {});
+          })
+          .finally(() => resolve());
+      });
+    });
+    process.exit(0);
+  });
+
 program.parse();
