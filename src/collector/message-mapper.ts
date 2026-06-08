@@ -12,6 +12,12 @@ import type { ImportedMessageType } from "../importer/types.js";
 export type MappedMessage = {
   externalId: string;
   remoteJid: string;
+  /**
+   * The alternate identity WhatsApp ships on the message key (`key.remoteJidAlt`):
+   * the `@lid` for a phone-JID chat, or vice versa. Null when absent. Used at
+   * ingest as the lid<->pn fallback when Baileys' mapping store isn't yet warm.
+   */
+  remoteJidAlt: string | null;
   senderName: string;
   sentAt: Date;
   messageType: ImportedMessageType;
@@ -103,9 +109,15 @@ export function mapWaMessage(waMessage: WAMessage): MappedMessage | null {
     return null;
   }
 
+  // `remoteJidAlt` carries the person's other identity (lid<->pn). It is present
+  // on the Baileys runtime key but not always in the static type, so read it
+  // defensively.
+  const remoteJidAlt = (key as { remoteJidAlt?: string | null }).remoteJidAlt ?? null;
+
   return {
     externalId: key.id,
     remoteJid,
+    remoteJidAlt,
     senderName,
     sentAt,
     messageType: mapped.messageType,
