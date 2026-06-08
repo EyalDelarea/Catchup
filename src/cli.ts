@@ -985,4 +985,181 @@ program
     process.exit(0);
   });
 
+program
+  .command("full-sync")
+  .description(
+    "One-time full-history sync via a fresh linked device (scan QR once). " +
+      "Persists whitelisted chats (--group) or every chat (--all).",
+  )
+  .option("--group <list>", "Comma-separated group name(s) or id(s) to keep (whitelist)")
+  .option("--all", "Persist EVERY chat — full account backfill (no whitelist)")
+  .option(
+    "--auth-dir <dir>",
+    "Auth dir for the temporary device (default <dataDir>/baileys-fullsync-auth)",
+  )
+  .action(async (options: { group?: string; all?: boolean; authDir?: string }) => {
+    const all = options.all === true;
+    if (all && options.group) {
+      process.stderr.write("Error: use only one of --all or --group.\n");
+      process.exit(1);
+    }
+    if (!all && !options.group) {
+      process.stderr.write("Error: specify --group <list> or --all.\n");
+      process.exit(1);
+    }
+
+    const config = loadConfig();
+    const [{ startSession }, { handleIncomingMessage }, pgMod] = await Promise.all([
+      import("./collector/session.js"),
+      import("./collector/collector.js"),
+      import("pg"),
+    ]);
+    const pool = new pgMod.default.Pool({ connectionString: config.databaseUrl });
+
+    // whitelist === null → keep ALL chats (--all). Otherwise jid -> display name.
+    let whitelist: Map<string, string> | null = null;
+    if (!all) {
+      whitelist = new Map<string, string>();
+      for (const token of (options.group ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)) {
+        const byId = /^\d+$/.test(token);
+        const { rows } = await pool.query<{ name: string; whatsapp_id: string | null }>(
+          byId
+            ? "SELECT name, whatsapp_id FROM groups WHERE id=$1"
+            : "SELECT name, whatsapp_id FROM groups WHERE name=$1",
+          [byId ? Number(token) : token],
+        );
+        const row = rows[0];
+        if (!row) {
+          process.stderr.write(`Warning: no group matching "${token}" — skipping.\n`);
+        } else if (!row.whatsapp_id) {
+          process.stderr.write(
+            `Warning: "${row.name}" has no whatsapp_id (import-only, not a live chat) — skipping.\n`,
+          );
+        } else {
+          whitelist.set(row.whatsapp_id, row.name);
+        }
+      }
+      if (whitelist.size === 0) {
+        process.stderr.write("Error: no resolvable live chats in the whitelist.\n");
+        await pool.end();
+        process.exit(1);
+      }
+    }
+
+    const authDir = options.authDir ?? path.join(config.dataDir, "baileys-fullsync-auth");
+    console.log("🔄 Full-history sync — temporary device.");
+    if (all) {
+      console.log("   Mode: --all — persisting EVERY chat (full account backfill).");
+    } else {
+      console.log(
+        `   Whitelist (only these are persisted): ${[...whitelist!.values()].join(", ")}`,
+      );
+    }
+    console.log(`   Auth dir: ${authDir}`);
+
+    const session = await startSession(authDir, false, {
+      syncFullHistory: true,
+      acceptAllHistory: true,
+    });
+
+    let kept = 0;
+    let seen = 0;
+    let lastProgress: number | null = null;
+    let reported = false;
+    let barTimer: ReturnType<typeof setInterval> | null = null;
+    let quietTimer: ReturnType<typeof setTimeout> | null = null;
+    // WhatsApp pushes history in phases (RECENT first, then FULL over minutes).
+    // `isLatest` fires on the EARLY batch, so it is NOT a "done" signal. Instead
+    // declare completion when no new history chunk has arrived for this long.
+    const QUIET_MS = 45_000;
+
+    const renderBar = () => {
+      const width = 24;
+      const pct =
+        lastProgress != null ? Math.max(0, Math.min(100, Math.round(lastProgress))) : null;
+      const filled = pct != null ? Math.round((pct / 100) * width) : 0;
+      const bar = "█".repeat(filled) + "░".repeat(width - filled);
+      const pctStr = pct != null ? `${pct}%`.padStart(4) : " ??%";
+      process.stdout.write(`\r  [${bar}] ${pctStr} · kept ${kept} · seen ${seen}    `);
+    };
+
+    const report = async () => {
+      if (reported) return;
+      reported = true;
+      if (barTimer) clearInterval(barTimer);
+      if (quietTimer) clearTimeout(quietTimer);
+      process.stdout.write("\n");
+      console.log(`📊 Done. Kept ${kept} new message(s); saw ${seen} across all chats.`);
+      if (whitelist) {
+        for (const [jid, name] of whitelist) {
+          const { rows } = await pool.query<{ c: string; oldest: string | null }>(
+            "SELECT count(*) AS c, min(sent_at)::text AS oldest FROM messages m JOIN groups g ON g.id=m.group_id WHERE g.whatsapp_id=$1",
+            [jid],
+          );
+          console.log(`   ${name}: ${rows[0]?.c ?? 0} in DB, oldest ${rows[0]?.oldest ?? "none"}`);
+        }
+      } else {
+        const { rows } = await pool.query<{ c: string; g: string; oldest: string | null }>(
+          "SELECT count(*) AS c, count(DISTINCT group_id) AS g, min(sent_at)::text AS oldest FROM messages",
+        );
+        console.log(
+          `   All chats: ${rows[0]?.c ?? 0} messages across ${rows[0]?.g ?? 0} chats, oldest ${rows[0]?.oldest ?? "none"}`,
+        );
+      }
+      session.stop();
+      await pool.end().catch(() => {});
+      process.exit(0);
+    };
+
+    session.on("qr", () => {
+      console.log(
+        "\n📲 Scan the QR above: WhatsApp → Settings → Linked Devices → Link a Device.\n",
+      );
+    });
+    // Declare completion once history has gone quiet for QUIET_MS.
+    const resetQuiet = () => {
+      if (reported) return;
+      if (quietTimer) clearTimeout(quietTimer);
+      quietTimer = setTimeout(() => {
+        process.stdout.write(`\n✅ No new history for ${QUIET_MS / 1000}s — sync complete.\n`);
+        void report();
+      }, QUIET_MS);
+    };
+
+    session.on("connected", () => {
+      console.log(
+        "✅ Linked. Receiving history sync… (auto-finishes when it goes quiet; Ctrl-C anytime)\n",
+      );
+      // Refresh the bar smoothly even between chunk events.
+      barTimer = setInterval(renderBar, 500);
+      resetQuiet();
+    });
+    session.on("message", (msg: import("@whiskeysockets/baileys").WAMessage) => {
+      seen++;
+      const jid = msg.key?.remoteJid;
+      if (!jid || (whitelist && !whitelist.has(jid))) return;
+      // Persist text/metadata only (no media downloads). --with-media is a future opt-in.
+      void handleIncomingMessage(pool, msg, { dataDir: config.dataDir })
+        .then((stored) => {
+          if (stored) kept++;
+        })
+        .catch((err: unknown) => {
+          process.stderr.write(
+            `\n[full-sync] persist error: ${err instanceof Error ? err.message : String(err)}\n`,
+          );
+        });
+    });
+    session.on("history-progress", (info) => {
+      if (info.progress != null) lastProgress = info.progress;
+      renderBar();
+      // Each chunk keeps the sync "alive"; completion is the absence of new chunks.
+      resetQuiet();
+    });
+    process.on("SIGINT", () => void report());
+    process.on("SIGTERM", () => void report());
+  });
+
 program.parse();
