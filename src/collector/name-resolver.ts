@@ -162,15 +162,35 @@ async function applyName(
  * updateDisplayName is idempotent (only touches groups still named by their JID),
  * so this never clobbers an already-resolved name. Never throws.
  */
+export type ContactResolverDeps = {
+  /**
+   * Bridge an @lid identity to its phone (@s.whatsapp.net) JID. Modern WhatsApp
+   * keys contacts by @lid while many 1:1 chats are stored by phone JID, and the
+   * contact payload carries no phoneNumber — so without this bridge an @lid
+   * contact name never reaches its @s.whatsapp.net chat.
+   */
+  pnForLid?: (lid: string) => Promise<string | null>;
+};
+
 export async function resolveContactNames(
   pool: pg.Pool | pg.PoolClient,
   contacts: WAContactLike[] | null | undefined,
+  deps: ContactResolverDeps = {},
 ): Promise<ResolveResult> {
   let resolved = 0;
   for (const c of contacts ?? []) {
     const name = pickContactName(c);
     if (!name) continue;
     const jids = new Set([c.id, c.phoneNumber, c.lid].filter((j): j is string => Boolean(j)));
+    // Bridge @lid → phone JID so the name also reaches the @s.whatsapp.net chat.
+    if (deps.pnForLid) {
+      for (const jid of [...jids]) {
+        if (jid.endsWith("@lid")) {
+          const pn = await deps.pnForLid(jid).catch(() => null);
+          if (pn) jids.add(pn);
+        }
+      }
+    }
     for (const jid of jids) {
       if (await applyName(pool, jid, name)) resolved++;
     }

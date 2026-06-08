@@ -647,7 +647,11 @@ program
         // for). Fire-and-forget; failures must never disturb collection.
         session.on("contacts", (contacts) => {
           void import("./collector/name-resolver.js")
-            .then(({ resolveContactNames }) => resolveContactNames(pool, contacts))
+            .then(({ resolveContactNames }) =>
+              resolveContactNames(pool, contacts, {
+                pnForLid: (lid) => session.pnForLid(lid),
+              }),
+            )
             .catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : String(err);
               process.stderr.write(`[name-resolver] contacts resolution error: ${msg}\n`);

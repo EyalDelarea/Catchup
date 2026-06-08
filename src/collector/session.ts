@@ -24,6 +24,7 @@ import makeWASocket, {
   type Contact,
   DisconnectReason,
   downloadMediaMessage,
+  jidNormalizedUser,
   useMultiFileAuthState,
   type WAMessage,
   type WASocket,
@@ -127,6 +128,47 @@ export class CollectorSession extends EventEmitter {
     }
     const md = await sock.groupMetadata(jid);
     return md.subject ?? "";
+  }
+
+  /** Baileys' lid<->pn mapping store, or null if the socket isn't connected. */
+  private lidMapping(): {
+    getLIDForPN(pn: string): Promise<string | null>;
+    getPNForLID(lid: string): Promise<string | null>;
+  } | null {
+    const repo = (this.socket as unknown as { signalRepository?: { lidMapping?: unknown } } | null)
+      ?.signalRepository?.lidMapping;
+    return (repo as ReturnType<CollectorSession["lidMapping"]>) ?? null;
+  }
+
+  /**
+   * Resolve the @lid identity for a phone (@s.whatsapp.net) JID via Baileys'
+   * lid<->pn mapping, normalized (device suffix stripped). Returns null if
+   * unknown or the socket isn't connected. Never throws.
+   */
+  async lidForPn(pn: string): Promise<string | null> {
+    const lm = this.lidMapping();
+    if (!lm) return null;
+    try {
+      const lid = await lm.getLIDForPN(pn);
+      return lid ? jidNormalizedUser(lid) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Resolve the phone (@s.whatsapp.net) identity for an @lid JID, normalized.
+   * Returns null if unknown or the socket isn't connected. Never throws.
+   */
+  async pnForLid(lid: string): Promise<string | null> {
+    const lm = this.lidMapping();
+    if (!lm) return null;
+    try {
+      const pn = await lm.getPNForLID(lid);
+      return pn ? jidNormalizedUser(pn) : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -305,6 +347,7 @@ export class CollectorSession extends EventEmitter {
         process.stderr.write(`[history-sync] append: ${messages.length} message(s)\n`);
       }
       for (const msg of messages) {
+        diagMessageKey(msg);
         this.emit("message", msg);
       }
     });
@@ -397,6 +440,22 @@ function printQr(qr: string): void {
 
 const DIAG_NAMES = process.env.CATCHUP_DIAG_NAMES === "1";
 
+let diagMsgKeysLogged = 0;
+function diagMessageKey(msg: WAMessage): void {
+  if (!DIAG_NAMES || diagMsgKeysLogged >= 8) return;
+  const k = msg.key as {
+    remoteJid?: string | null;
+    remoteJidAlt?: string | null;
+    participant?: string | null;
+    participantAlt?: string | null;
+    fromMe?: boolean | null;
+  };
+  diagMsgKeysLogged++;
+  process.stderr.write(
+    `[diag-names]   msgkey remoteJid=${k.remoteJid ?? "-"} remoteJidAlt=${k.remoteJidAlt ?? "-"} participant=${k.participant ?? "-"} participantAlt=${k.participantAlt ?? "-"} pushName=${msg.pushName ?? "-"} fromMe=${k.fromMe ?? "-"}\n`,
+  );
+}
+
 function diagContacts(source: string, contacts: Partial<Contact>[]): void {
   if (!DIAG_NAMES || contacts.length === 0) return;
   const has = (pred: (c: Partial<Contact>) => unknown) => contacts.filter(pred).length;
@@ -425,6 +484,14 @@ function diagHistory(
   process.stderr.write(
     `[diag-names] history.set: chats=${chats?.length ?? 0} contacts=${contacts?.length ?? 0} lidPnMappings=${lidPnMappings?.length ?? 0}\n`,
   );
+  for (const c of (contacts ?? []).slice(0, 4)) {
+    process.stderr.write(
+      `[diag-names]   contact id=${c.id} lid=${c.lid ?? "-"} phoneNumber=${c.phoneNumber ?? "-"} name=${c.name ?? "-"} notify=${c.notify ?? "-"} verifiedName=${c.verifiedName ?? "-"}\n`,
+    );
+  }
+  for (const ch of (chats ?? []).slice(0, 4)) {
+    process.stderr.write(`[diag-names]   chat id=${ch.id} name=${ch.name ?? "-"}\n`);
+  }
   for (const m of (lidPnMappings ?? []).slice(0, 3)) {
     process.stderr.write(`[diag-names]   lidPn pn=${m.pn} lid=${m.lid}\n`);
   }

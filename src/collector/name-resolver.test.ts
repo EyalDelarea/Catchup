@@ -225,4 +225,18 @@ describe("resolveAllGroupNames", () => {
     const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
     expect(rows[0]?.name).toBe("Forbidden Group From History");
   });
+
+  it("resolveContactNames bridges an @lid contact name to its @s.whatsapp.net chat", async () => {
+    const lid = "177223302647848-bridge@lid";
+    const pn = "972549288606-bridge@s.whatsapp.net";
+    await upsertGroupByWhatsappId(pool, { whatsappId: pn, name: pn, source: "live" });
+
+    const result = await resolveContactNames(pool, [{ id: lid, notify: "מסי" }], {
+      pnForLid: async (l) => (l === lid ? pn : null),
+    });
+    expect(result.resolved).toBeGreaterThanOrEqual(1);
+
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [pn]);
+    expect(rows[0]?.name).toBe("מסי");
+  });
 });
