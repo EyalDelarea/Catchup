@@ -3,8 +3,8 @@
  * pool so no real database is required.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RecordHeartbeatFn, SetConnectedFn } from "./heartbeat.js";
-import { markConnected, startHeartbeat } from "./heartbeat.js";
+import type { RecordHeartbeatFn } from "./heartbeat.js";
+import { startHeartbeat } from "./heartbeat.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -88,31 +88,5 @@ describe("startHeartbeat", () => {
     await vi.advanceTimersByTimeAsync(20000);
     await flushPromises();
     expect(recordHeartbeat).toHaveBeenCalledTimes(1);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tests: markConnected
-// ---------------------------------------------------------------------------
-
-describe("markConnected", () => {
-  it("calls setCollectorConnected with pool and connected=true", async () => {
-    const setConnected = vi.fn().mockResolvedValue(undefined) as SetConnectedFn;
-    const pool = makePool();
-
-    await markConnected(pool, true, setConnected);
-
-    expect(setConnected).toHaveBeenCalledTimes(1);
-    expect(setConnected).toHaveBeenCalledWith(pool, true);
-  });
-
-  it("calls setCollectorConnected with pool and connected=false", async () => {
-    const setConnected = vi.fn().mockResolvedValue(undefined) as SetConnectedFn;
-    const pool = makePool();
-
-    await markConnected(pool, false, setConnected);
-
-    expect(setConnected).toHaveBeenCalledTimes(1);
-    expect(setConnected).toHaveBeenCalledWith(pool, false);
   });
 });
