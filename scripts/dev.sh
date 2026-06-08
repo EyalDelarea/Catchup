@@ -38,6 +38,26 @@ cleanup() {
 trap cleanup INT TERM
 
 echo "▶ Starting worker + serve --collect…"
+
+# Colored source prefixes (only when stdout is a real terminal — keep pipes/files clean).
+if [ -t 1 ]; then
+  C_WORKER=$'\033[1;35m'   # bold magenta
+  C_SERVE=$'\033[1;36m'    # bold cyan
+  C_RESET=$'\033[0m'
+else
+  C_WORKER='' ; C_SERVE='' ; C_RESET=''
+fi
+WORKER_PREFIX="${C_WORKER}[worker]${C_RESET}"
+SERVE_PREFIX="${C_SERVE}[serve] ${C_RESET}"
+
+# Pretty-print pino JSON logs into readable, colored lines. Non-JSON lines pass
+# through unchanged, so plain console.log output and the QR survive. Falls back
+# to a passthrough (cat) if pino-pretty is somehow unavailable.
+PRETTY="cat"
+if [ -x node_modules/.bin/pino-pretty ]; then
+  PRETTY="node_modules/.bin/pino-pretty --translateTime SYS:HH:MM:ss --ignore pid,hostname --colorize"
+fi
+
 # Media analysis (analyze.image/.video) re-enabled so NEW media gets captioned
 # going forward (gemma4:26b + think:false, multi-frame video). It shares the model
 # with summaries (serial worker), so to catch up history use a bounded enqueue, e.g.
@@ -45,9 +65,11 @@ echo "▶ Starting worker + serve --collect…"
 # summarize.group runs the scheduled per-chat digest (feature 011);
 # summarize.total runs the scheduled cross-chat total summary.
 ( npx tsx src/workers/worker.ts --types import.file,transcribe.voicenote,analyze.image,analyze.video,summarize.group,summarize.total 2>&1 \
-    | while IFS= read -r l; do printf '[worker] %s\n' "$l"; done ) &
+    | $PRETTY \
+    | while IFS= read -r l; do printf '%s %s\n' "$WORKER_PREFIX" "$l"; done ) &
 ( npx tsx src/cli.ts serve --collect 2>&1 \
-    | while IFS= read -r l; do printf '[serve]  %s\n' "$l"; done ) &
+    | $PRETTY \
+    | while IFS= read -r l; do printf '%s %s\n' "$SERVE_PREFIX" "$l"; done ) &
 
 cat <<'EOF'
 

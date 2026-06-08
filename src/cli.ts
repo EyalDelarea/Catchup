@@ -337,6 +337,10 @@ program
       { parseTimes },
       { enqueueScheduledRun },
       { getLastRun, recordRun },
+      { recoverOnReconnect },
+      { selectActiveGroups },
+      { getNewestReadableSentAt, countReadableSince },
+      { getServiceStatus, isStale },
     ] = await Promise.all([
       import("./web/server.js"),
       import("./summarization/summarizer.js"),
@@ -351,6 +355,10 @@ program
       import("./scheduler/schedule.js"),
       import("./scheduler/enqueue-run.js"),
       import("./db/repositories/scheduler-state.js"),
+      import("./collector/reconnect-recovery.js"),
+      import("./summarization/select-active-groups.js"),
+      import("./db/repositories/messages.js"),
+      import("./db/repositories/service-status.js"),
     ]);
     const webLogger = createLogger(config.logging);
     const pool = new pg.default.Pool({ connectionString: config.databaseUrl });
@@ -518,6 +526,14 @@ program
         );
       }
 
+      // Keep the collector alive when a media-download HTTP/2 stream aborts.
+      // Such aborts surface as an unhandled 'error' event on a raw undici stream
+      // (an uncaughtException), which bypasses the per-message handler's .catch
+      // and would otherwise kill the whole process. The guard swallows only
+      // transient stream/network aborts; real bugs still crash fast.
+      const { installMediaStreamCrashGuard } = await import("./collector/crash-guard.js");
+      installMediaStreamCrashGuard();
+
       // Start collector — errors must not take down the web server
       try {
         const { startSession } = await import("./collector/session.js");
@@ -526,6 +542,57 @@ program
         const authDir = path.join(config.dataDir, "baileys-auth");
         const session = await startSession(authDir, config.whatsapp.allowSend);
         liveSession = session;
+
+        // Snapshot the heartbeat BEFORE the collector connects (the heartbeat loop
+        // writes a fresh value immediately on connect). A stale value means the
+        // server was genuinely down → run boot-time gap recovery once.
+        const bootStatus = await getServiceStatus(pool);
+        const bootWasStale = bootStatus ? isStale(bootStatus, 90_000) : true;
+        let recoveryRan = false;
+
+        // Capture each active group's newest-stored timestamp NOW, before connecting —
+        // i.e. the pre-outage state. Recovery pages backward to this frozen value and
+        // measures messages newer than it. Must be read before the passive sync raises
+        // the newest, or the active fetch's anchor and stop would be identical (no-op).
+        const bootSnapshots: Array<{ id: number; name: string; tLast: Date | null }> = [];
+        if (bootWasStale) {
+          const activeSince = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+          const activeGroups = await selectActiveGroups(pool, { since: activeSince });
+          for (const g of activeGroups) {
+            // Newest READABLE message (any source) — the correct measurement baseline.
+            // (The active fetch uses its own external_id anchor inside backfillGroup.)
+            const tLast = await getNewestReadableSentAt(pool, g.id);
+            bootSnapshots.push({ id: g.id, name: g.name, tLast });
+          }
+          console.log(
+            `[reconnect-sync] armed: snapshotted ${bootSnapshots.length} active group(s) (pre-boot heartbeat stale).`,
+          );
+        }
+
+        // Gap-mode backfill: fill a single group's history backward to a timestamp.
+        const gapFillGroup = async (groupId: number, stopAtSentAt: Date) => {
+          if (!liveSession) return { fetched: 0, durationMs: 0, partial: true };
+          const { rows } = await pool.query<{ whatsapp_id: string }>(
+            "SELECT whatsapp_id FROM groups WHERE id=$1",
+            [groupId],
+          );
+          const jid = rows[0]?.whatsapp_id;
+          if (!jid) return { fetched: 0, durationMs: 0, partial: true };
+          return backfillGroup({
+            pool,
+            groupId,
+            dataDir: config.dataDir,
+            targetWindow: 25, // unused in gap-mode but required by the type
+            maxFetch: 500,
+            timeoutMs: 20_000,
+            stopAtSentAt,
+            fetchHistory: (c: number, a: import("./collector/backfill.js").AnchorKey, ts: number) =>
+              liveSession.fetchMessageHistory(c, a, ts),
+            awaitHistory: (toMs: number) => liveSession.awaitHistorySync(jid, toMs),
+            downloadVoiceNote: (m: import("@whiskeysockets/baileys").WAMessage) =>
+              liveSession.downloadMedia(m),
+          });
+        };
 
         session.on("qr", () => {
           console.log("Scan the QR code above with WhatsApp to link your account.");
@@ -548,9 +615,55 @@ program
               const msg = err instanceof Error ? err.message : String(err);
               process.stderr.write(`[name-resolver] error: ${msg}\n`);
             });
+
+          // Boot-time gap recovery: once per process, only if the pre-boot heartbeat
+          // was stale (a real outage). Give the passive recent-sync (append /
+          // history-set) ~8s to land a fresh top anchor before extending backward.
+          if (!recoveryRan && bootWasStale) {
+            recoveryRan = true;
+            void (async () => {
+              await new Promise((r) => setTimeout(r, 8000));
+              const result = await recoverOnReconnect({
+                snapshots: bootSnapshots,
+                gapFill: gapFillGroup,
+                countReadableSince: (groupId, since) => countReadableSince(pool, groupId, since),
+                logger: webLogger,
+              });
+              console.log(
+                `[reconnect-sync] done: recovered ${result.recovered} message(s) across ${result.groups} group(s).`,
+              );
+            })().catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              process.stderr.write(`[reconnect-sync] error: ${msg}\n`);
+            });
+          }
         });
         session.on("disconnected", () => {
           console.log("[collector] disconnected (will auto-reconnect).");
+        });
+
+        // Resolve chat/contact display names from WhatsApp's directory (the only
+        // source for saved contact names and for groups we can't fetch a subject
+        // for). Fire-and-forget; failures must never disturb collection.
+        session.on("contacts", (contacts) => {
+          void import("./collector/name-resolver.js")
+            .then(({ resolveContactNames }) =>
+              resolveContactNames(pool, contacts, {
+                pnForLid: (lid) => session.pnForLid(lid),
+              }),
+            )
+            .catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              process.stderr.write(`[name-resolver] contacts resolution error: ${msg}\n`);
+            });
+        });
+        session.on("chats", (chats) => {
+          void import("./collector/name-resolver.js")
+            .then(({ resolveChatNames }) => resolveChatNames(pool, chats))
+            .catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              process.stderr.write(`[name-resolver] chats resolution error: ${msg}\n`);
+            });
         });
 
         liveHandle = attachCollector({
@@ -780,6 +893,96 @@ program
       }
     }
     if (!allOk) process.exit(1);
+  });
+
+program
+  .command("merge-duplicate-chats")
+  .description(
+    "Merge @lid/@s.whatsapp.net duplicate chats of the same person (dry-run unless --apply)",
+  )
+  .option("--apply", "Actually perform the merges (default: dry-run, no writes)")
+  .action(async (options: { apply?: boolean }) => {
+    const config = loadConfig();
+    const pg = await import("pg");
+    const pool = new pg.default.Pool({ connectionString: config.databaseUrl });
+    const { startSession } = await import("./collector/session.js");
+    const { findMergeCandidates, mergeGroups } = await import("./db/repositories/merge.js");
+
+    const session = await startSession(path.join(config.dataDir, "baileys-auth"), false);
+    session.on("qr", () => {
+      console.log("Scan the QR code above with WhatsApp to link your account.");
+    });
+
+    const run = async () => {
+      // Give Baileys' lid<->pn mapping a moment to settle after connect.
+      await new Promise((r) => setTimeout(r, 6000));
+      const candidates = await findMergeCandidates(pool, {
+        lidForPn: (pn) => session.lidForPn(pn),
+        pnForLid: (lid) => session.pnForLid(lid),
+      });
+
+      if (candidates.length === 0) {
+        console.log("No duplicate-chat pairs found.");
+      } else {
+        console.log(`Found ${candidates.length} duplicate-chat pair(s):`);
+        for (const c of candidates) {
+          console.log(
+            `  "${c.name}"  keep ${c.survivorJid} (${c.survivorMsgs} msgs)  ⟵ merge ${c.dupJid} (${c.dupMsgs} msgs)`,
+          );
+        }
+        if (options.apply) {
+          let ok = 0;
+          let moved = 0;
+          let dropped = 0;
+          for (const c of candidates) {
+            const client = await pool.connect();
+            try {
+              await client.query("BEGIN");
+              const res = await mergeGroups(client, {
+                survivorId: c.survivorId,
+                dupId: c.dupId,
+                name: c.name,
+              });
+              await client.query("COMMIT");
+              ok++;
+              moved += res.movedMessages;
+              dropped += res.deletedDuplicateMessages;
+              console.log(
+                `  ✓ "${c.name}" — moved ${res.movedMessages}, dropped ${res.deletedDuplicateMessages} dup`,
+              );
+            } catch (err) {
+              await client.query("ROLLBACK").catch(() => {});
+              const msg = err instanceof Error ? err.message : String(err);
+              console.error(`  ✗ "${c.name}" (${c.survivorJid} ⟵ ${c.dupJid}): ${msg}`);
+            } finally {
+              client.release();
+            }
+          }
+          console.log(
+            `Applied ${ok}/${candidates.length} merge(s); moved ${moved} message(s), dropped ${dropped} duplicate(s).`,
+          );
+        } else {
+          console.log(
+            "\nDry-run only — no changes made. Re-run with --apply to perform these merges.",
+          );
+        }
+      }
+      session.stop();
+      await pool.end();
+    };
+
+    await new Promise<void>((resolve) => {
+      session.on("connected", () => {
+        run()
+          .catch(async (err) => {
+            console.error("merge-duplicate-chats error:", err);
+            session.stop();
+            await pool.end().catch(() => {});
+          })
+          .finally(() => resolve());
+      });
+    });
+    process.exit(0);
   });
 
 program.parse();

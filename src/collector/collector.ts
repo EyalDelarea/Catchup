@@ -18,7 +18,7 @@ import {
   updateDisplayName,
   upsertGroupByWhatsappId,
 } from "../db/repositories/groups.js";
-import { insertMessages } from "../db/repositories/messages.js";
+import { insertMessages, messageExistsByExternalId } from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
 import { normalize } from "../importer/normalize.js";
 import type { ImportedMessage } from "../importer/types.js";
@@ -129,6 +129,17 @@ export async function handleIncomingMessage(
     name: mapped.remoteJid, // Use JID as name fallback; can be renamed via CLI later
     source: "live",
   });
+
+  // --- Skip messages we already have (history re-push dedup) ---
+  // On every reconnect WhatsApp re-sends a recent-history batch, almost all of
+  // which we already stored. Short-circuit here — BEFORE the expensive and
+  // occasionally crash-prone media download (and the redundant participant
+  // upsert / insert). Keyed on the same (group_id, external_id) the insert
+  // dedups on, so this only skips true duplicates; genuinely new messages (and
+  // any without an external_id) fall through to the normal path below.
+  if (mapped.externalId && (await messageExistsByExternalId(client, groupId, mapped.externalId))) {
+    return false;
+  }
 
   // --- Resolve display name (idempotent: no-op once resolved) ---
   // Gate on "still unresolved" to avoid repeat network calls.

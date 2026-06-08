@@ -86,3 +86,138 @@ export async function resolveAllGroupNames(
 
   return { resolved };
 }
+
+// ---------------------------------------------------------------------------
+// Directory-based resolution (WhatsApp contacts + history chats)
+// ---------------------------------------------------------------------------
+//
+// The proactive pass above can only name @g.us groups (via groupSubject) and
+// derive 1:1 names from stored pushNames. It can't recover a SAVED contact name,
+// nor a group name we no longer have access to (groupSubject → forbidden /
+// item-not-found). WhatsApp delivers both via the contacts.upsert / contacts.update
+// events and the `chats` + `contacts` arrays on messaging-history.set. These
+// resolvers consume that directory data — the only source for those names.
+
+/** Minimal shape of a Baileys Contact we care about (all fields optional). */
+export type WAContactLike = {
+  id?: string | null;
+  lid?: string | null;
+  phoneNumber?: string | null;
+  /** Name the device owner saved for this contact. */
+  name?: string | null;
+  /** Name the contact set for themselves (push name). */
+  notify?: string | null;
+  /** Business verified name. */
+  verifiedName?: string | null;
+};
+
+/** Minimal shape of a Baileys Chat we care about. */
+export type WAChatLike = {
+  id?: string | null;
+  name?: string | null;
+};
+
+/**
+ * True if `s` is a human display name worth storing — i.e. not empty, not a raw
+ * JID, and not a bare phone number (which is no better than the JID we already
+ * show). Exported for unit testing.
+ */
+export function isUsableName(s: string | null | undefined): boolean {
+  const t = (s ?? "").trim();
+  if (!t) return false;
+  if (t.includes("@")) return false; // looks like a JID
+  if (/^\+?[\d\s\-()]+$/.test(t)) return false; // just a phone number
+  return true;
+}
+
+/** Pick the best human display name from a contact, or null if none usable. */
+export function pickContactName(c: WAContactLike): string | null {
+  for (const cand of [c.name, c.verifiedName, c.notify]) {
+    if (isUsableName(cand)) return (cand as string).trim();
+  }
+  return null;
+}
+
+/** Update a single JID's display name, swallowing failures. Returns true if changed. */
+async function applyName(
+  pool: pg.Pool | pg.PoolClient,
+  jid: string | null | undefined,
+  name: string,
+): Promise<boolean> {
+  if (!jid) return false;
+  try {
+    return await updateDisplayName(pool, jid, name);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[name-resolver] directory update skipped ${jid}: ${msg}\n`);
+    return false;
+  }
+}
+
+/**
+ * Resolve 1:1 / @lid chat names from WhatsApp's contacts directory.
+ *
+ * A contact may be keyed by @lid, @s.whatsapp.net, or a phoneNumber that differs
+ * from the chat's stored JID, so we try every JID the contact exposes.
+ * updateDisplayName is idempotent (only touches groups still named by their JID),
+ * so this never clobbers an already-resolved name. Never throws.
+ */
+export type ContactResolverDeps = {
+  /**
+   * Bridge an @lid identity to its phone (@s.whatsapp.net) JID. Modern WhatsApp
+   * keys contacts by @lid while many 1:1 chats are stored by phone JID, and the
+   * contact payload carries no phoneNumber — so without this bridge an @lid
+   * contact name never reaches its @s.whatsapp.net chat.
+   */
+  pnForLid?: (lid: string) => Promise<string | null>;
+};
+
+export async function resolveContactNames(
+  pool: pg.Pool | pg.PoolClient,
+  contacts: WAContactLike[] | null | undefined,
+  deps: ContactResolverDeps = {},
+): Promise<ResolveResult> {
+  let resolved = 0;
+  for (const c of contacts ?? []) {
+    const name = pickContactName(c);
+    if (!name) continue;
+    const jids = new Set([c.id, c.phoneNumber, c.lid].filter((j): j is string => Boolean(j)));
+    // Bridge @lid → phone JID so the name also reaches the @s.whatsapp.net chat.
+    if (deps.pnForLid) {
+      for (const jid of [...jids]) {
+        if (jid.endsWith("@lid")) {
+          const pn = await deps.pnForLid(jid).catch(() => null);
+          if (pn) jids.add(pn);
+        }
+      }
+    }
+    for (const jid of jids) {
+      if (await applyName(pool, jid, name)) resolved++;
+    }
+  }
+  if (resolved > 0) {
+    process.stderr.write(`[name-resolver] resolved ${resolved} name(s) from contacts.\n`);
+  }
+  return { resolved };
+}
+
+/**
+ * Resolve group/chat names from the `chats` array WhatsApp delivers on
+ * messaging-history.set. This is the only path that can name groups we can no
+ * longer fetch a subject for (groupSubject → forbidden / item-not-found) but
+ * were present in the synced history. Never throws.
+ */
+export async function resolveChatNames(
+  pool: pg.Pool | pg.PoolClient,
+  chats: WAChatLike[] | null | undefined,
+): Promise<ResolveResult> {
+  let resolved = 0;
+  for (const ch of chats ?? []) {
+    if (!isUsableName(ch.name)) continue;
+    if (await applyName(pool, ch.id, (ch.name as string).trim())) resolved++;
+  }
+  if (resolved > 0) {
+    process.stderr.write(`[name-resolver] resolved ${resolved} name(s) from history chats.\n`);
+  }
+  return { resolved };
+}

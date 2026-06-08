@@ -101,7 +101,14 @@ export async function upsertGroupByWhatsappId(
   return Number(row.id);
 }
 
-/** All stored chats with their source, message count, and last message timestamp, ordered by name. */
+/**
+ * All stored chats with their source, message count, and last message timestamp.
+ *
+ * Ordered by most-recent activity first (last_message_at DESC) so the chats that
+ * matter float to the top, mirroring WhatsApp's own chat list. Chats with no
+ * messages (last_message_at IS NULL) sink to the bottom; name is the tiebreaker
+ * so equal-recency chats stay in a stable, predictable order.
+ */
 export async function listGroups(
   client: pg.Pool | pg.PoolClient,
 ): Promise<{ name: string; source: string; messageCount: number; lastMessageAt: Date | null }[]> {
@@ -116,7 +123,7 @@ export async function listGroups(
     FROM groups g
     LEFT JOIN messages m ON m.group_id = g.id
     GROUP BY g.id, g.name, g.source
-    ORDER BY g.name ASC
+    ORDER BY last_message_at DESC NULLS LAST, g.name ASC
     `,
   );
   return rows.map((r) => ({

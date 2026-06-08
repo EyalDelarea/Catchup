@@ -19,13 +19,17 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import type { Boom } from "@hapi/boom";
 import makeWASocket, {
+  type Chat,
   type ConnectionState,
+  type Contact,
   DisconnectReason,
   downloadMediaMessage,
+  jidNormalizedUser,
   useMultiFileAuthState,
   type WAMessage,
   type WASocket,
 } from "@whiskeysockets/baileys";
+import { createHistorySyncProgress, type HistorySyncProgress } from "./history-sync-progress.js";
 import { applyOutboundGuard } from "./outbound-guard.js";
 
 export type SessionEvents = {
@@ -33,6 +37,10 @@ export type SessionEvents = {
   qr: [qr: string];
   connected: [];
   disconnected: [];
+  /** WhatsApp contacts directory (saved names + push names) for name resolution. */
+  contacts: [contacts: Contact[]];
+  /** Chat/group directory entries (with subjects) delivered on history sync. */
+  chats: [chats: Chat[]];
 };
 
 /**
@@ -45,11 +53,16 @@ export class CollectorSession extends EventEmitter {
   private storedMessages = 0;
   /** When false (default), the socket is hard-guarded to never send anything. */
   private allowSend: boolean;
+  /** Collapses the per-batch history-sync flood into throttled progress + a summary. */
+  private historyProgress: HistorySyncProgress;
 
   constructor(authDir: string, allowSend = false) {
     super();
     this.authDir = authDir;
     this.allowSend = allowSend;
+    this.historyProgress = createHistorySyncProgress({
+      log: (line) => process.stderr.write(`${line}\n`),
+    });
   }
 
   /** Total messages reported as stored (updated by caller via incrementStored). */
@@ -115,6 +128,47 @@ export class CollectorSession extends EventEmitter {
     }
     const md = await sock.groupMetadata(jid);
     return md.subject ?? "";
+  }
+
+  /** Baileys' lid<->pn mapping store, or null if the socket isn't connected. */
+  private lidMapping(): {
+    getLIDForPN(pn: string): Promise<string | null>;
+    getPNForLID(lid: string): Promise<string | null>;
+  } | null {
+    const repo = (this.socket as unknown as { signalRepository?: { lidMapping?: unknown } } | null)
+      ?.signalRepository?.lidMapping;
+    return (repo as ReturnType<CollectorSession["lidMapping"]>) ?? null;
+  }
+
+  /**
+   * Resolve the @lid identity for a phone (@s.whatsapp.net) JID via Baileys'
+   * lid<->pn mapping, normalized (device suffix stripped). Returns null if
+   * unknown or the socket isn't connected. Never throws.
+   */
+  async lidForPn(pn: string): Promise<string | null> {
+    const lm = this.lidMapping();
+    if (!lm) return null;
+    try {
+      const lid = await lm.getLIDForPN(pn);
+      return lid ? jidNormalizedUser(lid) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Resolve the phone (@s.whatsapp.net) identity for an @lid JID, normalized.
+   * Returns null if unknown or the socket isn't connected. Never throws.
+   */
+  async pnForLid(lid: string): Promise<string | null> {
+    const lm = this.lidMapping();
+    if (!lm) return null;
+    try {
+      const pn = await lm.getPNForLID(lid);
+      return pn ? jidNormalizedUser(pn) : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -226,6 +280,18 @@ export class CollectorSession extends EventEmitter {
     // Persist credentials whenever they update (keeps session alive across restarts)
     sock.ev.on("creds.update", saveCreds);
 
+    // Contacts directory — the only source for SAVED contact names / push names.
+    // Forwarded for the collector to resolve 1:1 chat display names.
+    sock.ev.on("contacts.upsert", (contacts: Contact[]) => {
+      diagContacts("contacts.upsert", contacts);
+      if (contacts.length > 0) this.emit("contacts", contacts);
+    });
+    sock.ev.on("contacts.update", (updates: Partial<Contact>[]) => {
+      diagContacts("contacts.update", updates);
+      const contacts = updates.filter((c): c is Contact => typeof c.id === "string");
+      if (contacts.length > 0) this.emit("contacts", contacts);
+    });
+
     // Handle connection state changes
     sock.ev.on("connection.update", (update: Partial<ConnectionState>) => {
       const { connection, lastDisconnect, qr } = update;
@@ -237,6 +303,11 @@ export class CollectorSession extends EventEmitter {
       }
 
       if (connection === "open") {
+        if (DIAG_NAMES) {
+          process.stderr.write(
+            "[diag-names] active — watching contacts.upsert/update + history.set (chats/contacts/lidPnMappings)\n",
+          );
+        }
         this.emit("connected");
       }
 
@@ -263,15 +334,56 @@ export class CollectorSession extends EventEmitter {
       }
     });
 
-    // Forward incoming messages to listeners
+    // Forward incoming messages to listeners.
+    // 'notify' = live messages; 'append' = messages WhatsApp queued while we were
+    // offline, replayed on reconnect. Both are recovered — handleIncomingMessage
+    // dedupes on dedupe_key, so replays/overlap are idempotent.
     sock.ev.on("messages.upsert", ({ messages, type }) => {
-      // type 'notify' = new incoming messages; 'append' = history backfill (ignore per R3)
-      if (type !== "notify") return;
+      if (type !== "notify" && type !== "append") return;
 
+      // Diagnostic: 'append' is the offline-replay channel — log how much arrives so
+      // we can see whether WhatsApp actually delivers missed messages on reconnect.
+      if (type === "append" && messages.length > 0) {
+        process.stderr.write(`[history-sync] append: ${messages.length} message(s)\n`);
+      }
       for (const msg of messages) {
+        diagMessageKey(msg);
         this.emit("message", msg);
       }
     });
+
+    // On (re)connect WhatsApp pushes a bounded recent-history batch. Persist it so
+    // messages missed during downtime are recovered. syncFullHistory stays false, so
+    // this is the recent window only; dedup makes overlap with live/append idempotent.
+    sock.ev.on(
+      "messaging-history.set",
+      ({
+        messages,
+        chats,
+        contacts,
+        lidPnMappings,
+      }: {
+        messages: WAMessage[];
+        chats: Chat[];
+        contacts: Contact[];
+        lidPnMappings?: { pn: string; lid: string }[];
+      }) => {
+        diagHistory(chats, contacts, lidPnMappings);
+
+        // The history payload also carries the chat + contact directory — the
+        // only source for names of groups we can't fetch a subject for and for
+        // saved 1:1 contact names. Forward both for resolution.
+        if (chats?.length > 0) this.emit("chats", chats);
+        if (contacts?.length > 0) this.emit("contacts", contacts);
+
+        // Collapse the per-batch flood into a throttled progress line + summary
+        // (instead of one log line per batch). The collector dedups the contents.
+        this.historyProgress.record(messages.length);
+        for (const msg of messages) {
+          this.emit("message", msg);
+        }
+      },
+    );
   }
 }
 
@@ -316,6 +428,73 @@ function printQr(qr: string): void {
       }
       console.log(`QR Code (scan with WhatsApp):\n${qr}`);
     });
+}
+
+// ---------------------------------------------------------------------------
+// Name-resolution diagnostics (opt-in via CATCHUP_DIAG_NAMES=1)
+// ---------------------------------------------------------------------------
+// 1:1 (@s.whatsapp.net) chats weren't resolving while groups did. These gated
+// probes report exactly what WhatsApp delivers — contact field coverage and the
+// lid↔pn mapping — so we can see whether contacts arrive and how they're keyed
+// before committing to a fix. No-ops unless the env flag is set.
+
+const DIAG_NAMES = process.env.CATCHUP_DIAG_NAMES === "1";
+
+let diagMsgKeysLogged = 0;
+function diagMessageKey(msg: WAMessage): void {
+  if (!DIAG_NAMES || diagMsgKeysLogged >= 8) return;
+  const k = msg.key as {
+    remoteJid?: string | null;
+    remoteJidAlt?: string | null;
+    participant?: string | null;
+    participantAlt?: string | null;
+    fromMe?: boolean | null;
+  };
+  diagMsgKeysLogged++;
+  process.stderr.write(
+    `[diag-names]   msgkey remoteJid=${k.remoteJid ?? "-"} remoteJidAlt=${k.remoteJidAlt ?? "-"} participant=${k.participant ?? "-"} participantAlt=${k.participantAlt ?? "-"} pushName=${msg.pushName ?? "-"} fromMe=${k.fromMe ?? "-"}\n`,
+  );
+}
+
+function diagContacts(source: string, contacts: Partial<Contact>[]): void {
+  if (!DIAG_NAMES || contacts.length === 0) return;
+  const has = (pred: (c: Partial<Contact>) => unknown) => contacts.filter(pred).length;
+  const summary =
+    `[diag-names] ${source}: total=${contacts.length}` +
+    ` name=${has((c) => c.name?.trim())}` +
+    ` notify=${has((c) => c.notify?.trim())}` +
+    ` verifiedName=${has((c) => c.verifiedName?.trim())}` +
+    ` phoneNumber=${has((c) => c.phoneNumber)}` +
+    ` id@s=${has((c) => c.id?.endsWith("@s.whatsapp.net"))}` +
+    ` id@lid=${has((c) => c.id?.endsWith("@lid"))}`;
+  process.stderr.write(`${summary}\n`);
+  for (const c of contacts.slice(0, 3)) {
+    process.stderr.write(
+      `[diag-names]   sample id=${c.id} lid=${c.lid ?? "-"} phoneNumber=${c.phoneNumber ?? "-"} name=${c.name ?? "-"} notify=${c.notify ?? "-"}\n`,
+    );
+  }
+}
+
+function diagHistory(
+  chats: Chat[] | undefined,
+  contacts: Contact[] | undefined,
+  lidPnMappings: { pn: string; lid: string }[] | undefined,
+): void {
+  if (!DIAG_NAMES) return;
+  process.stderr.write(
+    `[diag-names] history.set: chats=${chats?.length ?? 0} contacts=${contacts?.length ?? 0} lidPnMappings=${lidPnMappings?.length ?? 0}\n`,
+  );
+  for (const c of (contacts ?? []).slice(0, 4)) {
+    process.stderr.write(
+      `[diag-names]   contact id=${c.id} lid=${c.lid ?? "-"} phoneNumber=${c.phoneNumber ?? "-"} name=${c.name ?? "-"} notify=${c.notify ?? "-"} verifiedName=${c.verifiedName ?? "-"}\n`,
+    );
+  }
+  for (const ch of (chats ?? []).slice(0, 4)) {
+    process.stderr.write(`[diag-names]   chat id=${ch.id} name=${ch.name ?? "-"}\n`);
+  }
+  for (const m of (lidPnMappings ?? []).slice(0, 3)) {
+    process.stderr.write(`[diag-names]   lidPn pn=${m.pn} lid=${m.lid}\n`);
+  }
 }
 
 /**

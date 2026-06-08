@@ -101,7 +101,8 @@ describe("repositories integration", () => {
       const testGroups = allGroups.filter((g) => g.name === nameA || g.name === nameB);
 
       expect(testGroups).toHaveLength(2);
-      // Ordered by name: Alpha before Beta
+      // Both groups share the same fixed sent_at, so the recency sort ties and
+      // falls back to the name tiebreaker: Alpha before Beta.
       expect(testGroups[0]!.name).toBe(nameA);
       expect(testGroups[0]!.source).toBe("import");
       expect(testGroups[0]!.messageCount).toBe(2);

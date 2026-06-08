@@ -28,6 +28,59 @@ export async function countReadableByGroup(
   return Number(rows[0]?.count ?? 0);
 }
 
+/**
+ * Newest readable message timestamp for a group (any source — live OR imported),
+ * using the same readable predicate as countReadableByGroup, or null when the group
+ * has no readable messages. This is the correct pre-outage baseline for the boot
+ * recovery signal: countReadableSince(group, getNewestReadableSentAt(group)) is ~0
+ * unless genuinely newer messages arrive. (getNewestAnchor is external_id-filtered
+ * for paging and is NOT a valid measurement baseline for imported groups.)
+ */
+export async function getNewestReadableSentAt(
+  client: pg.Pool | pg.PoolClient,
+  groupId: number,
+): Promise<Date | null> {
+  const { rows } = await client.query<{ newest: Date | null }>(
+    `
+    SELECT MAX(m.sent_at) AS newest
+    FROM messages m
+    LEFT JOIN transcripts t ON t.message_id = m.id AND t.status = 'completed'
+    WHERE m.group_id = $1
+      AND m.message_type <> 'system'
+      AND COALESCE(t.transcript, m.text_content) IS NOT NULL
+      AND length(trim(COALESCE(t.transcript, m.text_content))) > 0
+    `,
+    [groupId],
+  );
+  return rows[0]?.newest ?? null;
+}
+
+/**
+ * Count readable messages for a group strictly newer than `since` — same readable
+ * predicate as countReadableByGroup, plus sent_at > since. Used as the boot-time
+ * recovery signal (how many messages came back after the pre-outage snapshot).
+ */
+export async function countReadableSince(
+  client: pg.Pool | pg.PoolClient,
+  groupId: number,
+  since: Date,
+): Promise<number> {
+  const { rows } = await client.query<{ count: string }>(
+    `
+    SELECT COUNT(*) AS count
+    FROM messages m
+    LEFT JOIN transcripts t ON t.message_id = m.id AND t.status = 'completed'
+    WHERE m.group_id = $1
+      AND m.sent_at > $2
+      AND m.message_type <> 'system'
+      AND COALESCE(t.transcript, m.text_content) IS NOT NULL
+      AND length(trim(COALESCE(t.transcript, m.text_content))) > 0
+    `,
+    [groupId, since],
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
 export type Anchor = {
   externalId: string;
   sentAt: Date;
@@ -100,6 +153,27 @@ export async function getNewestAnchor(
     fromMe: row.from_me,
     remoteJid: row.whatsapp_id,
   };
+}
+
+/**
+ * True if a message with this (group_id, external_id) is already stored.
+ *
+ * Used by the live collector to skip the expensive — and occasionally
+ * crash-prone — media download + insert for messages WhatsApp re-pushes on
+ * every reconnect (the recent-history batch). Matches the (group_id, external_id)
+ * partial unique index, so a hit here is exactly a row insertMessages would
+ * reject as a duplicate.
+ */
+export async function messageExistsByExternalId(
+  client: pg.Pool | pg.PoolClient,
+  groupId: number,
+  externalId: string,
+): Promise<boolean> {
+  const { rows } = await client.query(
+    `SELECT 1 FROM messages WHERE group_id = $1 AND external_id = $2 LIMIT 1`,
+    [groupId, externalId],
+  );
+  return rows.length > 0;
 }
 
 type MessageRow = NormalizedMessage & {
