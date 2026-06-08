@@ -261,6 +261,11 @@ export class CollectorSession extends EventEmitter {
       }
 
       if (connection === "open") {
+        if (DIAG_NAMES) {
+          process.stderr.write(
+            "[diag-names] active — watching contacts.upsert/update + history.set (chats/contacts/lidPnMappings)\n",
+          );
+        }
         this.emit("connected");
       }
 
