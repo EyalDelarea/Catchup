@@ -5,15 +5,9 @@
  * `intervalMs` milliseconds until `stop()` is called. The underlying
  * DB function is injected for testability (defaults to the real
  * `recordHeartbeat` from the service-status repository).
- *
- * `markConnected` is a thin wrapper around `setCollectorConnected` that
- * the `serve` wiring calls on Baileys open/close events.
  */
 import type pg from "pg";
-import {
-  recordHeartbeat as dbRecordHeartbeat,
-  setCollectorConnected as dbSetCollectorConnected,
-} from "../db/repositories/service-status.js";
+import { recordHeartbeat as dbRecordHeartbeat } from "../db/repositories/service-status.js";
 import { markHeartbeat } from "./liveness.js";
 
 // ---------------------------------------------------------------------------
@@ -21,7 +15,6 @@ import { markHeartbeat } from "./liveness.js";
 // ---------------------------------------------------------------------------
 
 export type RecordHeartbeatFn = (pool: pg.Pool | pg.PoolClient) => Promise<void>;
-export type SetConnectedFn = (pool: pg.Pool | pg.PoolClient, connected: boolean) => Promise<void>;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -68,20 +61,4 @@ export function startHeartbeat(deps: HeartbeatDeps): HeartbeatHandle {
       clearInterval(handle);
     },
   };
-}
-
-/**
- * Thin wrapper around `setCollectorConnected`.
- * Called by `serve` wiring on Baileys connection open/close events.
- *
- * @param pool     Database pool.
- * @param connected  true = connected; false = disconnected.
- * @param setConnected  Injectable override for tests (defaults to real repo fn).
- */
-export async function markConnected(
-  pool: pg.Pool | pg.PoolClient,
-  connected: boolean,
-  setConnected: SetConnectedFn = dbSetCollectorConnected,
-): Promise<void> {
-  await setConnected(pool, connected);
 }

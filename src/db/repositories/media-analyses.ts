@@ -93,45 +93,12 @@ export async function getVisualMediaPath(
 }
 
 /**
- * Returns message IDs for present visual media (images and video) that do not
- * yet have any media_analyses row, ordered newest-first, up to `limit`.
- *
- * Both 'completed' and 'failed' analyses exclude the row (failed analyses are
- * not retried automatically; the ON CONFLICT DO NOTHING on insertMediaAnalysis
- * is the idempotency guard).
- *
- * @deprecated Prefer selectVisualMediaNeedingAnalysis for new callers — it
- * includes rows whose only analysis is 'failed' (COMPLETED-only exclusion).
- */
-export async function selectPendingVisualMedia(
-  client: pg.Pool | pg.PoolClient,
-  limit: number,
-): Promise<number[]> {
-  const { rows } = await client.query<{ id: string }>(
-    `
-    SELECT m.id
-    FROM messages m
-    LEFT JOIN media_analyses a ON a.message_id = m.id
-    WHERE m.message_type = 'media'
-      AND m.media_status = 'present'
-      AND m.media_path IS NOT NULL
-      AND (${IMAGE_PREDICATE} OR ${VIDEO_PREDICATE})
-      AND a.id IS NULL
-    ORDER BY m.sent_at DESC
-    LIMIT $1
-    `,
-    [limit],
-  );
-  return rows.map((r) => Number(r.id));
-}
-
-/**
  * Returns present visual media (images and videos, excluding stickers) that
  * do NOT yet have a `completed` media_analyses row, ordered newest-first.
  *
- * Unlike selectPendingVisualMedia this INCLUDES messages whose only analysis
- * row is `failed` — they are eligible for re-analysis via the analyze-backlog
- * command (the upsert in insertMediaAnalysis will upgrade failed→completed).
+ * Messages whose only analysis row is `failed` ARE included — they are
+ * eligible for re-analysis via the analyze-backlog command (the upsert in
+ * insertMediaAnalysis will upgrade failed→completed).
  *
  * Stickers (media_filename ILIKE 'STK-%') are excluded: they are never
  * analyzed and should not be enqueued.
