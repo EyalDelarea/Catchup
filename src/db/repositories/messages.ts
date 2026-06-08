@@ -155,6 +155,27 @@ export async function getNewestAnchor(
   };
 }
 
+/**
+ * True if a message with this (group_id, external_id) is already stored.
+ *
+ * Used by the live collector to skip the expensive — and occasionally
+ * crash-prone — media download + insert for messages WhatsApp re-pushes on
+ * every reconnect (the recent-history batch). Matches the (group_id, external_id)
+ * partial unique index, so a hit here is exactly a row insertMessages would
+ * reject as a duplicate.
+ */
+export async function messageExistsByExternalId(
+  client: pg.Pool | pg.PoolClient,
+  groupId: number,
+  externalId: string,
+): Promise<boolean> {
+  const { rows } = await client.query(
+    `SELECT 1 FROM messages WHERE group_id = $1 AND external_id = $2 LIMIT 1`,
+    [groupId, externalId],
+  );
+  return rows.length > 0;
+}
+
 type MessageRow = NormalizedMessage & {
   participantId: number | null;
 };

@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import type { WAMessage } from "@whiskeysockets/baileys";
 import pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { InMemoryJobBus } from "../jobs/in-memory-bus.js";
 import { InMemoryJobRunRecorder } from "../jobs/job-run-recorder.js";
 import { createTestDatabase } from "../test/db.js";
@@ -221,5 +221,32 @@ describe("collector image enqueue (T016)", () => {
 
     const imageJobs = recorder.enqueuedJobs.filter((j) => j.job.type === "analyze.image");
     expect(imageJobs).toHaveLength(1); // only from first insertion
+  });
+
+  it("does NOT re-download media for an already-stored message (history re-push)", async () => {
+    // On reconnect WhatsApp re-pushes recent history; we must skip the media
+    // download for messages we already have (the expensive, crash-prone step).
+    const spyDownloader = vi.fn(async () => FAKE_IMAGE);
+
+    const waMsg = makeFakeWAImageMessage({
+      id: "IMG_SKIP_001",
+      remoteJid: "img-skip@g.us",
+      timestampSeconds: 1700100005,
+    });
+
+    const first = await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      downloadImage: spyDownloader,
+    });
+    expect(first).toBe(true);
+    expect(spyDownloader).toHaveBeenCalledTimes(1);
+
+    // Second (duplicate) delivery must short-circuit before the downloader runs.
+    const second = await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      downloadImage: spyDownloader,
+    });
+    expect(second).toBe(false);
+    expect(spyDownloader).toHaveBeenCalledTimes(1); // NOT called again
   });
 });

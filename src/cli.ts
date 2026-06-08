@@ -526,6 +526,14 @@ program
         );
       }
 
+      // Keep the collector alive when a media-download HTTP/2 stream aborts.
+      // Such aborts surface as an unhandled 'error' event on a raw undici stream
+      // (an uncaughtException), which bypasses the per-message handler's .catch
+      // and would otherwise kill the whole process. The guard swallows only
+      // transient stream/network aborts; real bugs still crash fast.
+      const { installMediaStreamCrashGuard } = await import("./collector/crash-guard.js");
+      installMediaStreamCrashGuard();
+
       // Start collector — errors must not take down the web server
       try {
         const { startSession } = await import("./collector/session.js");

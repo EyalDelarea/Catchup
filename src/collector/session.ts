@@ -26,6 +26,7 @@ import makeWASocket, {
   type WAMessage,
   type WASocket,
 } from "@whiskeysockets/baileys";
+import { createHistorySyncProgress, type HistorySyncProgress } from "./history-sync-progress.js";
 import { applyOutboundGuard } from "./outbound-guard.js";
 
 export type SessionEvents = {
@@ -45,11 +46,16 @@ export class CollectorSession extends EventEmitter {
   private storedMessages = 0;
   /** When false (default), the socket is hard-guarded to never send anything. */
   private allowSend: boolean;
+  /** Collapses the per-batch history-sync flood into throttled progress + a summary. */
+  private historyProgress: HistorySyncProgress;
 
   constructor(authDir: string, allowSend = false) {
     super();
     this.authDir = authDir;
     this.allowSend = allowSend;
+    this.historyProgress = createHistorySyncProgress({
+      log: (line) => process.stderr.write(`${line}\n`),
+    });
   }
 
   /** Total messages reported as stored (updated by caller via incrementStored). */
@@ -284,12 +290,9 @@ export class CollectorSession extends EventEmitter {
     // messages missed during downtime are recovered. syncFullHistory stays false, so
     // this is the recent window only; dedup makes overlap with live/append idempotent.
     sock.ev.on("messaging-history.set", ({ messages }: { messages: WAMessage[] }) => {
-      // Diagnostic: surface whether/how much history WhatsApp delivers on connect.
-      if (messages.length > 0) {
-        process.stderr.write(
-          `[history-sync] messaging-history.set: ${messages.length} message(s)\n`,
-        );
-      }
+      // Collapse the per-batch flood into a throttled progress line + summary
+      // (instead of one log line per batch). The collector dedups the contents.
+      this.historyProgress.record(messages.length);
       for (const msg of messages) {
         this.emit("message", msg);
       }
