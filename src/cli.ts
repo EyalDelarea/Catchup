@@ -642,6 +642,26 @@ program
           console.log("[collector] disconnected (will auto-reconnect).");
         });
 
+        // Resolve chat/contact display names from WhatsApp's directory (the only
+        // source for saved contact names and for groups we can't fetch a subject
+        // for). Fire-and-forget; failures must never disturb collection.
+        session.on("contacts", (contacts) => {
+          void import("./collector/name-resolver.js")
+            .then(({ resolveContactNames }) => resolveContactNames(pool, contacts))
+            .catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              process.stderr.write(`[name-resolver] contacts resolution error: ${msg}\n`);
+            });
+        });
+        session.on("chats", (chats) => {
+          void import("./collector/name-resolver.js")
+            .then(({ resolveChatNames }) => resolveChatNames(pool, chats))
+            .catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              process.stderr.write(`[name-resolver] chats resolution error: ${msg}\n`);
+            });
+        });
+
         liveHandle = attachCollector({
           session,
           pool,

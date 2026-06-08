@@ -19,7 +19,9 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import type { Boom } from "@hapi/boom";
 import makeWASocket, {
+  type Chat,
   type ConnectionState,
+  type Contact,
   DisconnectReason,
   downloadMediaMessage,
   useMultiFileAuthState,
@@ -34,6 +36,10 @@ export type SessionEvents = {
   qr: [qr: string];
   connected: [];
   disconnected: [];
+  /** WhatsApp contacts directory (saved names + push names) for name resolution. */
+  contacts: [contacts: Contact[]];
+  /** Chat/group directory entries (with subjects) delivered on history sync. */
+  chats: [chats: Chat[]];
 };
 
 /**
@@ -232,6 +238,16 @@ export class CollectorSession extends EventEmitter {
     // Persist credentials whenever they update (keeps session alive across restarts)
     sock.ev.on("creds.update", saveCreds);
 
+    // Contacts directory — the only source for SAVED contact names / push names.
+    // Forwarded for the collector to resolve 1:1 chat display names.
+    sock.ev.on("contacts.upsert", (contacts: Contact[]) => {
+      if (contacts.length > 0) this.emit("contacts", contacts);
+    });
+    sock.ev.on("contacts.update", (updates: Partial<Contact>[]) => {
+      const contacts = updates.filter((c): c is Contact => typeof c.id === "string");
+      if (contacts.length > 0) this.emit("contacts", contacts);
+    });
+
     // Handle connection state changes
     sock.ev.on("connection.update", (update: Partial<ConnectionState>) => {
       const { connection, lastDisconnect, qr } = update;
@@ -289,14 +305,31 @@ export class CollectorSession extends EventEmitter {
     // On (re)connect WhatsApp pushes a bounded recent-history batch. Persist it so
     // messages missed during downtime are recovered. syncFullHistory stays false, so
     // this is the recent window only; dedup makes overlap with live/append idempotent.
-    sock.ev.on("messaging-history.set", ({ messages }: { messages: WAMessage[] }) => {
-      // Collapse the per-batch flood into a throttled progress line + summary
-      // (instead of one log line per batch). The collector dedups the contents.
-      this.historyProgress.record(messages.length);
-      for (const msg of messages) {
-        this.emit("message", msg);
-      }
-    });
+    sock.ev.on(
+      "messaging-history.set",
+      ({
+        messages,
+        chats,
+        contacts,
+      }: {
+        messages: WAMessage[];
+        chats: Chat[];
+        contacts: Contact[];
+      }) => {
+        // The history payload also carries the chat + contact directory — the
+        // only source for names of groups we can't fetch a subject for and for
+        // saved 1:1 contact names. Forward both for resolution.
+        if (chats?.length > 0) this.emit("chats", chats);
+        if (contacts?.length > 0) this.emit("contacts", contacts);
+
+        // Collapse the per-batch flood into a throttled progress line + summary
+        // (instead of one log line per batch). The collector dedups the contents.
+        this.historyProgress.record(messages.length);
+        for (const msg of messages) {
+          this.emit("message", msg);
+        }
+      },
+    );
   }
 }
 

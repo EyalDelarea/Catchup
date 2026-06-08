@@ -15,7 +15,35 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { upsertGroupByWhatsappId } from "../db/repositories/groups.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
 import { createTestDatabase } from "../test/db.js";
-import { resolveAllGroupNames } from "./name-resolver.js";
+import {
+  isUsableName,
+  pickContactName,
+  resolveAllGroupNames,
+  resolveChatNames,
+  resolveContactNames,
+} from "./name-resolver.js";
+
+describe("isUsableName / pickContactName", () => {
+  it("rejects empty, JID-like, and bare-phone-number names", () => {
+    expect(isUsableName("")).toBe(false);
+    expect(isUsableName("  ")).toBe(false);
+    expect(isUsableName("972502028299@s.whatsapp.net")).toBe(false);
+    expect(isUsableName("+972 50 202 8299")).toBe(false);
+    expect(isUsableName("0525551234")).toBe(false);
+  });
+
+  it("accepts real human names", () => {
+    expect(isUsableName("Dana Cohen")).toBe(true);
+    expect(isUsableName("משפחת דלריאה")).toBe(true);
+  });
+
+  it("prefers saved name, then verifiedName, then notify — skipping unusable ones", () => {
+    expect(pickContactName({ name: "Saved Name", notify: "Push Name" })).toBe("Saved Name");
+    expect(pickContactName({ name: "+97250", notify: "Push Name" })).toBe("Push Name");
+    expect(pickContactName({ verifiedName: "Acme Ltd", notify: "x" })).toBe("Acme Ltd");
+    expect(pickContactName({ name: "12345", notify: "67890" })).toBeNull();
+  });
+});
 
 describe("resolveAllGroupNames", () => {
   let pool: pg.Pool;
@@ -148,5 +176,53 @@ describe("resolveAllGroupNames", () => {
       jidC,
     ]);
     expect(rowsC[0]?.name).toBe("Clean Group Name");
+  });
+
+  it("resolveContactNames names a 1:1 chat from a saved contact name", async () => {
+    const jid = "972502028299@s.whatsapp.net";
+    await upsertGroupByWhatsappId(pool, { whatsappId: jid, name: jid, source: "live" });
+
+    const result = await resolveContactNames(pool, [{ id: jid, name: "Dana Cohen", notify: "dc" }]);
+    expect(result.resolved).toBeGreaterThanOrEqual(1);
+
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
+    expect(rows[0]?.name).toBe("Dana Cohen");
+  });
+
+  it("resolveContactNames matches by phoneNumber when the chat is keyed by the PN JID", async () => {
+    const pnJid = "972500000001@s.whatsapp.net";
+    await upsertGroupByWhatsappId(pool, { whatsappId: pnJid, name: pnJid, source: "live" });
+
+    // Contact keyed by @lid, but exposes the PN jid via phoneNumber.
+    const result = await resolveContactNames(pool, [
+      { id: "111@lid", phoneNumber: pnJid, notify: "Yossi" },
+    ]);
+    expect(result.resolved).toBeGreaterThanOrEqual(1);
+
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [pnJid]);
+    expect(rows[0]?.name).toBe("Yossi");
+  });
+
+  it("resolveContactNames does NOT overwrite an already-resolved name", async () => {
+    const jid = "972511111111@s.whatsapp.net";
+    await upsertGroupByWhatsappId(pool, { whatsappId: jid, name: "Already Named", source: "live" });
+
+    await resolveContactNames(pool, [{ id: jid, name: "New Name" }]);
+
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
+    expect(rows[0]?.name).toBe("Already Named");
+  });
+
+  it("resolveChatNames names a group we can't fetch a subject for (from history chats)", async () => {
+    const jid = "120363400000000001@g.us";
+    await upsertGroupByWhatsappId(pool, { whatsappId: jid, name: jid, source: "live" });
+
+    const result = await resolveChatNames(pool, [
+      { id: jid, name: "Forbidden Group From History" },
+    ]);
+    expect(result.resolved).toBeGreaterThanOrEqual(1);
+
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
+    expect(rows[0]?.name).toBe("Forbidden Group From History");
   });
 });
