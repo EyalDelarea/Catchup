@@ -20,14 +20,34 @@ export const DEMO_GROUPS = [
   { name: "קבוצת לימוד", source: "group", messageCount: 0, lastMessageAt: ago(9 * 24 * 60 * MIN) },
 ];
 
-/** A dummy single-group summary (markdown). */
-export const DEMO_SUMMARY = [
-  "**פגישת צוות:** נקבעה ליום שלישי 10:00, נטע תשלח הזמנה ביומן.",
-  "",
-  "**משימות פתוחות:** דני מסיים את המסמך עד חמישי; רוני בודקת את התקציב.",
-  "",
-  "**החלטה:** עוברים לכלי הניהול החדש מתחילת החודש הבא.",
-].join("\n");
+/** Per-group dummy summaries (markdown), keyed by group name — each contextually
+ *  coherent so the family chat shows family content, the work chat work content, etc. */
+export const DEMO_SUMMARIES = {
+  "משפחה ❤️": [
+    "**ארוחת שישי:** נפגשים אצל סבתא ב־19:00, אמא מביאה קינוח.",
+    "",
+    "**יום הולדת:** מתאמים הפתעה לאבא בסוף החודש — דנה אוספת כסף למתנה.",
+    "",
+    "**הסעות:** מי אוסף את הילדים מהחוג ביום רביעי? יואב התנדב.",
+  ].join("\n"),
+  "צוות עבודה": [
+    "**פגישת צוות:** נקבעה ליום שלישי 10:00, נטע תשלח הזמנה ביומן.",
+    "",
+    "**משימות פתוחות:** דני מסיים את המסמך עד חמישי; רוני בודקת את התקציב.",
+    "",
+    "**החלטה:** עוברים לכלי הניהול החדש מתחילת החודש הבא.",
+  ].join("\n"),
+  "חברים מהטיול": [
+    "**מפגש הבא:** מציעים פיקניק בפארק בשבת הקרובה אחה״צ.",
+    "",
+    "**תמונות:** מאיה העלתה אלבום מהטיול הצפוני — שווה לראות.",
+    "",
+    "**טיול הבא:** מתלבטים בין הגולן למדבר יהודה לחופשת הסתיו.",
+  ].join("\n"),
+};
+
+/** Fallback summary for any group without a tailored entry. */
+export const DEMO_SUMMARY = DEMO_SUMMARIES["צוות עבודה"];
 
 /** A dummy total-summary highlights block (markdown). */
 export const DEMO_TOTAL_HIGHLIGHTS = [
