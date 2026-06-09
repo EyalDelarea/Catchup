@@ -20,7 +20,45 @@ export const MEDIA_EXTENSIONS: Record<string, string> = {
   document: ".bin",
 };
 
-const REUPLOAD_GONE = /\b404\b|\b410\b|not.?found|no longer available/i;
+/**
+ * HTTP statuses from the WhatsApp media CDN that mean the bytes are
+ * unrecoverable for us: 403 (the signed URL's `oe` expiry has passed), 404/410
+ * (the encrypted blob was garbage-collected). Normally Baileys would refresh an
+ * expired URL via `reuploadRequest`, but that peer-data path is broken on this
+ * Baileys/account (see deep-history-via-full-sync), so these are all terminal.
+ */
+const GONE_STATUS = new Set([403, 404, 410]);
+
+/** Textual fallback for errors that carry no statusCode (older/wrapped errors). */
+const REUPLOAD_GONE = /\b403\b|\b404\b|\b410\b|not.?found|no longer available|gone/i;
+
+/**
+ * Extract the HTTP status from a download error. Baileys throws a Boom
+ * (`output.statusCode`); other clients use `err.statusCode` or, axios-style,
+ * `err.response.status`. Check all three.
+ */
+function statusOf(err: unknown): number | undefined {
+  const e = err as {
+    output?: { statusCode?: unknown };
+    statusCode?: unknown;
+    response?: { status?: unknown };
+  };
+  const s = e?.output?.statusCode ?? e?.statusCode ?? e?.response?.status;
+  return typeof s === "number" ? s : undefined;
+}
+
+/**
+ * A download failure is "gone" (terminal) when the CDN status is in
+ * {@link GONE_STATUS}, or — for errors without a status — when the message text
+ * looks like a not-found/gone error. Baileys' "Failed to fetch stream" message
+ * has NO embedded code, so the statusCode check is what actually catches it.
+ */
+function isGoneError(err: unknown): boolean {
+  const status = statusOf(err);
+  if (status !== undefined) return GONE_STATUS.has(status);
+  const msg = err instanceof Error ? err.message : String(err);
+  return REUPLOAD_GONE.test(msg);
+}
 
 export type BackfillDeps = {
   selectPending: (limit: number) => Promise<PendingMedia[]>;
@@ -33,6 +71,12 @@ export type BackfillDeps = {
   markUnrecoverable: (messageId: number, error: string) => Promise<void>;
   recordAttempt: (messageId: number, error: string) => Promise<void>;
   enqueue: (type: JobType, payload: { messageId: string }) => Promise<void>;
+  /**
+   * Retire pending rows whose signed URL already expired (returns the count).
+   * Run once per batch BEFORE selecting so the doomed rows never enter the queue
+   * and their secrets are pruned promptly. Optional for testing.
+   */
+  sweepExpired?: () => Promise<number>;
   log?: (msg: string) => void;
 };
 
@@ -45,6 +89,11 @@ function analysisJobFor(kind: PendingMedia["mediaKind"]): JobType | null {
 
 /** Process up to `limit` pending rows once. Returns the count downloaded. */
 export async function runBackfillBatch(deps: BackfillDeps, limit: number): Promise<number> {
+  if (deps.sweepExpired) {
+    const retired = await deps.sweepExpired();
+    if (retired > 0)
+      deps.log?.(`[media-backfill] retired ${retired} expired (unrecoverable) media`);
+  }
   const pending = await deps.selectPending(limit);
   let done = 0;
 
@@ -59,13 +108,17 @@ export async function runBackfillBatch(deps: BackfillDeps, limit: number): Promi
     try {
       bytes = await deps.download(deps.decodeWaMessage(row.waMessage));
     } catch (err) {
+      const status = statusOf(err);
       const msg = err instanceof Error ? err.message : String(err);
-      if (REUPLOAD_GONE.test(msg)) {
-        await deps.markUnrecoverable(row.messageId, msg);
+      // Surface the HTTP status in the recorded error so last_error is diagnosable
+      // (the raw Baileys message — "Failed to fetch stream" — omits the code).
+      const detail = status === undefined ? msg : `${msg} [HTTP ${status}]`;
+      if (isGoneError(err)) {
+        await deps.markUnrecoverable(row.messageId, detail);
       } else {
-        await deps.recordAttempt(row.messageId, msg);
+        await deps.recordAttempt(row.messageId, detail);
       }
-      deps.log?.(`[media-backfill] message ${row.messageId} download failed: ${msg}`);
+      deps.log?.(`[media-backfill] message ${row.messageId} download failed: ${detail}`);
       continue;
     }
 
