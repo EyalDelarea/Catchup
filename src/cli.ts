@@ -898,8 +898,26 @@ program
     const authDir = options.authDir ?? path.join(config.dataDir, "baileys-fullsync-auth");
     const session = await startSession(authDir, false, {});
 
+    let failed = false;
     try {
-      await new Promise<void>((resolve) => session.on("connected", () => resolve()));
+      session.on("qr", () => {
+        console.log(
+          "\n📲 Scan the QR above: WhatsApp → Settings → Linked Devices → Link a Device.\n",
+        );
+      });
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(
+          () =>
+            reject(
+              new Error("timed out waiting for WhatsApp connection (scan the QR, or re-auth)"),
+            ),
+          120_000,
+        );
+        session.on("connected", () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+      });
 
       const total = await runBackfillBatch(
         {
@@ -929,13 +947,13 @@ program
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       process.stderr.write(`Error: media-backfill failed: ${message}\n`);
-      process.exit(1);
+      failed = true;
     } finally {
       session.stop();
       await bus.close();
       await pool.end();
     }
-    process.exit(0);
+    process.exit(failed ? 1 : 0);
   });
 
 program
