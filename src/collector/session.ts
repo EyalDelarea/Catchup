@@ -462,13 +462,15 @@ function printQr(qr: string): void {
       if (typeof toStringFn !== "function") {
         throw new Error("qrcode: toString() not found");
       }
-      console.log(await toStringFn(qr, { type: "terminal", small: true }));
+      // The QR is terminal-only UX: write the ANSI art straight to stdout so it
+      // bypasses the console guard (otherwise the escape codes flood pino/Loki).
+      process.stdout.write(`${await toStringFn(qr, { type: "terminal", small: true })}\n`);
     })
     .catch((err: unknown) => {
       if (process.env["QR_DEBUG"] === "1") {
-        console.error("[printQr] qrcode render failed:", err);
+        collectorLog.error({ err }, "qrcode render failed");
       }
-      console.log(`QR Code (scan with WhatsApp):\n${qr}`);
+      process.stdout.write(`QR Code (scan with WhatsApp):\n${qr}\n`);
     });
 }
 

@@ -164,7 +164,7 @@ program
     const session = await startSession(authDir, config.whatsapp.allowSend);
 
     session.on("qr", () => {
-      console.log("Scan the QR code above with WhatsApp to link your account.");
+      process.stdout.write("Scan the QR code above with WhatsApp to link your account.\n");
     });
 
     session.on("connected", () => {
@@ -617,7 +617,7 @@ program
         };
 
         session.on("qr", () => {
-          console.log("Scan the QR code above with WhatsApp to link your account.");
+          process.stdout.write("Scan the QR code above with WhatsApp to link your account.\n");
         });
         session.on("connected", () => {
           log.collector.info("connected");
@@ -945,7 +945,7 @@ program
 
     const session = await startSession(path.join(config.dataDir, "baileys-auth"), false);
     session.on("qr", () => {
-      console.log("Scan the QR code above with WhatsApp to link your account.");
+      process.stdout.write("Scan the QR code above with WhatsApp to link your account.\n");
     });
 
     const run = async () => {
