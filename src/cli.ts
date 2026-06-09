@@ -813,6 +813,97 @@ program
   });
 
 program
+  .command("media-backfill")
+  .description(
+    "Download + analyze media for messages stored without it (deferred backfill). Scans a fresh linked session.",
+  )
+  .option("--limit <n>", "Max messages to process", "50")
+  .option(
+    "--auth-dir <dir>",
+    "Auth dir for the temporary device (default <dataDir>/baileys-fullsync-auth)",
+  )
+  .action(async (options: { limit?: string; authDir?: string }) => {
+    const limit = Number(options.limit ?? "50");
+    if (!Number.isInteger(limit) || limit <= 0) {
+      process.stderr.write("Error: --limit must be a positive integer.\n");
+      process.exit(1);
+    }
+
+    const config = loadConfig();
+    const [
+      { startSession },
+      { runBackfillBatch, MEDIA_EXTENSIONS },
+      { proto },
+      mediaRepo,
+      msgRepo,
+      pgMod,
+      fsp,
+      nodePath,
+      { RabbitMqJobBus },
+      { PostgresJobRunRecorder },
+      { createDbClient },
+    ] = await Promise.all([
+      import("./collector/session.js"),
+      import("./collector/media-backfill-loop.js"),
+      import("@whiskeysockets/baileys"),
+      import("./db/repositories/message-media.js"),
+      import("./db/repositories/messages.js"),
+      import("pg"),
+      import("node:fs/promises"),
+      import("node:path"),
+      import("./jobs/rabbitmq-bus.js"),
+      import("./jobs/job-run-recorder.js"),
+      import("./db/client.js"),
+    ]);
+
+    const pool = new pgMod.default.Pool({ connectionString: config.databaseUrl });
+    const dbClient = createDbClient();
+    const recorder = new PostgresJobRunRecorder(dbClient);
+    const bus = new RabbitMqJobBus({ url: config.broker.url, recorder });
+    const authDir = options.authDir ?? path.join(config.dataDir, "baileys-fullsync-auth");
+    const session = await startSession(authDir, false, {});
+
+    try {
+      await new Promise<void>((resolve) => session.on("connected", () => resolve()));
+
+      const total = await runBackfillBatch(
+        {
+          selectPending: (l) => mediaRepo.selectPendingMedia(pool, l),
+          decodeWaMessage: (blob) => proto.WebMessageInfo.decode(blob),
+          download: (m) => session.downloadMedia(m as import("@whiskeysockets/baileys").WAMessage),
+          writeFile: async (messageId, kind, bytes) => {
+            const dir = nodePath.join(config.dataDir, "media", "backfill");
+            await fsp.mkdir(dir, { recursive: true });
+            const file = nodePath.join(dir, `bf-${messageId}${MEDIA_EXTENSIONS[kind] ?? ".bin"}`);
+            await fsp.writeFile(file, bytes);
+            return file;
+          },
+          markPresentMessage: (id, p) => msgRepo.markMessageMediaPresent(pool, id, p),
+          markPresentMedia: (id, dp) => mediaRepo.markMediaPresent(pool, id, dp),
+          markUnrecoverable: (id, e) => mediaRepo.markMediaUnrecoverable(pool, id, e),
+          recordAttempt: (id, e) => mediaRepo.recordMediaAttempt(pool, id, e),
+          enqueue: async (type, payload) => {
+            await bus.enqueue(type, payload);
+          },
+          log: (m) => process.stdout.write(`${m}\n`),
+        },
+        limit,
+      );
+
+      console.log(`Backfilled ${total} media file(s); analysis jobs enqueued.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`Error: media-backfill failed: ${message}\n`);
+      process.exit(1);
+    } finally {
+      session.stop();
+      await bus.close();
+      await pool.end();
+    }
+    process.exit(0);
+  });
+
+program
   .command("digest-run")
   .description(
     "Manually trigger a scheduled digest run: enqueue summarize.group jobs for all changed groups",
