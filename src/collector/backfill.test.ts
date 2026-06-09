@@ -658,6 +658,76 @@ describe("backfillGroup integration", () => {
     expect(res.partial).toBe(false); // reached the stop boundary
   });
 
+  // -------------------------------------------------------------------------
+  // persistMediaDescriptor: spy receives descriptor for backfilled image message
+  // -------------------------------------------------------------------------
+  it("persistMediaDescriptor: spy called once with kind 'image' for backfilled image message", async () => {
+    const remoteJid = "bf-media-descriptor@g.us";
+    const anchorTs = 1700900000;
+
+    // Seed an anchor message so getNewestAnchor returns non-null
+    await handleIncomingMessage(
+      pool,
+      makeFakeWATextMessage({
+        id: "MEDIA-DESC-ANCHOR",
+        remoteJid,
+        timestampSeconds: anchorTs,
+        text: "Anchor for media descriptor test",
+      }),
+      { dataDir },
+    );
+
+    const { rows } = await pool.query<{ id: string }>(
+      `SELECT id FROM groups WHERE whatsapp_id = $1`,
+      [remoteJid],
+    );
+    const groupId = Number(rows[0]!.id);
+
+    // Build a fake image WAMessage (older than anchor so it passes as history)
+    const imageMessage = {
+      key: {
+        id: "MEDIA-DESC-IMG-001",
+        remoteJid,
+        fromMe: false,
+      },
+      messageTimestamp: anchorTs - 100,
+      pushName: "ImageSender",
+      message: {
+        imageMessage: {
+          mediaKey: new Uint8Array([1, 2, 3, 4]),
+          directPath: "/v/t62.7118-24/test-path",
+          url: "https://mmg.whatsapp.net/test",
+          mimetype: "image/jpeg",
+        },
+      },
+    } as unknown as WAMessage;
+
+    const persistMediaDescriptorSpy = vi.fn(async () => {});
+
+    let batchCallCount = 0;
+    const awaitHistory = vi.fn(async () => {
+      batchCallCount++;
+      if (batchCallCount === 1) return [imageMessage];
+      return [] as WAMessage[];
+    });
+
+    await backfillGroup({
+      pool,
+      groupId,
+      dataDir,
+      targetWindow: 5,
+      maxFetch: 200,
+      timeoutMs: 10_000,
+      fetchHistory: vi.fn(async () => "req-id"),
+      awaitHistory,
+      persistMediaDescriptor: persistMediaDescriptorSpy,
+    });
+
+    expect(persistMediaDescriptorSpy).toHaveBeenCalledTimes(1);
+    const [, descriptor] = persistMediaDescriptorSpy.mock.calls[0]!;
+    expect(descriptor.mediaKind).toBe("image");
+  });
+
   it("gap-mode: returns partial:true when maxFetch is hit before crossing stopAtSentAt", async () => {
     const remoteJid = "bf-gap-cap@g.us";
     const topTs = 1700400000;

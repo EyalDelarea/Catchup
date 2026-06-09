@@ -12,9 +12,11 @@ import { createTestDatabase } from "../../test/db.js";
 import { upsertGroup } from "./groups.js";
 import {
   countReadableByGroup,
+  getMessageIdByExternalId,
   getNewestAnchor,
   getOldestSentAt,
   insertMessages,
+  markMessageMediaPresent,
 } from "./messages.js";
 import { upsertParticipant } from "./participants.js";
 
@@ -316,7 +318,7 @@ describe("messages read queries", () => {
       // Create a group with whatsapp_id
       const groupJid = "anchor-test-group@g.us";
       await pool.query(
-        `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (name) DO NOTHING`,
+        `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (tenant_id, name) DO NOTHING`,
         [groupJid, "anchor-live-group"],
       );
       const { rows: gRows } = await pool.query(`SELECT id FROM groups WHERE whatsapp_id = $1`, [
@@ -373,7 +375,7 @@ describe("messages read queries", () => {
     it("coalesces from_me=null to false", async () => {
       const groupJid = "anchor-fromme-null@g.us";
       await pool.query(
-        `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (name) DO NOTHING`,
+        `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (tenant_id, name) DO NOTHING`,
         [groupJid, "anchor-fromme-null-group"],
       );
       const { rows: gRows } = await pool.query(`SELECT id FROM groups WHERE whatsapp_id = $1`, [
@@ -403,7 +405,7 @@ describe("messages read queries", () => {
     it("orders by (sent_at DESC, id DESC) to pick the newest", async () => {
       const groupJid = "anchor-order@g.us";
       await pool.query(
-        `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (name) DO NOTHING`,
+        `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (tenant_id, name) DO NOTHING`,
         [groupJid, "anchor-order-group"],
       );
       const { rows: gRows } = await pool.query(`SELECT id FROM groups WHERE whatsapp_id = $1`, [
@@ -557,6 +559,77 @@ describe("messages read queries", () => {
       const oldest = await getOldestSentAt(pool, groupId);
       expect(oldest).not.toBeNull();
       expect(oldest!.getTime()).toBe(textDate.getTime());
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Shared seed helpers for the lookup / update tests below
+  // -------------------------------------------------------------------------
+
+  async function seedGroup(name: string): Promise<number> {
+    return upsertGroup(pool, { name, source: "import" });
+  }
+
+  async function seedMessageWithExternalId(groupId: number, externalId: string): Promise<number> {
+    const participantId = await upsertParticipant(pool, `participant-${externalId}`);
+    const result = await insertMessages(pool, [
+      {
+        ...makeMsg({
+          groupId,
+          dedupeKey: `dedupe-${externalId}-${Math.random()}`,
+          externalId,
+        }),
+        participantId,
+      },
+    ]);
+    return Number(result.ids[0]!);
+  }
+
+  // -------------------------------------------------------------------------
+  // getMessageIdByExternalId
+  // -------------------------------------------------------------------------
+
+  describe("getMessageIdByExternalId", () => {
+    it("returns { id, mediaStatus } for an existing row and null when not found", async () => {
+      const groupId = await seedGroup("getid-basic-group");
+      const id = await seedMessageWithExternalId(groupId, "EXT-1");
+
+      const result = await getMessageIdByExternalId(pool, groupId, "EXT-1");
+      expect(result).not.toBeNull();
+      expect(result!.id).toBe(id);
+      // seedMessageWithExternalId uses makeMsg which has mediaStatus: null
+      expect(result!.mediaStatus).toBeNull();
+
+      expect(await getMessageIdByExternalId(pool, groupId, "NOPE")).toBeNull();
+    });
+
+    it("reflects the actual media_status stored on the row", async () => {
+      const groupId = await seedGroup("getid-mediastatus-group");
+      const id = await seedMessageWithExternalId(groupId, "EXT-MS-1");
+      await markMessageMediaPresent(pool, id, "/tmp/test.jpg");
+
+      const result = await getMessageIdByExternalId(pool, groupId, "EXT-MS-1");
+      expect(result).not.toBeNull();
+      expect(result!.id).toBe(id);
+      expect(result!.mediaStatus).toBe("present");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // markMessageMediaPresent
+  // -------------------------------------------------------------------------
+
+  describe("markMessageMediaPresent", () => {
+    it("sets media_path and media_status='present'", async () => {
+      const groupId = await seedGroup("mark-media-group");
+      const id = await seedMessageWithExternalId(groupId, "EXT-2");
+      await markMessageMediaPresent(pool, id, "/data/media/live/x.jpg");
+      const { rows } = await pool.query(
+        "SELECT media_path, media_status FROM messages WHERE id=$1",
+        [id],
+      );
+      expect(rows[0].media_path).toBe("/data/media/live/x.jpg");
+      expect(rows[0].media_status).toBe("present");
     });
   });
 });
