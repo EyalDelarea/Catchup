@@ -18,12 +18,20 @@ import {
   updateDisplayName,
   upsertGroupByCanonicalJid,
 } from "../db/repositories/groups.js";
-import { insertMessages, messageExistsByExternalId } from "../db/repositories/messages.js";
+import { getMessageIdByExternalId, insertMessages } from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
 import { normalize } from "../importer/normalize.js";
 import type { ImportedMessage } from "../importer/types.js";
 import type { JobBus } from "../jobs/job-bus.js";
+import { extractMediaDescriptor, type MediaDescriptor } from "./media-descriptor.js";
 import { mapWaMessage } from "./message-mapper.js";
+
+/**
+ * Media kinds that the analysis pipeline can handle. Only these kinds get a
+ * `message_media` descriptor row — sticker and document rows are never
+ * selected by `selectPendingMedia` and would sit in `'pending'` forever.
+ */
+const ANALYZABLE_MEDIA_KINDS = new Set(["image", "video", "audio"]);
 
 export type CollectorOptions = {
   /** Root data directory (from config.dataDir). Live voice-note media is written
@@ -78,6 +86,19 @@ export type CollectorOptions = {
    */
   lidForPn?: (pn: string) => Promise<string | null>;
   pnForLid?: (lid: string) => Promise<string | null>;
+  /**
+   * Optional descriptor sink. When provided, every media message's download
+   * descriptor (proto blob + key/location) is persisted so the media can be
+   * fetched later. `state` is 'present' when the media was downloaded inline
+   * (live path), else 'pending' (onboarding/full-sync — deferred). Injected so
+   * the collector stays DB-agnostic in unit tests; production wires it to
+   * upsertMessageMedia. When absent, no descriptor is stored (legacy behavior).
+   */
+  persistMediaDescriptor?: (
+    messageId: number,
+    descriptor: MediaDescriptor,
+    state: "pending" | "present",
+  ) => Promise<void>;
 };
 
 /**
@@ -181,13 +202,35 @@ export async function handleIncomingMessage(
   });
 
   // --- Skip messages we already have (history re-push dedup) ---
-  // On every reconnect WhatsApp re-sends a recent-history batch, almost all of
-  // which we already stored. Short-circuit here — BEFORE the expensive and
-  // occasionally crash-prone media download (and the redundant participant
-  // upsert / insert). Keyed on the same (group_id, external_id) the insert
-  // dedups on, so this only skips true duplicates; genuinely new messages (and
-  // any without an external_id) fall through to the normal path below.
-  if (mapped.externalId && (await messageExistsByExternalId(client, groupId, mapped.externalId))) {
+  // Resolve the existing row id once (subsumes the old existence check). When
+  // found, this is a duplicate: optionally (re)attach the media descriptor so a
+  // full re-pull enables deferred download, then short-circuit BEFORE the
+  // expensive name resolution / participant upsert / media download / insert.
+  const existing = mapped.externalId
+    ? await getMessageIdByExternalId(client, groupId, mapped.externalId)
+    : null;
+  if (existing !== null) {
+    // Re-pull of a duplicate: (re)attach the descriptor so deferred download
+    // works — but never resurrect a pruned message, and reflect already-present
+    // media so the backfill loop doesn't re-download it.
+    if (
+      opts.persistMediaDescriptor &&
+      mapped.messageType === "media" &&
+      existing.mediaStatus !== "pruned"
+    ) {
+      try {
+        const descriptor = extractMediaDescriptor(waMessage);
+        if (descriptor && ANALYZABLE_MEDIA_KINDS.has(descriptor.mediaKind)) {
+          const state = existing.mediaStatus === "present" ? "present" : "pending";
+          await opts.persistMediaDescriptor(existing.id, descriptor, state);
+        }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        process.stderr.write(
+          `Warning: failed to persist media descriptor (existing row, external_id=${mapped.externalId ?? "null"}): ${message}\n`,
+        );
+      }
+    }
     return false;
   }
 
@@ -361,6 +404,28 @@ export async function handleIncomingMessage(
   const result = await insertMessages(client, [{ ...normalized, participantId }]);
 
   const isNew = result.inserted > 0;
+
+  // --- Persist media descriptor for new media rows (deferred-download support) ---
+  // Only store descriptors for kinds the analysis pipeline can handle — stickers
+  // and documents are never selected by selectPendingMedia and would sit in
+  // 'pending' forever (table-bloat / dead rows).
+  if (isNew && opts.persistMediaDescriptor && mapped.messageType === "media") {
+    try {
+      const messageId = result.ids[0];
+      if (messageId !== undefined) {
+        const descriptor = extractMediaDescriptor(waMessage);
+        if (descriptor && ANALYZABLE_MEDIA_KINDS.has(descriptor.mediaKind)) {
+          const state = normalized.mediaStatus === "present" ? "present" : "pending";
+          await opts.persistMediaDescriptor(messageId, descriptor, state);
+        }
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      process.stderr.write(
+        `Warning: failed to persist media descriptor (new row, external_id=${mapped.externalId ?? "null"}): ${message}\n`,
+      );
+    }
+  }
 
   // --- Enqueue transcription for new, downloaded voice notes ---
   // Only enqueue when the media is actually present on disk, so the worker

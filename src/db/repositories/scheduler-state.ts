@@ -37,7 +37,7 @@ export async function recordRun(
     `
     INSERT INTO scheduler_state (slot_key, last_run_at, updated_at)
     VALUES ($1, $2, now())
-    ON CONFLICT (slot_key) DO UPDATE
+    ON CONFLICT (tenant_id, slot_key) DO UPDATE
       SET last_run_at = GREATEST(scheduler_state.last_run_at, EXCLUDED.last_run_at),
           updated_at  = now()
     `,

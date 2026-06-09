@@ -45,6 +45,16 @@ export type BackfillDeps = {
    */
   lidForPn?: (pn: string) => Promise<string | null>;
   pnForLid?: (lid: string) => Promise<string | null>;
+  /**
+   * Optional descriptor sink, passed through to handleIncomingMessage so
+   * backfilled media gets a message_media row and can be deferred-downloaded
+   * later (mirrors the live path). When absent, no descriptor is stored.
+   */
+  persistMediaDescriptor?: (
+    messageId: number,
+    descriptor: import("./media-descriptor.js").MediaDescriptor,
+    state: "pending" | "present",
+  ) => Promise<void>;
   /** Injected clock (defaults to Date.now). */
   now?: () => number;
 };
@@ -89,6 +99,7 @@ export async function backfillGroup(deps: BackfillDeps): Promise<BackfillResult>
     downloadVoiceNote,
     lidForPn,
     pnForLid,
+    persistMediaDescriptor,
     stopAtSentAt,
     pageSize = 50,
     now = Date.now,
@@ -147,6 +158,7 @@ export async function backfillGroup(deps: BackfillDeps): Promise<BackfillResult>
             downloadVoiceNote,
             lidForPn,
             pnForLid,
+            persistMediaDescriptor,
           });
           if (isNew) {
             totalFetched++;

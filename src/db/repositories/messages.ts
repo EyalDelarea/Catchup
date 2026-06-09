@@ -176,6 +176,46 @@ export async function messageExistsByExternalId(
   return rows.length > 0;
 }
 
+/**
+ * Return the primary-key `id` and `media_status` of the message identified by
+ * (group_id, external_id), or null when no such row exists.
+ *
+ * Used by the live collector's dedup branch to (re)attach a media descriptor on
+ * a history re-pull while avoiding re-downloads of already-present or intentionally
+ * pruned media.
+ */
+export async function getMessageIdByExternalId(
+  client: pg.Pool | pg.PoolClient,
+  groupId: number,
+  externalId: string,
+): Promise<{ id: number; mediaStatus: "present" | "missing" | "pruned" | null } | null> {
+  const { rows } = await client.query<{
+    id: string;
+    media_status: "present" | "missing" | "pruned" | null;
+  }>(`SELECT id, media_status FROM messages WHERE group_id = $1 AND external_id = $2 LIMIT 1`, [
+    groupId,
+    externalId,
+  ]);
+  return rows[0] ? { id: Number(rows[0].id), mediaStatus: rows[0].media_status } : null;
+}
+
+/**
+ * Flip a message's media_status to 'present' and record the on-disk path.
+ *
+ * Called by the backfill loop once the media file has been successfully
+ * downloaded and moved to its final storage location.
+ */
+export async function markMessageMediaPresent(
+  client: pg.Pool | pg.PoolClient,
+  messageId: number,
+  mediaPath: string,
+): Promise<void> {
+  await client.query(`UPDATE messages SET media_path=$2, media_status='present' WHERE id=$1`, [
+    messageId,
+    mediaPath,
+  ]);
+}
+
 type MessageRow = NormalizedMessage & {
   participantId: number | null;
 };

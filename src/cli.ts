@@ -518,6 +518,15 @@ program
                 liveSession.downloadMedia(m),
               lidForPn: (pn: string) => liveSession.lidForPn(pn),
               pnForLid: (l: string) => liveSession.pnForLid(l),
+              persistMediaDescriptor: async (messageId, descriptor, state) => {
+                const { upsertMessageMedia, descriptorToUpsertInput } = await import(
+                  "./db/repositories/message-media.js"
+                );
+                await upsertMessageMedia(
+                  pool,
+                  descriptorToUpsertInput(messageId, descriptor, state),
+                );
+              },
             });
           },
         }
@@ -602,6 +611,7 @@ program
 
     // ── --collect mode: start live collector in the same process ──────────────
     let liveHandle: { stop: () => void } | null = null;
+    let backfillHandle: { stop: () => void } | null = null;
 
     if (options.collect) {
       // Safety banner (same wording as the standalone `collect` command)
@@ -684,6 +694,12 @@ program
               liveSession.downloadMedia(m),
             lidForPn: (pn: string) => liveSession.lidForPn(pn),
             pnForLid: (l: string) => liveSession.pnForLid(l),
+            persistMediaDescriptor: async (messageId, descriptor, state) => {
+              const { upsertMessageMedia, descriptorToUpsertInput } = await import(
+                "./db/repositories/message-media.js"
+              );
+              await upsertMessageMedia(pool, descriptorToUpsertInput(messageId, descriptor, state));
+            },
           });
         };
 
@@ -772,6 +788,44 @@ program
           },
         });
 
+        // ── Deferred media backfill loop ─────────────────────────────────────
+        const { startBackfillLoop, MEDIA_EXTENSIONS } = await import(
+          "./collector/media-backfill-loop.js"
+        );
+        const { proto } = await import("@whiskeysockets/baileys");
+        const mediaRepo = await import("./db/repositories/message-media.js");
+        const msgRepo = await import("./db/repositories/messages.js");
+        const fsp = await import("node:fs/promises");
+        const nodePath = await import("node:path");
+
+        backfillHandle = startBackfillLoop(
+          {
+            selectPending: (limit) => mediaRepo.selectPendingMedia(pool, limit),
+            decodeWaMessage: (blob) => proto.WebMessageInfo.decode(blob),
+            download: (waMessage) =>
+              liveSession.downloadMedia(waMessage as import("@whiskeysockets/baileys").WAMessage),
+            writeFile: async (messageId, kind, bytes) => {
+              const dir = nodePath.join(config.dataDir, "media", "backfill");
+              await fsp.mkdir(dir, { recursive: true });
+              const file = nodePath.join(dir, `bf-${messageId}${MEDIA_EXTENSIONS[kind] ?? ".bin"}`);
+              await fsp.writeFile(file, bytes);
+              return file;
+            },
+            markPresentMessage: (id, p) => msgRepo.markMessageMediaPresent(pool, id, p),
+            markPresentMedia: (id, dp) => mediaRepo.markMediaPresent(pool, id, dp),
+            markUnrecoverable: (id, e) => mediaRepo.markMediaUnrecoverable(pool, id, e),
+            recordAttempt: (id, e) => mediaRepo.recordMediaAttempt(pool, id, e),
+            enqueue: async (type, payload) => {
+              await brokerBus.enqueue(type, payload);
+            },
+            log: (m) => log.collector.info(m),
+          },
+          {
+            intervalMs: Number(process.env["MEDIA_BACKFILL_INTERVAL_MS"]) || 15_000,
+            batchSize: Number(process.env["MEDIA_BACKFILL_BATCH"]) || 3,
+          },
+        );
+
         log.collector.info("started — web server and collector running together");
       } catch (err) {
         // Collector startup failure must NOT exit (web server keeps running)
@@ -790,6 +844,7 @@ program
       opsSweepHandle.stop();
       // Stop collector wiring (if started)
       liveHandle?.stop();
+      backfillHandle?.stop();
       server.close();
       brokerBus.close().catch(() => {});
       dbClient.end().catch(() => {});
@@ -870,6 +925,115 @@ program
       await pool.end();
       await bus.close();
     }
+  });
+
+program
+  .command("media-backfill")
+  .description(
+    "Download + analyze media for messages stored without it (deferred backfill). Scans a fresh linked session.",
+  )
+  .option("--limit <n>", "Max messages to process", "50")
+  .option(
+    "--auth-dir <dir>",
+    "Auth dir for the temporary device (default <dataDir>/baileys-fullsync-auth)",
+  )
+  .action(async (options: { limit?: string; authDir?: string }) => {
+    const limit = Number(options.limit ?? "50");
+    if (!Number.isInteger(limit) || limit <= 0) {
+      process.stderr.write("Error: --limit must be a positive integer.\n");
+      process.exit(1);
+    }
+
+    const config = loadConfig();
+    const [
+      { startSession },
+      { runBackfillBatch, MEDIA_EXTENSIONS },
+      { proto },
+      mediaRepo,
+      msgRepo,
+      pgMod,
+      fsp,
+      nodePath,
+      { RabbitMqJobBus },
+      { PostgresJobRunRecorder },
+      { createDbClient },
+    ] = await Promise.all([
+      import("./collector/session.js"),
+      import("./collector/media-backfill-loop.js"),
+      import("@whiskeysockets/baileys"),
+      import("./db/repositories/message-media.js"),
+      import("./db/repositories/messages.js"),
+      import("pg"),
+      import("node:fs/promises"),
+      import("node:path"),
+      import("./jobs/rabbitmq-bus.js"),
+      import("./jobs/job-run-recorder.js"),
+      import("./db/client.js"),
+    ]);
+
+    const pool = new pgMod.default.Pool({ connectionString: config.databaseUrl });
+    const dbClient = createDbClient();
+    const recorder = new PostgresJobRunRecorder(dbClient);
+    const bus = new RabbitMqJobBus({ url: config.broker.url, recorder });
+    const authDir = options.authDir ?? path.join(config.dataDir, "baileys-fullsync-auth");
+    const session = await startSession(authDir, false, {});
+
+    let failed = false;
+    try {
+      session.on("qr", () => {
+        console.log(
+          "\n📲 Scan the QR above: WhatsApp → Settings → Linked Devices → Link a Device.\n",
+        );
+      });
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(
+          () =>
+            reject(
+              new Error("timed out waiting for WhatsApp connection (scan the QR, or re-auth)"),
+            ),
+          120_000,
+        );
+        session.on("connected", () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+      });
+
+      const total = await runBackfillBatch(
+        {
+          selectPending: (l) => mediaRepo.selectPendingMedia(pool, l),
+          decodeWaMessage: (blob) => proto.WebMessageInfo.decode(blob),
+          download: (m) => session.downloadMedia(m as import("@whiskeysockets/baileys").WAMessage),
+          writeFile: async (messageId, kind, bytes) => {
+            const dir = nodePath.join(config.dataDir, "media", "backfill");
+            await fsp.mkdir(dir, { recursive: true });
+            const file = nodePath.join(dir, `bf-${messageId}${MEDIA_EXTENSIONS[kind] ?? ".bin"}`);
+            await fsp.writeFile(file, bytes);
+            return file;
+          },
+          markPresentMessage: (id, p) => msgRepo.markMessageMediaPresent(pool, id, p),
+          markPresentMedia: (id, dp) => mediaRepo.markMediaPresent(pool, id, dp),
+          markUnrecoverable: (id, e) => mediaRepo.markMediaUnrecoverable(pool, id, e),
+          recordAttempt: (id, e) => mediaRepo.recordMediaAttempt(pool, id, e),
+          enqueue: async (type, payload) => {
+            await bus.enqueue(type, payload);
+          },
+          log: (m) => process.stdout.write(`${m}\n`),
+        },
+        limit,
+      );
+
+      console.log(`Backfilled ${total} media file(s); analysis jobs enqueued.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`Error: media-backfill failed: ${message}\n`);
+      failed = true;
+    } finally {
+      session.stop();
+      await bus.close();
+      await pool.end();
+    }
+    process.exit(failed ? 1 : 0);
   });
 
 program
@@ -1215,6 +1379,19 @@ program
           `   All chats: ${rows[0]?.c ?? 0} messages across ${rows[0]?.g ?? 0} chats, oldest ${rows[0]?.oldest ?? "none"}`,
         );
       }
+      // Onboarding parity: resolve group display names from WhatsApp's directory
+      // so onboarding ends with human names, not JIDs (mirrors collect/serve).
+      try {
+        const { resolveAllGroupNames } = await import("./collector/name-resolver.js");
+        const { resolved } = await resolveAllGroupNames(pool, {
+          groupSubject: (jid: string) => session.groupSubject(jid),
+        });
+        if (resolved > 0) console.log(`[name-resolver] resolved ${resolved} group name(s).`);
+      } catch (err) {
+        process.stderr.write(
+          `[name-resolver] full-sync resolution error: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
       session.stop();
       await pool.end().catch(() => {});
       process.exit(0);
@@ -1243,15 +1420,39 @@ program
       barTimer = setInterval(renderBar, 500);
       resetQuiet();
     });
-    session.on("message", (msg: import("@whiskeysockets/baileys").WAMessage) => {
+    session.on("message", async (msg: import("@whiskeysockets/baileys").WAMessage) => {
       seen++;
       const jid = msg.key?.remoteJid;
-      if (!jid || (whitelist && !whitelist.has(jid))) return;
-      // Persist text/metadata only (no media downloads). --with-media is a future opt-in.
+      if (!jid) return;
+      if (whitelist && !whitelist.has(jid)) {
+        // The same person can arrive under their sibling identity (@lid vs
+        // @s.whatsapp.net). Admit if EITHER identity is whitelisted, so
+        // canonicalization at ingest folds it into the existing chat.
+        let admitted = false;
+        if (!jid.endsWith("@g.us")) {
+          try {
+            const sibling = jid.endsWith("@lid")
+              ? await session.pnForLid(jid)
+              : await session.lidForPn(jid);
+            if (sibling && whitelist.has(sibling)) admitted = true;
+          } catch {
+            // bridge cold — fall through, message is skipped (no worse than before)
+          }
+        }
+        if (!admitted) return;
+      }
+      // Persist text/metadata only (no media downloads here). Media descriptors
+      // are stored so the deferred backfill can fetch media later.
       void handleIncomingMessage(pool, msg, {
         dataDir: config.dataDir,
         lidForPn: (pn) => session.lidForPn(pn),
         pnForLid: (lid) => session.pnForLid(lid),
+        persistMediaDescriptor: async (messageId, descriptor, state) => {
+          const { upsertMessageMedia, descriptorToUpsertInput } = await import(
+            "./db/repositories/message-media.js"
+          );
+          await upsertMessageMedia(pool, descriptorToUpsertInput(messageId, descriptor, state));
+        },
       })
         .then((stored) => {
           if (stored) kept++;

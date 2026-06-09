@@ -147,7 +147,7 @@ describe("resolveAllGroupNames", () => {
     await upsertGroupByWhatsappId(pool, { whatsappId: jidA, name: jidA, source: "live" });
     // jidB already has the name we'll try to give jidA
     await pool.query(
-      `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (name) DO NOTHING`,
+      `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (tenant_id, name) DO NOTHING`,
       [jidB, "Collision Name"],
     );
 
