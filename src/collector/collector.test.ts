@@ -53,6 +53,40 @@ function makeFakeWATextMessage(
   } as unknown as WAMessage;
 }
 
+function makeFakeWAImageMessage(
+  overrides: Partial<{
+    id: string;
+    remoteJid: string;
+    pushName: string;
+    timestampSeconds: number;
+  }> = {},
+): WAMessage {
+  const {
+    id = "LIVE_IMG_001",
+    remoteJid = "111222333-444555666@g.us",
+    pushName = "ImgSender",
+    timestampSeconds = 1700008000,
+  } = overrides;
+
+  return {
+    key: {
+      id,
+      remoteJid,
+      fromMe: false,
+    },
+    messageTimestamp: timestampSeconds,
+    pushName,
+    message: {
+      imageMessage: {
+        mediaKey: new Uint8Array([1, 2, 3, 4]),
+        directPath: "/v/t62.7117-24/fake-direct-path",
+        url: "https://mmg.whatsapp.net/fake-url",
+        mimetype: "image/jpeg",
+      },
+    },
+  } as unknown as WAMessage;
+}
+
 function makeFakeWAVoiceNoteMessage(
   overrides: Partial<{
     id: string;
@@ -534,6 +568,101 @@ describe("collector integration", () => {
 
     const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [jid]);
     expect(rows[0].name).toBe("Another Lid Person");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Deferred media descriptor tests (Task 5)
+  // ---------------------------------------------------------------------------
+
+  it("descriptor: persists a pending descriptor for an onboarding image (no downloaders)", async () => {
+    type Recorded = { messageId: number; kind: string; state: string };
+    const recorded: Recorded[] = [];
+    const persistMediaDescriptor = async (
+      messageId: number,
+      descriptor: { mediaKind: string },
+      state: "pending" | "present",
+    ) => {
+      recorded.push({ messageId, kind: descriptor.mediaKind, state });
+    };
+
+    const waMsg = makeFakeWAImageMessage({
+      id: "DESC_PENDING_001",
+      remoteJid: "desc-pending@g.us",
+      pushName: "PendingSender",
+      timestampSeconds: 1700050000,
+    });
+
+    const stored = await handleIncomingMessage(pool, waMsg, { dataDir, persistMediaDescriptor });
+    expect(stored).toBe(true);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.kind).toBe("image");
+    expect(recorded[0]!.state).toBe("pending");
+  });
+
+  it("descriptor: re-pull of an already-stored image still persists/refreshes the descriptor", async () => {
+    const waMsg = makeFakeWAImageMessage({
+      id: "DESC_REPULL_001",
+      remoteJid: "desc-repull@g.us",
+      pushName: "RepullSender",
+      timestampSeconds: 1700051000,
+    });
+
+    // First insertion — store without a descriptor spy to get the row in.
+    const first = await handleIncomingMessage(pool, waMsg, { dataDir });
+    expect(first).toBe(true);
+
+    // Fetch the inserted message id from DB.
+    const { rows } = await pool.query<{ id: string }>(
+      `SELECT id FROM messages WHERE external_id = $1`,
+      ["DESC_REPULL_001"],
+    );
+    const existingId = Number(rows[0]!.id);
+    expect(existingId).toBeGreaterThan(0);
+
+    // Second call (duplicate) — spy should still be called for the existing row.
+    type Recorded = { messageId: number; kind: string; state: string };
+    const recorded: Recorded[] = [];
+    const persistMediaDescriptor = async (
+      messageId: number,
+      descriptor: { mediaKind: string },
+      state: "pending" | "present",
+    ) => {
+      recorded.push({ messageId, kind: descriptor.mediaKind, state });
+    };
+
+    const second = await handleIncomingMessage(pool, waMsg, { dataDir, persistMediaDescriptor });
+    expect(second).toBe(false); // still a duplicate, no new row
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.messageId).toBe(existingId);
+  });
+
+  it("descriptor: marks descriptor 'present' when the image is downloaded inline (live path)", async () => {
+    type Recorded = { messageId: number; kind: string; state: string };
+    const recorded: Recorded[] = [];
+    const persistMediaDescriptor = async (
+      messageId: number,
+      descriptor: { mediaKind: string },
+      state: "pending" | "present",
+    ) => {
+      recorded.push({ messageId, kind: descriptor.mediaKind, state });
+    };
+
+    const waMsg = makeFakeWAImageMessage({
+      id: "DESC_PRESENT_001",
+      remoteJid: "desc-present@g.us",
+      pushName: "PresentSender",
+      timestampSeconds: 1700052000,
+    });
+
+    const stored = await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      persistMediaDescriptor,
+      downloadImage: async () => Buffer.from([0xff, 0xd8, 0xff]),
+    });
+    expect(stored).toBe(true);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.kind).toBe("image");
+    expect(recorded[0]!.state).toBe("present");
   });
 });
 

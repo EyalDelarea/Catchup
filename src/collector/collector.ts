@@ -18,11 +18,16 @@ import {
   updateDisplayName,
   upsertGroupByCanonicalJid,
 } from "../db/repositories/groups.js";
-import { insertMessages, messageExistsByExternalId } from "../db/repositories/messages.js";
+import {
+  getMessageIdByExternalId,
+  insertMessages,
+  messageExistsByExternalId,
+} from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
 import { normalize } from "../importer/normalize.js";
 import type { ImportedMessage } from "../importer/types.js";
 import type { JobBus } from "../jobs/job-bus.js";
+import { extractMediaDescriptor } from "./media-descriptor.js";
 import { mapWaMessage } from "./message-mapper.js";
 
 export type CollectorOptions = {
@@ -78,6 +83,19 @@ export type CollectorOptions = {
    */
   lidForPn?: (pn: string) => Promise<string | null>;
   pnForLid?: (lid: string) => Promise<string | null>;
+  /**
+   * Optional descriptor sink. When provided, every media message's download
+   * descriptor (proto blob + key/location) is persisted so the media can be
+   * fetched later. `state` is 'present' when the media was downloaded inline
+   * (live path), else 'pending' (onboarding/full-sync — deferred). Injected so
+   * the collector stays DB-agnostic in unit tests; production wires it to
+   * upsertMessageMedia. When absent, no descriptor is stored (legacy behavior).
+   */
+  persistMediaDescriptor?: (
+    messageId: number,
+    descriptor: import("./media-descriptor.js").MediaDescriptor,
+    state: "pending" | "present",
+  ) => Promise<void>;
 };
 
 /**
@@ -188,6 +206,17 @@ export async function handleIncomingMessage(
   // dedups on, so this only skips true duplicates; genuinely new messages (and
   // any without an external_id) fall through to the normal path below.
   if (mapped.externalId && (await messageExistsByExternalId(client, groupId, mapped.externalId))) {
+    // Existing row: still (re)attach the media descriptor so a full re-pull
+    // makes deferred download possible without re-inserting the message.
+    if (opts.persistMediaDescriptor && mapped.messageType === "media") {
+      const descriptor = extractMediaDescriptor(waMessage);
+      if (descriptor) {
+        const existingId = await getMessageIdByExternalId(client, groupId, mapped.externalId);
+        if (existingId !== null) {
+          await opts.persistMediaDescriptor(existingId, descriptor, "pending");
+        }
+      }
+    }
     return false;
   }
 
@@ -361,6 +390,18 @@ export async function handleIncomingMessage(
   const result = await insertMessages(client, [{ ...normalized, participantId }]);
 
   const isNew = result.inserted > 0;
+
+  // --- Persist media descriptor for new media rows (deferred-download support) ---
+  if (isNew && opts.persistMediaDescriptor && mapped.messageType === "media") {
+    const messageId = result.ids[0];
+    if (messageId !== undefined) {
+      const descriptor = extractMediaDescriptor(waMessage);
+      if (descriptor) {
+        const state = normalized.mediaStatus === "present" ? "present" : "pending";
+        await opts.persistMediaDescriptor(messageId, descriptor, state);
+      }
+    }
+  }
 
   // --- Enqueue transcription for new, downloaded voice notes ---
   // Only enqueue when the media is actually present on disk, so the worker
