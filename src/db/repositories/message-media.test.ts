@@ -55,6 +55,147 @@ describe("message-media", () => {
   }
 
   describe("upsertMessageMedia — write-once + volatile refresh", () => {
+    it("pruned row is not modified by a subsequent upsert (Fix 1 — no secret resurrection)", async () => {
+      const groupId = await upsertGroup(pool, { name: "MM-prune-resurrect-1", source: "import" });
+      const messageId = await seedMessage(groupId, {
+        dedupeKey: `mm-prune-resurrect-${Math.random()}`,
+      });
+
+      const key1 = Buffer.from("original-key");
+      const blob1 = Buffer.from("original-blob");
+      const key2 = Buffer.from("new-key-after-reprull");
+      const blob2 = Buffer.from("new-blob-after-reprull");
+
+      // Step 1: insert as 'present' with real secrets
+      await upsertMessageMedia(pool, {
+        messageId,
+        mediaKind: "image",
+        mimeType: "image/jpeg",
+        mediaKey: key1,
+        directPath: "/path/original",
+        url: "https://example.com/original",
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: blob1,
+        downloadState: "present",
+      });
+
+      // Step 2: prune the secrets
+      await pruneMediaSecrets(pool, messageId);
+
+      // Step 3: re-pull upsert with fresh non-null secrets — must be ignored
+      await upsertMessageMedia(pool, {
+        messageId,
+        mediaKind: "image",
+        mimeType: "image/jpeg",
+        mediaKey: key2,
+        directPath: "/path/reprull",
+        url: "https://example.com/reprull",
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: blob2,
+        downloadState: "pending",
+      });
+
+      const { rows } = await pool.query<{
+        media_key: Buffer | null;
+        wa_message: Buffer | null;
+        download_state: string;
+      }>(`SELECT media_key, wa_message, download_state FROM message_media WHERE message_id = $1`, [
+        messageId,
+      ]);
+      expect(rows).toHaveLength(1);
+      // Secrets must remain nulled — not resurrected
+      expect(rows[0].media_key).toBeNull();
+      expect(rows[0].wa_message).toBeNull();
+      // State must remain pruned — not reset to pending
+      expect(rows[0].download_state).toBe("pruned");
+    });
+
+    it("volatile fields use COALESCE: null incoming does not overwrite existing, but non-null refreshes (Fix 7)", async () => {
+      const groupId = await upsertGroup(pool, { name: "MM-volatile-coalesce-1", source: "import" });
+      const messageId = await seedMessage(groupId, {
+        dedupeKey: `mm-volatile-coalesce-${Math.random()}`,
+      });
+
+      // First upsert: set directPath and mimeType
+      await upsertMessageMedia(pool, {
+        messageId,
+        mediaKind: "image",
+        mimeType: "image/jpeg",
+        mediaKey: null,
+        directPath: "/p1",
+        url: "https://example.com/p1",
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: 1000,
+        waMessage: null,
+        downloadState: "pending",
+      });
+
+      // Second upsert: null volatile fields — must NOT overwrite existing values
+      await upsertMessageMedia(pool, {
+        messageId,
+        mediaKind: "image",
+        mimeType: null,
+        mediaKey: null,
+        directPath: null,
+        url: null,
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: null,
+        downloadState: "pending",
+      });
+
+      const { rows: rows2 } = await pool.query<{
+        direct_path: string | null;
+        mime_type: string | null;
+        url: string | null;
+        file_length: number | null;
+      }>(
+        `SELECT direct_path, mime_type, url, file_length FROM message_media WHERE message_id = $1`,
+        [messageId],
+      );
+      expect(rows2).toHaveLength(1);
+      // Null incoming must not clobber existing values
+      expect(rows2[0].direct_path).toBe("/p1");
+      expect(rows2[0].mime_type).toBe("image/jpeg");
+      expect(rows2[0].url).toBe("https://example.com/p1");
+      // file_length may be returned as string by the pg driver (BIGINT → string)
+      expect(Number(rows2[0].file_length)).toBe(1000);
+
+      // Third upsert: non-null directPath — must refresh
+      await upsertMessageMedia(pool, {
+        messageId,
+        mediaKind: "image",
+        mimeType: null,
+        mediaKey: null,
+        directPath: "/p2",
+        url: null,
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: null,
+        downloadState: "pending",
+      });
+
+      const { rows: rows3 } = await pool.query<{ direct_path: string | null }>(
+        `SELECT direct_path FROM message_media WHERE message_id = $1`,
+        [messageId],
+      );
+      expect(rows3).toHaveLength(1);
+      // Non-null incoming must refresh
+      expect(rows3[0].direct_path).toBe("/p2");
+    });
+
     it("inserts a pending row and keeps media_key write-once while refreshing direct_path on re-upsert", async () => {
       const groupId = await upsertGroup(pool, { name: "MM-writeonce-1", source: "import" });
       const messageId = await seedMessage(groupId, { dedupeKey: "mm-wo-1" });

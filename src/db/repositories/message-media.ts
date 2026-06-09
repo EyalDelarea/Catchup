@@ -48,21 +48,22 @@ export async function upsertMessageMedia(
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
     ON CONFLICT (message_id) DO UPDATE SET
       media_kind      = EXCLUDED.media_kind,
-      mime_type       = EXCLUDED.mime_type,
+      mime_type       = COALESCE(EXCLUDED.mime_type, message_media.mime_type),
       media_key       = COALESCE(message_media.media_key, EXCLUDED.media_key),
       wa_message      = COALESCE(message_media.wa_message, EXCLUDED.wa_message),
       file_enc_sha256 = COALESCE(message_media.file_enc_sha256, EXCLUDED.file_enc_sha256),
       file_sha256     = COALESCE(message_media.file_sha256, EXCLUDED.file_sha256),
       media_key_ts    = COALESCE(message_media.media_key_ts, EXCLUDED.media_key_ts),
-      direct_path     = EXCLUDED.direct_path,
-      url             = EXCLUDED.url,
-      file_length     = EXCLUDED.file_length,
+      direct_path     = COALESCE(EXCLUDED.direct_path, message_media.direct_path),
+      url             = COALESCE(EXCLUDED.url, message_media.url),
+      file_length     = COALESCE(EXCLUDED.file_length, message_media.file_length),
       download_state  = CASE
                           WHEN message_media.download_state = 'pending'
                           THEN EXCLUDED.download_state
                           ELSE message_media.download_state
                         END,
       updated_at      = now()
+    WHERE message_media.download_state <> 'pruned'
     `,
     [
       input.messageId,

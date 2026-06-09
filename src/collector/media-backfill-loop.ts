@@ -71,12 +71,16 @@ export async function runBackfillBatch(deps: BackfillDeps, limit: number): Promi
 
     // Persist + enqueue phase — any failure here is infrastructure, never "gone":
     // always a transient retry (the row stays pending; re-download is idempotent).
+    // markPresentMedia (the state gate) is intentionally LAST: if enqueue throws,
+    // download_state stays 'pending' so the row is retried next sweep.
+    // Re-enqueue on retry is safe because the analysis worker guards with
+    // hasAnalysis / hasTranscript checks on messageId.
     try {
       const path = await deps.writeFile(row.messageId, row.mediaKind, bytes);
       await deps.markPresentMessage(row.messageId, path);
-      await deps.markPresentMedia(row.messageId, null);
       const job = analysisJobFor(row.mediaKind);
       if (job) await deps.enqueue(job, { messageId: String(row.messageId) });
+      await deps.markPresentMedia(row.messageId, null);
       done++;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

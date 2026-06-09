@@ -25,6 +25,25 @@ describe("runBackfillBatch", () => {
     expect(deps.markPresentMessage).toHaveBeenCalledWith(1, "/data/media/backfill/1.jpg");
     expect(deps.markPresentMedia).toHaveBeenCalledWith(1, null);
     expect(deps.enqueue).toHaveBeenCalledWith("analyze.image", { messageId: "1" });
+    // Fix 2: markPresentMedia must be called AFTER enqueue (state gate is last)
+    const enqueueOrder = (deps.enqueue as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    const markMediaOrder = (deps.markPresentMedia as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    expect(enqueueOrder).toBeLessThan(markMediaOrder);
+  });
+
+  it("does NOT flip markPresentMedia when enqueue rejects — download_state stays pending (Fix 2)", async () => {
+    const deps = baseDeps({
+      enqueue: vi.fn().mockRejectedValue(new Error("queue unavailable")),
+    });
+    await runBackfillBatch(deps as any, 10);
+    // State gate must NOT have fired — the row stays pending for retry
+    expect(deps.markPresentMedia).not.toHaveBeenCalled();
+    // A transient attempt must be recorded so the row is retried
+    expect(deps.recordAttempt).toHaveBeenCalledWith(
+      1,
+      expect.stringContaining("queue unavailable"),
+    );
   });
 
   it("enqueues transcribe.voicenote for audio", async () => {
