@@ -7,10 +7,15 @@ import type { Candidate, RetrieveQuery, Retriever } from "./retriever.js";
  * — the OR-of-terms tsquery does the matching, ts_rank does the ranking.
  */
 export function extractTerms(question: string): string[] {
+  // Drop websearch_to_tsquery operator keywords: a query that reduces to only
+  // one of these (e.g. "or") produces an empty tsquery, which PostgreSQL
+  // rejects with "empty tsquery is not supported".
+  const OPERATORS = new Set(["or", "and", "not"]);
   return question
     .split(/[^\p{L}\p{N}]+/u)
     .map((t) => t.trim())
-    .filter((t) => t.length >= 2);
+    .filter((t) => t.length >= 2)
+    .filter((t) => !OPERATORS.has(t.toLowerCase()));
 }
 
 export class LexicalRetriever implements Retriever {
@@ -51,6 +56,8 @@ export class LexicalRetriever implements Retriever {
       LEFT JOIN media_analyses a ON a.message_id = m.id AND a.status = 'completed'
       WHERE m.message_type <> 'system'
         AND m.sent_at >= $2 AND m.sent_at <= $3
+        -- FTS matches on text_content only (the GIN index column); returned content
+        -- also includes transcript/description for display — PR2 (embeddings) covers those.
         AND to_tsvector('simple', coalesce(m.text_content, ''))
             @@ websearch_to_tsquery('simple', $1)
         ${chatFilter}
@@ -66,7 +73,7 @@ export class LexicalRetriever implements Retriever {
       sender: r.sender,
       sentAt: r.sent_at,
       content: r.content,
-      score: Number(r.rank),
+      score: r.rank,
     }));
   }
 }

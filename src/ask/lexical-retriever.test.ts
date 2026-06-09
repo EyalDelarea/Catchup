@@ -12,6 +12,11 @@ describe("extractTerms", () => {
     expect(extractTerms("מי שלח לי קישור?")).toContain("קישור");
     expect(extractTerms("who sent the link")).toContain("link");
   });
+
+  it("drops bare boolean operator words that would break websearch_to_tsquery", () => {
+    expect(extractTerms("or")).toEqual([]);
+    expect(extractTerms("מסיבה or חלב")).toEqual(["מסיבה", "חלב"]);
+  });
 });
 
 describe("LexicalRetriever", () => {
@@ -60,5 +65,17 @@ describe("LexicalRetriever", () => {
     expect(out.some((c) => c.content.includes("ישנה מאוד"))).toBe(false); // outside window
     expect(out[0]!.chat).toBe("חברים");
     expect(out[0]!.sender).toBe("דנה");
+  });
+
+  it("ORs across multiple terms (matches messages containing ANY term)", async () => {
+    const r = new LexicalRetriever(pool);
+    const out = await r.retrieve({
+      question: "מסיבה חלב",
+      window: { since: new Date("2026-01-01T00:00:00Z"), until: new Date("2026-12-31T00:00:00Z") },
+      limit: 10,
+    });
+    const joined = out.map((c) => c.content).join(" | ");
+    expect(joined).toContain("מסיבה ביום שני"); // matched on מסיבה
+    expect(joined).toContain("חלב");             // matched on חלב — proves OR, not AND
   });
 });
