@@ -18,16 +18,12 @@ import {
   updateDisplayName,
   upsertGroupByCanonicalJid,
 } from "../db/repositories/groups.js";
-import {
-  getMessageIdByExternalId,
-  insertMessages,
-  messageExistsByExternalId,
-} from "../db/repositories/messages.js";
+import { getMessageIdByExternalId, insertMessages } from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
 import { normalize } from "../importer/normalize.js";
 import type { ImportedMessage } from "../importer/types.js";
 import type { JobBus } from "../jobs/job-bus.js";
-import { extractMediaDescriptor } from "./media-descriptor.js";
+import { extractMediaDescriptor, type MediaDescriptor } from "./media-descriptor.js";
 import { mapWaMessage } from "./message-mapper.js";
 
 export type CollectorOptions = {
@@ -93,7 +89,7 @@ export type CollectorOptions = {
    */
   persistMediaDescriptor?: (
     messageId: number,
-    descriptor: import("./media-descriptor.js").MediaDescriptor,
+    descriptor: MediaDescriptor,
     state: "pending" | "present",
   ) => Promise<void>;
 };
@@ -199,22 +195,25 @@ export async function handleIncomingMessage(
   });
 
   // --- Skip messages we already have (history re-push dedup) ---
-  // On every reconnect WhatsApp re-sends a recent-history batch, almost all of
-  // which we already stored. Short-circuit here — BEFORE the expensive and
-  // occasionally crash-prone media download (and the redundant participant
-  // upsert / insert). Keyed on the same (group_id, external_id) the insert
-  // dedups on, so this only skips true duplicates; genuinely new messages (and
-  // any without an external_id) fall through to the normal path below.
-  if (mapped.externalId && (await messageExistsByExternalId(client, groupId, mapped.externalId))) {
-    // Existing row: still (re)attach the media descriptor so a full re-pull
-    // makes deferred download possible without re-inserting the message.
+  // Resolve the existing row id once (subsumes the old existence check). When
+  // found, this is a duplicate: optionally (re)attach the media descriptor so a
+  // full re-pull enables deferred download, then short-circuit BEFORE the
+  // expensive name resolution / participant upsert / media download / insert.
+  const existingId = mapped.externalId
+    ? await getMessageIdByExternalId(client, groupId, mapped.externalId)
+    : null;
+  if (existingId !== null) {
     if (opts.persistMediaDescriptor && mapped.messageType === "media") {
-      const descriptor = extractMediaDescriptor(waMessage);
-      if (descriptor) {
-        const existingId = await getMessageIdByExternalId(client, groupId, mapped.externalId);
-        if (existingId !== null) {
+      try {
+        const descriptor = extractMediaDescriptor(waMessage);
+        if (descriptor) {
           await opts.persistMediaDescriptor(existingId, descriptor, "pending");
         }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        process.stderr.write(
+          `Warning: failed to persist media descriptor (existing row, external_id=${mapped.externalId ?? "null"}): ${message}\n`,
+        );
       }
     }
     return false;
@@ -393,13 +392,20 @@ export async function handleIncomingMessage(
 
   // --- Persist media descriptor for new media rows (deferred-download support) ---
   if (isNew && opts.persistMediaDescriptor && mapped.messageType === "media") {
-    const messageId = result.ids[0];
-    if (messageId !== undefined) {
-      const descriptor = extractMediaDescriptor(waMessage);
-      if (descriptor) {
-        const state = normalized.mediaStatus === "present" ? "present" : "pending";
-        await opts.persistMediaDescriptor(messageId, descriptor, state);
+    try {
+      const messageId = result.ids[0];
+      if (messageId !== undefined) {
+        const descriptor = extractMediaDescriptor(waMessage);
+        if (descriptor) {
+          const state = normalized.mediaStatus === "present" ? "present" : "pending";
+          await opts.persistMediaDescriptor(messageId, descriptor, state);
+        }
       }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      process.stderr.write(
+        `Warning: failed to persist media descriptor (new row, external_id=${mapped.externalId ?? "null"}): ${message}\n`,
+      );
     }
   }
 

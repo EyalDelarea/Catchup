@@ -574,8 +574,9 @@ describe("collector integration", () => {
   // Deferred media descriptor tests (Task 5)
   // ---------------------------------------------------------------------------
 
+  type Recorded = { messageId: number; kind: string; state: string };
+
   it("descriptor: persists a pending descriptor for an onboarding image (no downloaders)", async () => {
-    type Recorded = { messageId: number; kind: string; state: string };
     const recorded: Recorded[] = [];
     const persistMediaDescriptor = async (
       messageId: number,
@@ -620,7 +621,6 @@ describe("collector integration", () => {
     expect(existingId).toBeGreaterThan(0);
 
     // Second call (duplicate) — spy should still be called for the existing row.
-    type Recorded = { messageId: number; kind: string; state: string };
     const recorded: Recorded[] = [];
     const persistMediaDescriptor = async (
       messageId: number,
@@ -639,7 +639,6 @@ describe("collector integration", () => {
   });
 
   it("descriptor: marks descriptor 'present' when the image is downloaded inline (live path)", async () => {
-    type Recorded = { messageId: number; kind: string; state: string };
     const recorded: Recorded[] = [];
     const persistMediaDescriptor = async (
       messageId: number,
