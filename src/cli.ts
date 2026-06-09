@@ -453,6 +453,15 @@ program
                 liveSession.downloadMedia(m),
               lidForPn: (pn: string) => liveSession.lidForPn(pn),
               pnForLid: (l: string) => liveSession.pnForLid(l),
+              persistMediaDescriptor: async (messageId, descriptor, state) => {
+                const { upsertMessageMedia, descriptorToUpsertInput } = await import(
+                  "./db/repositories/message-media.js"
+                );
+                await upsertMessageMedia(
+                  pool,
+                  descriptorToUpsertInput(messageId, descriptor, state),
+                );
+              },
             });
           },
         }
@@ -620,6 +629,12 @@ program
               liveSession.downloadMedia(m),
             lidForPn: (pn: string) => liveSession.lidForPn(pn),
             pnForLid: (l: string) => liveSession.pnForLid(l),
+            persistMediaDescriptor: async (messageId, descriptor, state) => {
+              const { upsertMessageMedia, descriptorToUpsertInput } = await import(
+                "./db/repositories/message-media.js"
+              );
+              await upsertMessageMedia(pool, descriptorToUpsertInput(messageId, descriptor, state));
+            },
           });
         };
 
