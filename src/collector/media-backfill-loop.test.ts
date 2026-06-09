@@ -23,7 +23,7 @@ describe("runBackfillBatch", () => {
     expect(n).toBe(1);
     expect(deps.download).toHaveBeenCalledOnce();
     expect(deps.markPresentMessage).toHaveBeenCalledWith(1, "/data/media/backfill/1.jpg");
-    expect(deps.markPresentMedia).toHaveBeenCalledWith(1, expect.anything());
+    expect(deps.markPresentMedia).toHaveBeenCalledWith(1, null);
     expect(deps.enqueue).toHaveBeenCalledWith("analyze.image", { messageId: "1" });
   });
 

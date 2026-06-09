@@ -49,7 +49,7 @@ export async function runBackfillBatch(deps: BackfillDeps, limit: number): Promi
       const bytes = await deps.download(waMessage);
       const path = await deps.writeFile(row.messageId, row.mediaKind, bytes);
       await deps.markPresentMessage(row.messageId, path);
-      await deps.markPresentMedia(row.messageId, path);
+      await deps.markPresentMedia(row.messageId, null);
 
       const job = analysisJobFor(row.mediaKind);
       if (job) await deps.enqueue(job, { messageId: String(row.messageId) });
