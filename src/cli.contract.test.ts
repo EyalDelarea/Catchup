@@ -159,3 +159,10 @@ describe("CLI contract — doctor command (FR-016)", () => {
     expect(r.stderr).not.toContain("error: unknown command");
   });
 });
+
+describe("CLI contract — ask command", () => {
+  it("registers the `ask` command with a question argument", () => {
+    const r = run(["ask", "--help"]);
+    expect(r.stdout).toContain("question");
+  });
+});
