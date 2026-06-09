@@ -120,6 +120,65 @@ describe("runBackfillBatch", () => {
     expect(deps.recordAttempt).not.toHaveBeenCalled();
   });
 
+  // Baileys throws a Boom "Failed to fetch stream from <url>" with the real HTTP
+  // status on err.output.statusCode — the message itself carries no code. With
+  // reuploadRequest broken, 403 (expired signed URL) and 410 (CDN-GC'd blob) are
+  // both terminal, so we must classify on the status, not the message text.
+  it("marks unrecoverable on a Boom 403 (expired signature) whose message has no code", async () => {
+    const boom = Object.assign(new Error("Failed to fetch stream from https://mmg/x"), {
+      output: { statusCode: 403 },
+    });
+    const deps = baseDeps({ download: vi.fn().mockRejectedValue(boom) });
+    await runBackfillBatch(deps as any, 10);
+    expect(deps.markUnrecoverable).toHaveBeenCalledWith(1, expect.stringContaining("403"));
+    expect(deps.recordAttempt).not.toHaveBeenCalled();
+  });
+
+  it("marks unrecoverable on a Boom 410 whose message has no code", async () => {
+    const boom = Object.assign(new Error("Failed to fetch stream from https://mmg/x"), {
+      output: { statusCode: 410 },
+    });
+    const deps = baseDeps({ download: vi.fn().mockRejectedValue(boom) });
+    await runBackfillBatch(deps as any, 10);
+    expect(deps.markUnrecoverable).toHaveBeenCalledWith(1, expect.stringContaining("410"));
+    expect(deps.recordAttempt).not.toHaveBeenCalled();
+  });
+
+  it("marks unrecoverable on an axios-shaped error (status on response.status)", async () => {
+    const axiosErr = Object.assign(new Error("Request failed"), { response: { status: 404 } });
+    const deps = baseDeps({ download: vi.fn().mockRejectedValue(axiosErr) });
+    await runBackfillBatch(deps as any, 10);
+    expect(deps.markUnrecoverable).toHaveBeenCalledWith(1, expect.stringContaining("404"));
+    expect(deps.recordAttempt).not.toHaveBeenCalled();
+  });
+
+  it("records a transient attempt on a Boom 5xx (server error, retryable)", async () => {
+    const boom = Object.assign(new Error("Failed to fetch stream from https://mmg/x"), {
+      output: { statusCode: 503 },
+    });
+    const deps = baseDeps({ download: vi.fn().mockRejectedValue(boom) });
+    await runBackfillBatch(deps as any, 10);
+    expect(deps.recordAttempt).toHaveBeenCalledWith(1, expect.stringContaining("503"));
+    expect(deps.markUnrecoverable).not.toHaveBeenCalled();
+  });
+
+  it("sweeps expired rows before selecting the batch", async () => {
+    const calls: string[] = [];
+    const deps = baseDeps({
+      sweepExpired: vi.fn(async () => {
+        calls.push("sweep");
+        return 2;
+      }),
+      selectPending: vi.fn(async () => {
+        calls.push("select");
+        return [];
+      }),
+    });
+    await runBackfillBatch(deps as any, 10);
+    expect(deps.sweepExpired).toHaveBeenCalledOnce();
+    expect(calls).toEqual(["sweep", "select"]); // sweep must run first
+  });
+
   it("records transient attempt (not unrecoverable) when writeFile throws", async () => {
     const deps = baseDeps({
       writeFile: vi.fn().mockRejectedValue(new Error("disk full")),

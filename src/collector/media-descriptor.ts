@@ -22,6 +22,14 @@ export type MediaDescriptor = {
   fileSha256: Uint8Array | null;
   mediaKeyTs: number | null;
   fileLength: number | null;
+  /**
+   * Expiry of the signed CDN URL, in unix SECONDS, parsed from the `oe=` query
+   * param (hex). After this instant the CDN returns 403 and — because the
+   * `reuploadRequest` refresh path is broken — the media is unrecoverable. Used
+   * to order the download queue by remaining lifetime and to skip dead rows.
+   * Null when the URL/directPath carries no `oe`.
+   */
+  urlExpiresAt: number | null;
   /** proto.WebMessageInfo-encoded bytes of the full message (the blob). */
   waMessage: Uint8Array;
 };
@@ -42,6 +50,18 @@ function toNum(v: number | { toNumber(): number } | null | undefined): number | 
   if (typeof v === "number") return v;
   if (typeof v.toNumber === "function") return v.toNumber();
   return Number(v);
+}
+
+/** Pull the `oe=<hex>` signed-URL expiry (unix seconds) out of a URL/directPath. */
+function parseOeExpiry(...candidates: (string | null | undefined)[]): number | null {
+  for (const s of candidates) {
+    const m = s?.match(/[?&]oe=([0-9A-Fa-f]+)/);
+    if (m) {
+      const secs = parseInt(m[1], 16);
+      if (Number.isFinite(secs) && secs > 0) return secs;
+    }
+  }
+  return null;
 }
 
 function pickMedia(
@@ -73,6 +93,7 @@ export function extractMediaDescriptor(waMessage: WAMessage): MediaDescriptor | 
     fileSha256: c.fileSha256 ?? null,
     mediaKeyTs: toNum(c.mediaKeyTimestamp),
     fileLength: toNum(c.fileLength),
+    urlExpiresAt: parseOeExpiry(c.directPath, c.url),
     waMessage: proto.WebMessageInfo.encode(waMessage as proto.IWebMessageInfo).finish(),
   };
 }
