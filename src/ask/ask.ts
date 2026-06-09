@@ -22,7 +22,12 @@ export type AskResult = { answer: string; citations: Citation[]; candidateCount:
 const NO_INFO = "אין מידע בטווח הזמן שנבדק.";
 
 /** Retrieve+fuse candidates for a question. Shared by ask() and askStream(). */
-async function gather(deps: AskDeps, question: string, now: Date, opts: AskOpts): Promise<Candidate[]> {
+async function gather(
+  deps: AskDeps,
+  question: string,
+  now: Date,
+  opts: AskOpts,
+): Promise<Candidate[]> {
   const window = resolveWindow(question, now, deps.lookbackDays ?? 90);
   const limit = opts.limit ?? deps.defaultLimit ?? 30;
   const lists = await Promise.all(
@@ -37,7 +42,12 @@ async function gather(deps: AskDeps, question: string, now: Date, opts: AskOpts)
  * caller short-circuits to the no-info response rather than sending an
  * over-budget prompt.
  */
-function fitBudget(question: string, candidates: Candidate[], now: Date, budget: number): Candidate[] {
+function fitBudget(
+  question: string,
+  candidates: Candidate[],
+  now: Date,
+  budget: number,
+): Candidate[] {
   let kept = candidates;
   while (kept.length > 0) {
     const p = buildAskPrompt(question, kept, now);
@@ -48,8 +58,18 @@ function fitBudget(question: string, candidates: Candidate[], now: Date, budget:
 }
 
 /** Non-streaming ask: returns the full answer + resolved citations. */
-export async function ask(deps: AskDeps, question: string, now: Date, opts: AskOpts = {}): Promise<AskResult> {
-  const candidates = fitBudget(question, await gather(deps, question, now, opts), now, deps.tokenBudget);
+export async function ask(
+  deps: AskDeps,
+  question: string,
+  now: Date,
+  opts: AskOpts = {},
+): Promise<AskResult> {
+  const candidates = fitBudget(
+    question,
+    await gather(deps, question, now, opts),
+    now,
+    deps.tokenBudget,
+  );
   if (candidates.length === 0) return { answer: NO_INFO, citations: [], candidateCount: 0 };
   const prompt = buildAskPrompt(question, candidates, now);
   let answer = "";
@@ -57,7 +77,11 @@ export async function ask(deps: AskDeps, question: string, now: Date, opts: AskO
     answer += delta;
   }
   answer = answer.trim();
-  return { answer, citations: parseCitations(answer, candidates), candidateCount: candidates.length };
+  return {
+    answer,
+    citations: parseCitations(answer, candidates),
+    candidateCount: candidates.length,
+  };
 }
 
 export type AskEvent =
@@ -66,8 +90,18 @@ export type AskEvent =
   | { type: "done"; candidateCount: number };
 
 /** Streaming ask for SSE: yields answer tokens, then citations, then done. */
-export async function* askStream(deps: AskDeps, question: string, now: Date, opts: AskOpts = {}): AsyncGenerator<AskEvent> {
-  const candidates = fitBudget(question, await gather(deps, question, now, opts), now, deps.tokenBudget);
+export async function* askStream(
+  deps: AskDeps,
+  question: string,
+  now: Date,
+  opts: AskOpts = {},
+): AsyncGenerator<AskEvent> {
+  const candidates = fitBudget(
+    question,
+    await gather(deps, question, now, opts),
+    now,
+    deps.tokenBudget,
+  );
   if (candidates.length === 0) {
     yield { type: "token", delta: NO_INFO };
     yield { type: "citations", citations: [] };

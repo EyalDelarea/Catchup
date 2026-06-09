@@ -1,10 +1,24 @@
 import { describe, expect, it } from "vitest";
-import type { Candidate } from "./retriever.js";
 import { parseCitations } from "./citations.js";
+import type { Candidate } from "./retriever.js";
 
 const cands: Candidate[] = [
-  { messageId: 101, chat: "גיבוש", sender: "יוסי", sentAt: new Date("2026-06-09T09:10:00Z"), content: "a", score: 1 },
-  { messageId: 102, chat: "משפחה", sender: "אמא", sentAt: new Date("2026-06-07T12:00:00Z"), content: "b", score: 1 },
+  {
+    messageId: 101,
+    chat: "גיבוש",
+    sender: "יוסי",
+    sentAt: new Date("2026-06-09T09:10:00Z"),
+    content: "a",
+    score: 1,
+  },
+  {
+    messageId: 102,
+    chat: "משפחה",
+    sender: "אמא",
+    sentAt: new Date("2026-06-07T12:00:00Z"),
+    content: "b",
+    score: 1,
+  },
 ];
 
 describe("parseCitations", () => {

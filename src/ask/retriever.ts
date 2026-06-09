@@ -3,10 +3,10 @@ import type { AskWindow } from "./time.js";
 /** A retrieved candidate message, with a retriever-local rank score. */
 export type Candidate = {
   messageId: number;
-  chat: string;     // groups.name
-  sender: string;   // participants.display_name, or "Unknown"
+  chat: string; // groups.name
+  sender: string; // participants.display_name, or "Unknown"
   sentAt: Date;
-  content: string;  // concat_ws(text_content, media description, transcript)
+  content: string; // concat_ws(text_content, media description, transcript)
   score: number;
 };
 

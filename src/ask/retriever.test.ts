@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 import { type Candidate, fuse } from "./retriever.js";
 
 function cand(id: number): Candidate {
-  return { messageId: id, chat: "c", sender: "s", sentAt: new Date(0), content: `m${id}`, score: 0 };
+  return {
+    messageId: id,
+    chat: "c",
+    sender: "s",
+    sentAt: new Date(0),
+    content: `m${id}`,
+    score: 0,
+  };
 }
 
 describe("fuse (RRF)", () => {

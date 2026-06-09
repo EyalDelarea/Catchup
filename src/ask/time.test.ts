@@ -7,22 +7,30 @@ const NOW = new Date("2026-06-09T12:00:00Z");
 describe("resolveRelativeDay", () => {
   it("resolves tomorrow / מחר", () => {
     expect(resolveRelativeDay("מה קורה מחר?", NOW)?.toISOString().slice(0, 10)).toBe("2026-06-10");
-    expect(resolveRelativeDay("what about tomorrow", NOW)?.toISOString().slice(0, 10)).toBe("2026-06-10");
+    expect(resolveRelativeDay("what about tomorrow", NOW)?.toISOString().slice(0, 10)).toBe(
+      "2026-06-10",
+    );
   });
   it("resolves yesterday / אתמול", () => {
     expect(resolveRelativeDay("אתמול", NOW)?.toISOString().slice(0, 10)).toBe("2026-06-08");
   });
   it("resolves next Monday / יום שני הבא to the upcoming Monday", () => {
     // 2026-06-09 is Tuesday → next Monday is 2026-06-15.
-    expect(resolveRelativeDay("עם מי קבעתי ליום שני הבא?", NOW)?.toISOString().slice(0, 10)).toBe("2026-06-15");
-    expect(resolveRelativeDay("plans for next monday", NOW)?.toISOString().slice(0, 10)).toBe("2026-06-15");
+    expect(resolveRelativeDay("עם מי קבעתי ליום שני הבא?", NOW)?.toISOString().slice(0, 10)).toBe(
+      "2026-06-15",
+    );
+    expect(resolveRelativeDay("plans for next monday", NOW)?.toISOString().slice(0, 10)).toBe(
+      "2026-06-15",
+    );
   });
   it("returns null when no relative expression is present", () => {
     expect(resolveRelativeDay("מי שלח לי קישור", NOW)).toBeNull();
   });
   it("returns UTC-midnight-aligned dates", () => {
     expect(resolveRelativeDay("מחר", NOW)?.toISOString()).toBe("2026-06-10T00:00:00.000Z");
-    expect(resolveRelativeDay("plans for next monday", NOW)?.toISOString()).toBe("2026-06-15T00:00:00.000Z");
+    expect(resolveRelativeDay("plans for next monday", NOW)?.toISOString()).toBe(
+      "2026-06-15T00:00:00.000Z",
+    );
   });
   it("does not match מחר inside a longer word like מחרוזת", () => {
     expect(resolveRelativeDay("מה המחרוזת שקיבלתי", NOW)).toBeNull();

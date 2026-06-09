@@ -17,7 +17,11 @@ function renderCandidate(c: Candidate, n: number): string {
 }
 
 /** Assemble the system + user prompt for the ask flow. Pure function. */
-export function buildAskPrompt(question: string, candidates: Candidate[], now: Date): SummaryPrompt {
+export function buildAskPrompt(
+  question: string,
+  candidates: Candidate[],
+  now: Date,
+): SummaryPrompt {
   const nowLine = `התאריך והשעה הנוכחיים: ${now.toISOString().slice(0, 16).replace("T", " ")} (UTC).`;
   const lines = candidates.map((c, i) => renderCandidate(c, i + 1)).join("\n");
   return {

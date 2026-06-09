@@ -338,7 +338,11 @@ program
     try {
       let pendingCitations: { n: number; chat: string; sender: string; sentAt: Date }[] = [];
       for await (const ev of askStream(
-        { summarizer, retrievers: [new LexicalRetriever(pool)], tokenBudget: config.summarization.tokenBudget },
+        {
+          summarizer,
+          retrievers: [new LexicalRetriever(pool)],
+          tokenBudget: config.summarization.tokenBudget,
+        },
         question,
         now,
         { chat: options.chat, limit: options.limit ? Number(options.limit) : undefined },

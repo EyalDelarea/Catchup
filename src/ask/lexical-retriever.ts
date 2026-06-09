@@ -35,7 +35,12 @@ export class LexicalRetriever implements Retriever {
     }
 
     const { rows } = await this.pool.query<{
-      id: string; chat: string; sender: string; sent_at: Date; content: string; rank: number;
+      id: string;
+      chat: string;
+      sender: string;
+      sent_at: Date;
+      content: string;
+      rank: number;
     }>(
       `
       SELECT m.id,

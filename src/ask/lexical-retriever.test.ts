@@ -44,13 +44,27 @@ describe("LexicalRetriever", () => {
       ...over,
     });
     await insertMessages(pool, [
-      base({ textContent: "בא נעשה מסיבה ביום שני", dedupeKey: "k1", sentAt: new Date("2026-06-08T19:00:00Z") }),
-      base({ textContent: "אל תשכח לקנות חלב", dedupeKey: "k2", sentAt: new Date("2026-06-07T10:00:00Z") }),
-      base({ textContent: "מסיבה ישנה מאוד", dedupeKey: "k3", sentAt: new Date("2020-01-01T10:00:00Z") }),
+      base({
+        textContent: "בא נעשה מסיבה ביום שני",
+        dedupeKey: "k1",
+        sentAt: new Date("2026-06-08T19:00:00Z"),
+      }),
+      base({
+        textContent: "אל תשכח לקנות חלב",
+        dedupeKey: "k2",
+        sentAt: new Date("2026-06-07T10:00:00Z"),
+      }),
+      base({
+        textContent: "מסיבה ישנה מאוד",
+        dedupeKey: "k3",
+        sentAt: new Date("2020-01-01T10:00:00Z"),
+      }),
     ]);
   }, 120_000);
 
-  afterAll(async () => { await pool?.end(); }, 30_000);
+  afterAll(async () => {
+    await pool?.end();
+  }, 30_000);
 
   it("returns messages matching the query terms within the window", async () => {
     const r = new LexicalRetriever(pool);
@@ -76,6 +90,6 @@ describe("LexicalRetriever", () => {
     });
     const joined = out.map((c) => c.content).join(" | ");
     expect(joined).toContain("מסיבה ביום שני"); // matched on מסיבה
-    expect(joined).toContain("חלב");             // matched on חלב — proves OR, not AND
+    expect(joined).toContain("חלב"); // matched on חלב — proves OR, not AND
   });
 });
