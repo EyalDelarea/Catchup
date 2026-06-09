@@ -1287,15 +1287,39 @@ program
       barTimer = setInterval(renderBar, 500);
       resetQuiet();
     });
-    session.on("message", (msg: import("@whiskeysockets/baileys").WAMessage) => {
+    session.on("message", async (msg: import("@whiskeysockets/baileys").WAMessage) => {
       seen++;
       const jid = msg.key?.remoteJid;
-      if (!jid || (whitelist && !whitelist.has(jid))) return;
-      // Persist text/metadata only (no media downloads). --with-media is a future opt-in.
+      if (!jid) return;
+      if (whitelist && !whitelist.has(jid)) {
+        // The same person can arrive under their sibling identity (@lid vs
+        // @s.whatsapp.net). Admit if EITHER identity is whitelisted, so
+        // canonicalization at ingest folds it into the existing chat.
+        let admitted = false;
+        if (!jid.endsWith("@g.us")) {
+          try {
+            const sibling = jid.endsWith("@lid")
+              ? await session.pnForLid(jid)
+              : await session.lidForPn(jid);
+            if (sibling && whitelist.has(sibling)) admitted = true;
+          } catch {
+            // bridge cold — fall through, message is skipped (no worse than before)
+          }
+        }
+        if (!admitted) return;
+      }
+      // Persist text/metadata only (no media downloads here). Media descriptors
+      // are stored so the deferred backfill can fetch media later.
       void handleIncomingMessage(pool, msg, {
         dataDir: config.dataDir,
         lidForPn: (pn) => session.lidForPn(pn),
         pnForLid: (lid) => session.pnForLid(lid),
+        persistMediaDescriptor: async (messageId, descriptor, state) => {
+          const { upsertMessageMedia, descriptorToUpsertInput } = await import(
+            "./db/repositories/message-media.js"
+          );
+          await upsertMessageMedia(pool, descriptorToUpsertInput(messageId, descriptor, state));
+        },
       })
         .then((stored) => {
           if (stored) kept++;
