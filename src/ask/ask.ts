@@ -1,4 +1,3 @@
-import type pg from "pg";
 import { estimateTokens } from "../summarization/prompt.js";
 import type { StreamingSummarizer } from "../summarization/summarizer.js";
 import { type Citation, parseCitations } from "./citations.js";
@@ -7,7 +6,6 @@ import { type Candidate, fuse, type Retriever } from "./retriever.js";
 import { resolveWindow } from "./time.js";
 
 export type AskDeps = {
-  pool: pg.Pool;
   summarizer: StreamingSummarizer;
   /** One or more retrievers; their results are merged by RRF. PR1: [lexical]. */
   retrievers: Retriever[];
@@ -33,7 +31,12 @@ async function gather(deps: AskDeps, question: string, now: Date, opts: AskOpts)
   return fuse(lists).slice(0, limit);
 }
 
-/** Trim lowest-ranked candidates until the assembled prompt fits the budget. */
+/**
+ * Trim lowest-ranked candidates until the assembled prompt fits the budget.
+ * If even a single candidate's prompt exceeds the budget, returns [] — the
+ * caller short-circuits to the no-info response rather than sending an
+ * over-budget prompt.
+ */
 function fitBudget(question: string, candidates: Candidate[], now: Date, budget: number): Candidate[] {
   let kept = candidates;
   while (kept.length > 0) {
