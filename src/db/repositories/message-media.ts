@@ -92,12 +92,20 @@ export type PendingMedia = {
  * ordered oldest-first by `sent_at` (via a JOIN to `messages`) so the
  * downloader processes historical media in chronological order.
  *
+ * Rows that have reached `maxAttempts` are excluded so persistently-failing
+ * downloads cannot starve newer items in the queue.
+ *
+ * Only media kinds that can be analyzed (`image`, `video`, `audio`) are
+ * returned — `sticker` and `document` rows are skipped because
+ * `analysisJobFor` returns null for them.
+ *
  * The JOIN to `messages` is solely for ordering — no message fields are
  * returned in the result set.
  */
 export async function selectPendingMedia(
   client: pg.Pool | pg.PoolClient,
   limit: number,
+  maxAttempts = 5,
 ): Promise<PendingMedia[]> {
   const { rows } = await client.query<{
     message_id: string;
@@ -109,10 +117,12 @@ export async function selectPendingMedia(
     FROM message_media mm
     JOIN messages m ON m.id = mm.message_id
     WHERE mm.download_state = 'pending'
+      AND mm.attempts < $1
+      AND mm.media_kind IN ('image', 'video', 'audio')
     ORDER BY m.sent_at ASC, mm.message_id ASC
-    LIMIT $1
+    LIMIT $2
     `,
-    [limit],
+    [maxAttempts, limit],
   );
   return rows.map((r) => ({
     messageId: Number(r.message_id),

@@ -210,6 +210,152 @@ describe("message-media", () => {
       const results = await selectPendingMedia(pool, 2);
       expect(results.length).toBeLessThanOrEqual(2);
     });
+
+    it("excludes pending rows that have reached the maxAttempts cap (default=5)", async () => {
+      const groupId = await upsertGroup(pool, { name: "MM-select-cap-1", source: "import" });
+
+      const capMsg = await seedMessage(groupId, {
+        dedupeKey: `mm-cap-exhausted-${Math.random()}`,
+        sentAt: new Date("2026-04-01T08:00:00.000Z"),
+      });
+      const okMsg = await seedMessage(groupId, {
+        dedupeKey: `mm-cap-ok-${Math.random()}`,
+        sentAt: new Date("2026-04-02T08:00:00.000Z"),
+      });
+
+      // Both rows start pending
+      for (const msgId of [capMsg, okMsg]) {
+        await upsertMessageMedia(pool, {
+          messageId: msgId,
+          mediaKind: "image",
+          mimeType: null,
+          mediaKey: null,
+          directPath: null,
+          url: null,
+          fileEncSha256: null,
+          fileSha256: null,
+          mediaKeyTs: null,
+          fileLength: null,
+          waMessage: null,
+          downloadState: "pending",
+        });
+      }
+
+      // Exhaust the cap for capMsg (5 attempts = at the default cap)
+      await pool.query(`UPDATE message_media SET attempts = 5 WHERE message_id = $1`, [capMsg]);
+
+      const results = await selectPendingMedia(pool, 100);
+      const ids = results.map((r) => r.messageId);
+
+      expect(ids).not.toContain(capMsg); // exhausted — must be excluded
+      expect(ids).toContain(okMsg); // under cap — must be included
+    });
+
+    it("excludes pending rows that have reached a custom maxAttempts cap", async () => {
+      const groupId = await upsertGroup(pool, { name: "MM-select-cap-custom-1", source: "import" });
+
+      const capMsg = await seedMessage(groupId, {
+        dedupeKey: `mm-cap-custom-exhausted-${Math.random()}`,
+        sentAt: new Date("2026-04-03T08:00:00.000Z"),
+      });
+      const okMsg = await seedMessage(groupId, {
+        dedupeKey: `mm-cap-custom-ok-${Math.random()}`,
+        sentAt: new Date("2026-04-04T08:00:00.000Z"),
+      });
+
+      for (const msgId of [capMsg, okMsg]) {
+        await upsertMessageMedia(pool, {
+          messageId: msgId,
+          mediaKind: "audio",
+          mimeType: null,
+          mediaKey: null,
+          directPath: null,
+          url: null,
+          fileEncSha256: null,
+          fileSha256: null,
+          mediaKeyTs: null,
+          fileLength: null,
+          waMessage: null,
+          downloadState: "pending",
+        });
+      }
+
+      // Set capMsg to exactly 3 attempts and use cap=3 → should be excluded
+      await pool.query(`UPDATE message_media SET attempts = 3 WHERE message_id = $1`, [capMsg]);
+
+      const results = await selectPendingMedia(pool, 100, 3);
+      const ids = results.map((r) => r.messageId);
+
+      expect(ids).not.toContain(capMsg);
+      expect(ids).toContain(okMsg);
+    });
+
+    it("excludes pending rows with non-analyzable media kinds (sticker, document)", async () => {
+      const groupId = await upsertGroup(pool, { name: "MM-select-kind-1", source: "import" });
+
+      const stickerMsg = await seedMessage(groupId, {
+        dedupeKey: `mm-kind-sticker-${Math.random()}`,
+        sentAt: new Date("2026-05-01T08:00:00.000Z"),
+      });
+      const documentMsg = await seedMessage(groupId, {
+        dedupeKey: `mm-kind-document-${Math.random()}`,
+        sentAt: new Date("2026-05-02T08:00:00.000Z"),
+      });
+      const audioMsg = await seedMessage(groupId, {
+        dedupeKey: `mm-kind-audio-${Math.random()}`,
+        sentAt: new Date("2026-05-03T08:00:00.000Z"),
+      });
+
+      await upsertMessageMedia(pool, {
+        messageId: stickerMsg,
+        mediaKind: "sticker",
+        mimeType: null,
+        mediaKey: null,
+        directPath: null,
+        url: null,
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: null,
+        downloadState: "pending",
+      });
+      await upsertMessageMedia(pool, {
+        messageId: documentMsg,
+        mediaKind: "document",
+        mimeType: null,
+        mediaKey: null,
+        directPath: null,
+        url: null,
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: null,
+        downloadState: "pending",
+      });
+      await upsertMessageMedia(pool, {
+        messageId: audioMsg,
+        mediaKind: "audio",
+        mimeType: null,
+        mediaKey: null,
+        directPath: null,
+        url: null,
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: null,
+        downloadState: "pending",
+      });
+
+      const results = await selectPendingMedia(pool, 100);
+      const ids = results.map((r) => r.messageId);
+
+      expect(ids).not.toContain(stickerMsg); // non-analyzable — excluded
+      expect(ids).not.toContain(documentMsg); // non-analyzable — excluded
+      expect(ids).toContain(audioMsg); // analyzable — included
+    });
   });
 
   describe("markMediaUnrecoverable", () => {

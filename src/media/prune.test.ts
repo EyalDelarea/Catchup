@@ -13,6 +13,7 @@ import path from "node:path";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { upsertGroup } from "../db/repositories/groups.js";
+import { upsertMessageMedia } from "../db/repositories/message-media.js";
 import { insertMessages } from "../db/repositories/messages.js";
 import type { NormalizedMessage } from "../importer/types.js";
 import { createTestDatabase } from "../test/db.js";
@@ -204,6 +205,86 @@ describe("pruneMediaFile", () => {
     );
     expect(rows[0]?.media_status).toBe("pruned");
     expect(rows[0]?.media_path).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // Fix 1 (privacy §5): pruneMediaSecrets is called — message_media secrets wiped
+  // -------------------------------------------------------------------------
+
+  it("wipes message_media secrets (media_key=NULL, download_state='pruned') when file is pruned", async () => {
+    const groupId = await upsertGroup(pool, { name: "prune-secrets-group", source: "import" });
+    const fakeFile = "/injected/secrets-test/audio.opus";
+    const messageId = await insertMediaMessage(pool, groupId, fakeFile, "prune-secrets-001");
+
+    // Seed a message_media row in 'present' state with a non-null media_key
+    await upsertMessageMedia(pool, {
+      messageId,
+      mediaKind: "audio",
+      mimeType: "audio/ogg",
+      mediaKey: Buffer.from("super-secret-key"),
+      directPath: "/enc/path",
+      url: "https://example.com/audio.enc",
+      fileEncSha256: null,
+      fileSha256: null,
+      mediaKeyTs: null,
+      fileLength: null,
+      waMessage: Buffer.from("proto-blob"),
+      downloadState: "present",
+    });
+
+    // Prune with a no-op unlink to avoid real FS touching
+    await pruneMediaFile(pool, messageId, { retainMedia: false, unlink: () => {} });
+
+    // The message_media row must have its secrets wiped
+    const { rows } = await pool.query<{
+      media_key: Buffer | null;
+      wa_message: Buffer | null;
+      download_state: string;
+    }>(`SELECT media_key, wa_message, download_state FROM message_media WHERE message_id = $1`, [
+      messageId,
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].media_key).toBeNull();
+    expect(rows[0].wa_message).toBeNull();
+    expect(rows[0].download_state).toBe("pruned");
+  });
+
+  it("does NOT wipe message_media secrets when retainMedia=true", async () => {
+    const groupId = await upsertGroup(pool, {
+      name: "prune-secrets-retain-group",
+      source: "import",
+    });
+    const tmpFile = path.join(tmpDir, `prune-retain-secrets-${Date.now()}.opus`);
+    fs.writeFileSync(tmpFile, "keep me too");
+    const messageId = await insertMediaMessage(pool, groupId, tmpFile, "prune-secrets-retain-001");
+
+    await upsertMessageMedia(pool, {
+      messageId,
+      mediaKind: "audio",
+      mimeType: "audio/ogg",
+      mediaKey: Buffer.from("retain-secret-key"),
+      directPath: "/enc/retain/path",
+      url: "https://example.com/retain.enc",
+      fileEncSha256: null,
+      fileSha256: null,
+      mediaKeyTs: null,
+      fileLength: null,
+      waMessage: Buffer.from("retain-proto"),
+      downloadState: "present",
+    });
+
+    await pruneMediaFile(pool, messageId, { retainMedia: true });
+
+    fs.unlinkSync(tmpFile); // cleanup
+
+    // message_media must be untouched when retainMedia=true
+    const { rows } = await pool.query<{
+      media_key: Buffer | null;
+      download_state: string;
+    }>(`SELECT media_key, download_state FROM message_media WHERE message_id = $1`, [messageId]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].media_key).not.toBeNull();
+    expect(rows[0].download_state).toBe("present");
   });
 
   // -------------------------------------------------------------------------
