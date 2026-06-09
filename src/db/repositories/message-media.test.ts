@@ -1,9 +1,11 @@
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { MediaDescriptor } from "../../collector/media-descriptor.js";
 import type { NormalizedMessage } from "../../importer/types.js";
 import { createTestDatabase } from "../../test/db.js";
 import { upsertGroup } from "./groups.js";
 import {
+  descriptorToUpsertInput,
   markMediaPresent,
   markMediaUnrecoverable,
   pruneMediaSecrets,
@@ -383,6 +385,65 @@ describe("message-media", () => {
       // Row must be completely unchanged
       expect(rows[0].download_state).toBe("pending");
       expect(rows[0].media_key).not.toBeNull();
+    });
+  });
+
+  describe("descriptorToUpsertInput", () => {
+    it("coerces Uint8Array fields to Buffer and passes through scalar fields", () => {
+      const descriptor: MediaDescriptor = {
+        mediaKind: "image",
+        mimeType: "image/jpeg",
+        mediaKey: new Uint8Array([1, 2, 3]),
+        directPath: "/path/to/media",
+        url: "https://example.com/media.jpg",
+        fileEncSha256: new Uint8Array([4, 5, 6]),
+        fileSha256: new Uint8Array([7, 8, 9]),
+        mediaKeyTs: 1700000000,
+        fileLength: 12345,
+        waMessage: new Uint8Array([10, 11, 12]),
+      };
+
+      const result = descriptorToUpsertInput(42, descriptor, "pending");
+
+      expect(result.messageId).toBe(42);
+      expect(result.mediaKind).toBe("image");
+      expect(result.mimeType).toBe("image/jpeg");
+      expect(result.mediaKey).toBeInstanceOf(Buffer);
+      expect(result.mediaKey!.equals(Buffer.from([1, 2, 3]))).toBe(true);
+      expect(result.directPath).toBe("/path/to/media");
+      expect(result.url).toBe("https://example.com/media.jpg");
+      expect(result.fileEncSha256).toBeInstanceOf(Buffer);
+      expect(result.fileEncSha256!.equals(Buffer.from([4, 5, 6]))).toBe(true);
+      expect(result.fileSha256).toBeInstanceOf(Buffer);
+      expect(result.fileSha256!.equals(Buffer.from([7, 8, 9]))).toBe(true);
+      expect(result.mediaKeyTs).toBe(1700000000);
+      expect(result.fileLength).toBe(12345);
+      expect(result.waMessage).toBeInstanceOf(Buffer);
+      expect(result.waMessage!.equals(Buffer.from([10, 11, 12]))).toBe(true);
+      expect(result.downloadState).toBe("pending");
+    });
+
+    it("coerces null Uint8Array fields to null and passes state through", () => {
+      const descriptor: MediaDescriptor = {
+        mediaKind: "audio",
+        mimeType: null,
+        mediaKey: null,
+        directPath: null,
+        url: null,
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: new Uint8Array([1]),
+      };
+
+      const result = descriptorToUpsertInput(99, descriptor, "present");
+
+      expect(result.messageId).toBe(99);
+      expect(result.mediaKey).toBeNull();
+      expect(result.fileEncSha256).toBeNull();
+      expect(result.fileSha256).toBeNull();
+      expect(result.downloadState).toBe("present");
     });
   });
 

@@ -165,21 +165,10 @@ export function attachCollector(deps: AttachCollectorDeps): LiveServiceHandle {
       lidForPn: (pn) => session.lidForPn(pn),
       pnForLid: (lid) => session.pnForLid(lid),
       persistMediaDescriptor: async (messageId, descriptor, state) => {
-        const { upsertMessageMedia } = await import("../db/repositories/message-media.js");
-        await upsertMessageMedia(pool, {
-          messageId,
-          mediaKind: descriptor.mediaKind,
-          mimeType: descriptor.mimeType,
-          mediaKey: descriptor.mediaKey ? Buffer.from(descriptor.mediaKey) : null,
-          directPath: descriptor.directPath,
-          url: descriptor.url,
-          fileEncSha256: descriptor.fileEncSha256 ? Buffer.from(descriptor.fileEncSha256) : null,
-          fileSha256: descriptor.fileSha256 ? Buffer.from(descriptor.fileSha256) : null,
-          mediaKeyTs: descriptor.mediaKeyTs,
-          fileLength: descriptor.fileLength,
-          waMessage: Buffer.from(descriptor.waMessage),
-          downloadState: state,
-        });
+        const { upsertMessageMedia, descriptorToUpsertInput } = await import(
+          "../db/repositories/message-media.js"
+        );
+        await upsertMessageMedia(pool, descriptorToUpsertInput(messageId, descriptor, state));
       },
     })
       .then((_stored) => {

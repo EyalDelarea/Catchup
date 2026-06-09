@@ -11,6 +11,15 @@
 import type { PendingMedia } from "../db/repositories/message-media.js";
 import type { JobType } from "../jobs/job-types.js";
 
+/** Filename extension per media kind, for the backfill writeFile sink. */
+export const MEDIA_EXTENSIONS: Record<string, string> = {
+  image: ".jpg",
+  video: ".mp4",
+  audio: ".opus",
+  sticker: ".webp",
+  document: ".bin",
+};
+
 const REUPLOAD_GONE = /\b404\b|\b410\b|not.?found|no longer available/i;
 
 export type BackfillDeps = {

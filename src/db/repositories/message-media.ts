@@ -1,4 +1,5 @@
 import type pg from "pg";
+import type { MediaDescriptor } from "../../collector/media-descriptor.js";
 
 export type UpsertMessageMediaInput = {
   messageId: number;
@@ -172,6 +173,32 @@ export async function recordMediaAttempt(
  * (the upsert state machine only advances FROM `'pending'` and would never
  * be able to re-set a `'pruned'` row back to `'present'`).
  */
+/**
+ * Map an extracted MediaDescriptor (+ download state) to the repository's upsert
+ * input, coercing the Uint8Array fields to Buffer. Single source of truth so the
+ * live collector, full-sync, and the media-backfill CLI all stay consistent.
+ */
+export function descriptorToUpsertInput(
+  messageId: number,
+  descriptor: MediaDescriptor,
+  state: "pending" | "present",
+): UpsertMessageMediaInput {
+  return {
+    messageId,
+    mediaKind: descriptor.mediaKind,
+    mimeType: descriptor.mimeType,
+    mediaKey: descriptor.mediaKey ? Buffer.from(descriptor.mediaKey) : null,
+    directPath: descriptor.directPath,
+    url: descriptor.url,
+    fileEncSha256: descriptor.fileEncSha256 ? Buffer.from(descriptor.fileEncSha256) : null,
+    fileSha256: descriptor.fileSha256 ? Buffer.from(descriptor.fileSha256) : null,
+    mediaKeyTs: descriptor.mediaKeyTs,
+    fileLength: descriptor.fileLength,
+    waMessage: Buffer.from(descriptor.waMessage),
+    downloadState: state,
+  };
+}
+
 export async function pruneMediaSecrets(
   client: pg.Pool | pg.PoolClient,
   messageId: number,

@@ -687,19 +687,14 @@ program
         });
 
         // ── Deferred media backfill loop ─────────────────────────────────────
-        const { startBackfillLoop } = await import("./collector/media-backfill-loop.js");
+        const { startBackfillLoop, MEDIA_EXTENSIONS } = await import(
+          "./collector/media-backfill-loop.js"
+        );
         const { proto } = await import("@whiskeysockets/baileys");
         const mediaRepo = await import("./db/repositories/message-media.js");
         const msgRepo = await import("./db/repositories/messages.js");
         const fsp = await import("node:fs/promises");
         const nodePath = await import("node:path");
-        const MEDIA_EXT: Record<string, string> = {
-          image: ".jpg",
-          video: ".mp4",
-          audio: ".opus",
-          sticker: ".webp",
-          document: ".bin",
-        };
 
         backfillHandle = startBackfillLoop(
           {
@@ -710,7 +705,7 @@ program
             writeFile: async (messageId, kind, bytes) => {
               const dir = nodePath.join(config.dataDir, "media", "backfill");
               await fsp.mkdir(dir, { recursive: true });
-              const file = nodePath.join(dir, `bf-${messageId}${MEDIA_EXT[kind] ?? ".bin"}`);
+              const file = nodePath.join(dir, `bf-${messageId}${MEDIA_EXTENSIONS[kind] ?? ".bin"}`);
               await fsp.writeFile(file, bytes);
               return file;
             },
@@ -724,8 +719,8 @@ program
             log: (m) => process.stdout.write(`${m}\n`),
           },
           {
-            intervalMs: Number(process.env["MEDIA_BACKFILL_INTERVAL_MS"] ?? 15_000),
-            batchSize: Number(process.env["MEDIA_BACKFILL_BATCH"] ?? 3),
+            intervalMs: Number(process.env["MEDIA_BACKFILL_INTERVAL_MS"]) || 15_000,
+            batchSize: Number(process.env["MEDIA_BACKFILL_BATCH"]) || 3,
           },
         );
 
