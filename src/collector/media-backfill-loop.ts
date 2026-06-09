@@ -1,5 +1,5 @@
 /**
- * media-backfill-loop.ts — serve-side, throttled deferred media download.
+ * media-backfill-loop.ts — runs in the serve process, throttled deferred media download.
  *
  * The serve process owns the WhatsApp socket, so download (and reupload of an
  * expired directPath) happens here; the heavy AI analysis stays in the worker.
@@ -44,16 +44,11 @@ export async function runBackfillBatch(deps: BackfillDeps, limit: number): Promi
       await deps.markUnrecoverable(row.messageId, "no stored proto blob to reconstruct media");
       continue;
     }
-    try {
-      const waMessage = deps.decodeWaMessage(row.waMessage);
-      const bytes = await deps.download(waMessage);
-      const path = await deps.writeFile(row.messageId, row.mediaKind, bytes);
-      await deps.markPresentMessage(row.messageId, path);
-      await deps.markPresentMedia(row.messageId, null);
 
-      const job = analysisJobFor(row.mediaKind);
-      if (job) await deps.enqueue(job, { messageId: String(row.messageId) });
-      done++;
+    // Download phase — only here can media be genuinely "gone" (reupload 404/410).
+    let bytes: Buffer;
+    try {
+      bytes = await deps.download(deps.decodeWaMessage(row.waMessage));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (REUPLOAD_GONE.test(msg)) {
@@ -61,7 +56,23 @@ export async function runBackfillBatch(deps: BackfillDeps, limit: number): Promi
       } else {
         await deps.recordAttempt(row.messageId, msg);
       }
-      deps.log?.(`[media-backfill] message ${row.messageId} failed: ${msg}`);
+      deps.log?.(`[media-backfill] message ${row.messageId} download failed: ${msg}`);
+      continue;
+    }
+
+    // Persist + enqueue phase — any failure here is infrastructure, never "gone":
+    // always a transient retry (the row stays pending; re-download is idempotent).
+    try {
+      const path = await deps.writeFile(row.messageId, row.mediaKind, bytes);
+      await deps.markPresentMessage(row.messageId, path);
+      await deps.markPresentMedia(row.messageId, null);
+      const job = analysisJobFor(row.mediaKind);
+      if (job) await deps.enqueue(job, { messageId: String(row.messageId) });
+      done++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await deps.recordAttempt(row.messageId, msg);
+      deps.log?.(`[media-backfill] message ${row.messageId} persist failed: ${msg}`);
     }
   }
   return done;
@@ -94,7 +105,9 @@ export function startBackfillLoop(
     }
   };
 
-  const timer = setInterval(() => void tick(), opts.intervalMs);
+  const timer = setInterval(() => {
+    void tick().catch(() => {});
+  }, opts.intervalMs);
   if (typeof timer.unref === "function") timer.unref();
 
   return {

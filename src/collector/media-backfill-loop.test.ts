@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { runBackfillBatch } from "./media-backfill-loop.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { runBackfillBatch, startBackfillLoop } from "./media-backfill-loop.js";
 
 const baseDeps = (over: Partial<any> = {}) => ({
   selectPending: vi
@@ -71,5 +71,96 @@ describe("runBackfillBatch", () => {
     });
     await runBackfillBatch(deps as any, 10);
     expect(deps.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("enqueues analyze.video for video mediaKind", async () => {
+    const deps = baseDeps({
+      selectPending: vi
+        .fn()
+        .mockResolvedValue([{ messageId: 5, mediaKind: "video", waMessage: Buffer.from([1]) }]),
+    });
+    await runBackfillBatch(deps as any, 10);
+    expect(deps.enqueue).toHaveBeenCalledWith("analyze.video", { messageId: "5" });
+  });
+
+  it("marks unrecoverable on a 410 download error", async () => {
+    const deps = baseDeps({
+      download: vi.fn().mockRejectedValue(new Error("resource gone (410)")),
+    });
+    await runBackfillBatch(deps as any, 10);
+    expect(deps.markUnrecoverable).toHaveBeenCalledWith(1, expect.stringContaining("410"));
+    expect(deps.recordAttempt).not.toHaveBeenCalled();
+  });
+
+  it("marks unrecoverable on a textual 'not found' download error (no status code)", async () => {
+    const deps = baseDeps({
+      download: vi.fn().mockRejectedValue(new Error("media not found")),
+    });
+    await runBackfillBatch(deps as any, 10);
+    expect(deps.markUnrecoverable).toHaveBeenCalledWith(1, expect.stringContaining("not found"));
+    expect(deps.recordAttempt).not.toHaveBeenCalled();
+  });
+
+  it("records transient attempt (not unrecoverable) when writeFile throws", async () => {
+    const deps = baseDeps({
+      writeFile: vi.fn().mockRejectedValue(new Error("disk full")),
+    });
+    await runBackfillBatch(deps as any, 10);
+    expect(deps.recordAttempt).toHaveBeenCalledWith(1, expect.stringContaining("disk full"));
+    expect(deps.markUnrecoverable).not.toHaveBeenCalled();
+  });
+});
+
+describe("startBackfillLoop", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("no-overlap guard: skips second tick while first is still running", async () => {
+    vi.useFakeTimers();
+
+    // Create a deferred that we control — selectPending won't resolve until we say so.
+    let releaseBatch!: () => void;
+    const blockingPromise = new Promise<void>((resolve) => {
+      releaseBatch = resolve;
+    });
+
+    const deps = baseDeps({
+      selectPending: vi
+        .fn()
+        .mockReturnValueOnce(blockingPromise.then(() => []))
+        .mockResolvedValue([]),
+    });
+
+    const loop = startBackfillLoop(deps as any, { intervalMs: 1000, batchSize: 10 });
+
+    // Advance past two intervals — both ticks fire but only the first gets through.
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(deps.selectPending).toHaveBeenCalledTimes(1);
+
+    // Release the first batch; advance again — now a second run can start.
+    releaseBatch();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(deps.selectPending).toHaveBeenCalledTimes(2);
+
+    loop.stop();
+  });
+
+  it("stop() prevents further selectPending calls after stopping", async () => {
+    vi.useFakeTimers();
+
+    const deps = baseDeps({
+      selectPending: vi.fn().mockResolvedValue([]),
+    });
+
+    const loop = startBackfillLoop(deps as any, { intervalMs: 1000, batchSize: 10 });
+
+    await vi.advanceTimersByTimeAsync(1500);
+    const callsBeforeStop = (deps.selectPending as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    loop.stop();
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(deps.selectPending).toHaveBeenCalledTimes(callsBeforeStop);
   });
 });
