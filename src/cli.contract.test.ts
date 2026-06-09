@@ -161,8 +161,12 @@ describe("CLI contract — doctor command (FR-016)", () => {
 });
 
 describe("CLI contract — ask command", () => {
-  it("registers the `ask` command with a question argument", () => {
+  it("registers the `ask` command with a question argument and all options", () => {
     const r = run(["ask", "--help"]);
+    expect(r.status).toBe(0);
     expect(r.stdout).toContain("question");
+    expect(r.stdout).toContain("--chat");
+    expect(r.stdout).toContain("--now");
+    expect(r.stdout).toContain("--limit");
   });
 });

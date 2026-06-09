@@ -315,6 +315,11 @@ program
   .option("--limit <n>", "Max messages to retrieve (default 30)")
   .action(async (question: string, options: { chat?: string; now?: string; limit?: string }) => {
     const config = loadConfig();
+    const now = options.now ? new Date(options.now) : new Date();
+    if (Number.isNaN(now.getTime())) {
+      process.stderr.write(`Error: invalid --now "${options.now}".\n`);
+      process.exit(1);
+    }
     const [{ OllamaSummarizer }, { LexicalRetriever }, { askStream }, pg] = await Promise.all([
       import("./summarization/summarizer.js"),
       import("./ask/lexical-retriever.js"),
@@ -330,11 +335,6 @@ program
       repeatPenalty: config.summarization.repeatPenalty,
       numPredict: config.summarization.numPredict,
     });
-    const now = options.now ? new Date(options.now) : new Date();
-    if (Number.isNaN(now.getTime())) {
-      process.stderr.write(`Error: invalid --now "${options.now}".\n`);
-      process.exit(1);
-    }
     try {
       let pendingCitations: { n: number; chat: string; sender: string; sentAt: Date }[] = [];
       for await (const ev of askStream(
@@ -354,6 +354,9 @@ program
           process.stdout.write(`  [${c.n}] ${c.chat} · ${c.sender} · ${ts}\n`);
         }
       }
+    } catch (err) {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exitCode = 1;
     } finally {
       await pool.end();
     }
