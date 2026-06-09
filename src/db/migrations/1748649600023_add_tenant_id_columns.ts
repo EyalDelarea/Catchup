@@ -1,6 +1,6 @@
 import type { MigrationBuilder } from "node-pg-migrate";
 
-// Mirror of the default tenant id seeded in migration 021 and exposed to the app via
+// Mirror of the default tenant id seeded in migration 022 and exposed to the app via
 // config / tenant-context. Inlined (not imported) because node-pg-migrate loads each
 // migration file via raw ESM resolution, which cannot resolve cross-migration imports.
 const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
@@ -18,7 +18,7 @@ const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
  *   4. re-scope natural-key UNIQUE/PK constraints to be per-tenant
  *
  * Cross-tenant safety is guaranteed by RLS, not by this default: the WITH CHECK policy
- * (migration 024) compares tenant_id to the GUC, so for the non-superuser app role a
+ * (migration 025) compares tenant_id to the GUC, so for the non-superuser app role a
  * no-context write is rejected (fail-closed) and a write whose tenant_id != the active
  * context is rejected. Existing single-tenant tests connect as the admin/superuser
  * (RLS-bypassing) role, so they keep working with writes landing on the default tenant.

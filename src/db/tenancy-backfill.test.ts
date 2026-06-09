@@ -7,7 +7,7 @@ import { runMigrationsUp } from "./migrate.js";
 
 /**
  * US2 — zero data loss on upgrade (SC-003). Seed a database with the PRE-tenancy
- * schema, then run the tenancy migrations (020–024) and assert every row is preserved
+ * schema, then run the tenancy migrations (021–025) and assert every row is preserved
  * and attributed to the default tenant.
  */
 

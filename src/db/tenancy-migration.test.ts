@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDatabase } from "../test/db.js";
 
 /**
- * T010 — Foundational: the tenancy migrations (020–024) establish the expected
+ * T010 — Foundational: the tenancy migrations (021–025) establish the expected
  * structure on a freshly-migrated database. Connects as the admin (owner) role.
  *
  * Tenant-scoped tables MUST get a NOT NULL tenant_id FK + RLS (enabled & forced) +

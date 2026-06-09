@@ -4,7 +4,7 @@ import pg from "pg";
 import { inject } from "vitest";
 import type { GlobalSetupContext } from "vitest/node";
 import { DEFAULT_MIGRATIONS_DIR, runMigrationsUp } from "../db/migrate.js";
-import { APP_ROLE, APP_ROLE_PASSWORD } from "../db/migrations/1748649600023_create_app_roles.js";
+import { APP_ROLE, APP_ROLE_PASSWORD } from "../db/migrations/1748649600024_create_app_roles.js";
 
 // Shared Postgres for the whole test suite. Instead of every test file booting its
 // own container and re-running all migrations, we boot ONE container, migrate a
