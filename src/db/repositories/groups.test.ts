@@ -9,6 +9,7 @@ import {
   representativeSenderName,
   updateDisplayName,
   upsertGroup,
+  upsertGroupByCanonicalJid,
   upsertGroupByWhatsappId,
 } from "./groups.js";
 import { insertMessages } from "./messages.js";
@@ -165,6 +166,135 @@ describe("updateDisplayName + isDisplayNameUnresolved (T019)", () => {
   it("isDisplayNameUnresolved returns false when the group does not exist", async () => {
     const unresolved = await isDisplayNameUnresolved(pool, "nonexistent@g.us");
     expect(unresolved).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// upsertGroupByCanonicalJid — route-to-existing identity canonicalization (#17)
+// ---------------------------------------------------------------------------
+
+describe("upsertGroupByCanonicalJid", () => {
+  let pool: pg.Pool;
+
+  beforeAll(async () => {
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
+  }, 120_000);
+
+  afterAll(async () => {
+    await pool?.end();
+  }, 30_000);
+
+  async function countByJid(jid: string): Promise<number> {
+    const { rows } = await pool.query<{ n: string }>(
+      `SELECT COUNT(*) AS n FROM groups WHERE whatsapp_id = $1`,
+      [jid],
+    );
+    return Number(rows[0]!.n);
+  }
+
+  it("returns the existing row (keyed on primaryJid) when one already exists", async () => {
+    const primary = "cj-primary-001@s.whatsapp.net";
+    const sibling = "cj-sibling-001@lid";
+    const existingId = await upsertGroupByWhatsappId(pool, {
+      whatsappId: primary,
+      name: primary,
+      source: "live",
+    });
+
+    const { groupId, canonicalJid } = await upsertGroupByCanonicalJid(pool, {
+      primaryJid: primary,
+      siblingJid: sibling,
+      name: primary,
+      source: "live",
+    });
+
+    expect(groupId).toBe(existingId);
+    expect(canonicalJid).toBe(primary);
+    // No row was created under the sibling identity.
+    expect(await countByJid(sibling)).toBe(0);
+  });
+
+  it("routes into the existing SIBLING row when the primary identity has no row (no duplicate)", async () => {
+    // The person's chat already exists under @lid (named survivor). A message now
+    // arrives under their @s.whatsapp.net identity, which has no row yet.
+    const sibling = "cj-survivor-002@lid";
+    const primary = "cj-newcomer-002@s.whatsapp.net";
+    const survivorId = await upsertGroupByWhatsappId(pool, {
+      whatsappId: sibling,
+      name: sibling,
+      source: "live",
+    });
+    await updateDisplayName(pool, sibling, "Royi");
+
+    const { groupId, canonicalJid } = await upsertGroupByCanonicalJid(pool, {
+      primaryJid: primary,
+      siblingJid: sibling,
+      name: primary,
+      source: "live",
+    });
+
+    // Routed into the survivor — no new duplicate group under the phone JID.
+    expect(groupId).toBe(survivorId);
+    expect(canonicalJid).toBe(sibling);
+    expect(await countByJid(primary)).toBe(0);
+    // Survivor keeps its resolved name.
+    const { rows } = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [sibling]);
+    expect(rows[0].name).toBe("Royi");
+  });
+
+  it("creates a new row keyed on primaryJid when neither identity has a row", async () => {
+    const primary = "cj-fresh-003@s.whatsapp.net";
+    const sibling = "cj-fresh-003@lid";
+
+    const { groupId, canonicalJid } = await upsertGroupByCanonicalJid(pool, {
+      primaryJid: primary,
+      siblingJid: sibling,
+      name: primary,
+      source: "live",
+    });
+
+    expect(typeof groupId).toBe("number");
+    expect(canonicalJid).toBe(primary);
+    expect(await countByJid(primary)).toBe(1);
+    expect(await countByJid(sibling)).toBe(0);
+  });
+
+  it("creates a new row when there is no sibling identity (siblingJid null, e.g. @g.us)", async () => {
+    const primary = "cj-group-004@g.us";
+
+    const { groupId, canonicalJid } = await upsertGroupByCanonicalJid(pool, {
+      primaryJid: primary,
+      siblingJid: null,
+      name: primary,
+      source: "live",
+    });
+
+    expect(typeof groupId).toBe("number");
+    expect(canonicalJid).toBe(primary);
+    expect(await countByJid(primary)).toBe(1);
+  });
+
+  it("prefers the primary row over the sibling when BOTH exist (deterministic routing)", async () => {
+    // An un-merged pair. Ingest must route deterministically to one — the primary
+    // (the identity the message arrived under) — rather than spawning a third row.
+    const primary = "cj-both-005@s.whatsapp.net";
+    const sibling = "cj-both-005@lid";
+    const primaryId = await upsertGroupByWhatsappId(pool, {
+      whatsappId: primary,
+      name: primary,
+      source: "live",
+    });
+    await upsertGroupByWhatsappId(pool, { whatsappId: sibling, name: sibling, source: "live" });
+
+    const { groupId, canonicalJid } = await upsertGroupByCanonicalJid(pool, {
+      primaryJid: primary,
+      siblingJid: sibling,
+      name: primary,
+      source: "live",
+    });
+
+    expect(groupId).toBe(primaryId);
+    expect(canonicalJid).toBe(primary);
   });
 });
 

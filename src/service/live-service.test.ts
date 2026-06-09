@@ -135,6 +135,10 @@ describe("attachCollector", () => {
       downloadVideo: expect.any(Function),
       // The live path threads a group-subject resolver for display-name resolution.
       groupSubject: expect.any(Function),
+      // The live path threads the lid<->pn bridge so ingest canonicalizes identity
+      // and LID-migration duplicates don't re-form (issue #17).
+      lidForPn: expect.any(Function),
+      pnForLid: expect.any(Function),
     });
   });
 

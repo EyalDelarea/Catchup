@@ -38,6 +38,13 @@ export type BackfillDeps = {
   pageSize?: number;
   /** Optional: download voice note media; passed through to handleIncomingMessage. */
   downloadVoiceNote?: (m: WAMessage) => Promise<Buffer>;
+  /**
+   * Optional lid<->pn bridge, passed through to handleIncomingMessage so backfilled
+   * history is identity-canonicalized too (issue #17). When absent, the per-message
+   * `remoteJidAlt` key fallback still applies.
+   */
+  lidForPn?: (pn: string) => Promise<string | null>;
+  pnForLid?: (lid: string) => Promise<string | null>;
   /** Injected clock (defaults to Date.now). */
   now?: () => number;
 };
@@ -80,6 +87,8 @@ export async function backfillGroup(deps: BackfillDeps): Promise<BackfillResult>
     fetchHistory,
     awaitHistory,
     downloadVoiceNote,
+    lidForPn,
+    pnForLid,
     stopAtSentAt,
     pageSize = 50,
     now = Date.now,
@@ -136,6 +145,8 @@ export async function backfillGroup(deps: BackfillDeps): Promise<BackfillResult>
           const isNew = await handleIncomingMessage(pool, m, {
             dataDir,
             downloadVoiceNote,
+            lidForPn,
+            pnForLid,
           });
           if (isNew) {
             totalFetched++;

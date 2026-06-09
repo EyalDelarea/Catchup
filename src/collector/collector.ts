@@ -16,7 +16,7 @@ import type pg from "pg";
 import {
   isDisplayNameUnresolved,
   updateDisplayName,
-  upsertGroupByWhatsappId,
+  upsertGroupByCanonicalJid,
 } from "../db/repositories/groups.js";
 import { insertMessages, messageExistsByExternalId } from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
@@ -68,7 +68,51 @@ export type CollectorOptions = {
    * When absent, display-name resolution for groups is skipped (legacy behavior).
    */
   groupSubject?: (jid: string) => Promise<string>;
+  /**
+   * Optional lid<->pn bridge. When provided, an incoming message's identity is
+   * canonicalized at ingest so all of a person's messages land in ONE chat
+   * regardless of which WhatsApp identity (@lid vs @s.whatsapp.net) it arrived
+   * under — stopping LID-migration duplicates from re-forming (issue #17).
+   * Production wires these to session.lidForPn / session.pnForLid. When absent,
+   * the message is keyed on its raw remoteJid (legacy behavior).
+   */
+  lidForPn?: (pn: string) => Promise<string | null>;
+  pnForLid?: (lid: string) => Promise<string | null>;
 };
+
+/**
+ * Resolve the person's *other* identity (the lid<->pn sibling) for a 1:1 chat,
+ * so an incoming message can be routed into an existing chat under either form.
+ *
+ * Tries Baileys' lid<->pn mapping first; falls back to `remoteJidAlt` (the
+ * alternate identity WhatsApp ships on the message key) when the mapping store
+ * isn't warm yet. Returns null for group JIDs (@g.us — not part of LID
+ * migration) and when no alternate identity is known. Never throws.
+ */
+async function resolveSiblingJid(
+  remoteJid: string,
+  remoteJidAlt: string | null,
+  opts: CollectorOptions,
+): Promise<string | null> {
+  // Group chats are not subject to LID migration.
+  if (remoteJid.endsWith("@g.us")) return null;
+
+  try {
+    if (remoteJid.endsWith("@s.whatsapp.net") && opts.lidForPn) {
+      const lid = await opts.lidForPn(remoteJid);
+      if (lid && lid !== remoteJid) return lid;
+    } else if (remoteJid.endsWith("@lid") && opts.pnForLid) {
+      const pn = await opts.pnForLid(remoteJid);
+      if (pn && pn !== remoteJid) return pn;
+    }
+  } catch {
+    // Bridge failures must never break ingest — fall through to the alt key.
+  }
+
+  // Cold-store fallback: the alternate identity carried on the message key.
+  if (remoteJidAlt && remoteJidAlt !== remoteJid) return remoteJidAlt;
+  return null;
+}
 
 /** Deterministic, filesystem-safe filename for a live voice note (keyed by the
  *  Baileys message id so re-delivery overwrites the same file). `.opus` so it
@@ -123,9 +167,15 @@ export async function handleIncomingMessage(
     return false;
   }
 
-  // --- Upsert group ---
-  const groupId = await upsertGroupByWhatsappId(client, {
-    whatsappId: mapped.remoteJid,
+  // --- Upsert group (identity-canonicalized) ---
+  // Route the message into the person's existing chat under either WhatsApp
+  // identity (@lid vs @s.whatsapp.net) so LID-migration duplicates can't form.
+  // `canonicalJid` is the identity the chat is actually keyed under — use it for
+  // the display-name resolution below so we target the right row.
+  const siblingJid = await resolveSiblingJid(mapped.remoteJid, mapped.remoteJidAlt, opts);
+  const { groupId, canonicalJid } = await upsertGroupByCanonicalJid(client, {
+    primaryJid: mapped.remoteJid,
+    siblingJid,
     name: mapped.remoteJid, // Use JID as name fallback; can be renamed via CLI later
     source: "live",
   });
@@ -145,7 +195,7 @@ export async function handleIncomingMessage(
   // Gate on "still unresolved" to avoid repeat network calls.
   // Errors are caught and non-fatal — the JID stays as the name.
   try {
-    const jid = mapped.remoteJid;
+    const jid = canonicalJid;
     if (await isDisplayNameUnresolved(client, jid)) {
       if (jid.endsWith("@g.us")) {
         if (opts.groupSubject) {
