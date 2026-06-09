@@ -21,6 +21,9 @@ import {
   representativeSenderName,
   updateDisplayName,
 } from "../db/repositories/groups.js";
+import { getLogger } from "../logging/log.js";
+
+const log = getLogger("name-resolver");
 
 export type NameResolverDeps = {
   /** Fetch the WhatsApp group subject for a @g.us JID. Only called for @g.us. */
@@ -52,8 +55,7 @@ export async function resolveAllGroupNames(
   try {
     unresolved = await listUnresolvedGroups(pool);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[name-resolver] failed to list unresolved groups: ${msg}\n`);
+    log.error({ err }, "failed to list unresolved groups");
     return { resolved: 0 };
   }
 
@@ -78,9 +80,10 @@ export async function resolveAllGroupNames(
         }
       }
     } catch (err) {
-      // One failure must never abort the batch (incl. UNIQUE name collisions)
-      const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`[name-resolver] skipped ${whatsappId}: ${msg}\n`);
+      // One failure must never abort the batch (incl. UNIQUE name collisions).
+      // These are expected/benign, so log only the reason — not a full stack.
+      const reason = err instanceof Error ? err.message : String(err);
+      log.warn({ jid: whatsappId, reason }, "skipped");
     }
   }
 
@@ -148,8 +151,9 @@ async function applyName(
   try {
     return await updateDisplayName(pool, jid, name);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[name-resolver] directory update skipped ${jid}: ${msg}\n`);
+    // Expected/benign (forbidden, item-not-found, name collision) — reason only.
+    const reason = err instanceof Error ? err.message : String(err);
+    log.warn({ jid, reason }, "directory update skipped");
     return false;
   }
 }
@@ -196,7 +200,7 @@ export async function resolveContactNames(
     }
   }
   if (resolved > 0) {
-    process.stderr.write(`[name-resolver] resolved ${resolved} name(s) from contacts.\n`);
+    log.info({ resolved }, "resolved name(s) from contacts");
   }
   return { resolved };
 }
@@ -217,7 +221,7 @@ export async function resolveChatNames(
     if (await applyName(pool, ch.id, (ch.name as string).trim())) resolved++;
   }
   if (resolved > 0) {
-    process.stderr.write(`[name-resolver] resolved ${resolved} name(s) from history chats.\n`);
+    log.info({ resolved }, "resolved name(s) from history chats");
   }
   return { resolved };
 }

@@ -7,6 +7,9 @@ import "dotenv/config";
 import { loadConfig } from "./config.js";
 import { runImport } from "./importer/run-import.js";
 import type { JobBus } from "./jobs/job-bus.js";
+import { installConsoleGuard } from "./logging/install-console.js";
+import { logLifecycle } from "./logging/lifecycle.js";
+import { getBaseLogger, getLogger } from "./logging/log.js";
 
 const program = new Command();
 
@@ -129,6 +132,10 @@ program
   .command("collect")
   .description("Start live WhatsApp message collection (links via QR code on first run)")
   .action(async () => {
+    installConsoleGuard();
+    logLifecycle("boot", { proc: "collect" });
+    const collectorLog = getLogger("collector");
+    const nameResolverLog = getLogger("name-resolver");
     const config = loadConfig();
     const authDir = path.join(config.dataDir, "baileys-auth");
     const dbUrl = config.databaseUrl;
@@ -145,24 +152,24 @@ program
 
     // SAFETY BANNER — make the outbound posture unmistakable before linking.
     if (config.whatsapp.allowSend) {
-      console.log(
+      collectorLog.warn(
         "⚠️  SENDING ENABLED (WHATSAPP_ALLOW_SEND=true): this tool may transmit to WhatsApp.",
       );
     } else {
-      console.log(
-        "🔒 Read-only mode: this tool will NOT send messages, read receipts, or presence.\n" +
-          "   It is a passive observer. (Sending stays off unless you set WHATSAPP_ALLOW_SEND=true.)",
+      collectorLog.info(
+        "🔒 Read-only mode: passive observer — will NOT send messages, read receipts, or presence (set WHATSAPP_ALLOW_SEND=true to enable).",
       );
     }
 
     const session = await startSession(authDir, config.whatsapp.allowSend);
 
     session.on("qr", () => {
-      console.log("Scan the QR code above with WhatsApp to link your account.");
+      process.stdout.write("Scan the QR code above with WhatsApp to link your account.\n");
     });
 
     session.on("connected", () => {
-      console.log("Collecting… stored 0 messages");
+      collectorLog.info({ stored: 0 }, "collecting");
+      logLifecycle("collector.connected");
       // Proactive name resolution: resolve quiet groups that have never sent
       // a new live message (fire-and-forget; must not block collection startup).
       import("./collector/name-resolver.js")
@@ -173,12 +180,11 @@ program
         )
         .then(({ resolved }) => {
           if (resolved > 0) {
-            console.log(`[name-resolver] resolved ${resolved} group name(s).`);
+            nameResolverLog.info({ resolved }, "resolved group name(s)");
           }
         })
         .catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          process.stderr.write(`[name-resolver] error: ${msg}\n`);
+          nameResolverLog.error({ err }, "group name resolution error");
         });
     });
 
@@ -190,26 +196,34 @@ program
           downloadImage: (m) => session.downloadMedia(m),
           downloadVideo: (m) => session.downloadMedia(m),
           groupSubject: (jid) => session.groupSubject(jid),
+          lidForPn: (pn) => session.lidForPn(pn),
+          pnForLid: (lid) => session.pnForLid(lid),
         });
         if (stored) {
           storedCount++;
-          console.log(`Collecting… stored ${storedCount} messages`);
+          collectorLog.info({ stored: storedCount }, "collecting");
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`Warning: failed to store message: ${message}\n`);
+        collectorLog.warn({ err }, "failed to store message");
       }
     });
 
     // Graceful shutdown on Ctrl-C
     process.on("SIGINT", () => {
-      console.log(`\nStopping collector. Stored ${storedCount} messages total.`);
+      collectorLog.info({ stored: storedCount }, "stopping collector");
+      logLifecycle("shutdown", { proc: "collect", signal: "SIGINT" });
       session.stop();
       pool
         .end()
         .catch(() => {})
         .finally(() => {
-          process.exit(0);
+          const exit = () => process.exit(0);
+          try {
+            getBaseLogger().flush(exit);
+          } catch {
+            exit();
+          }
+          setTimeout(exit, 1000).unref();
         });
     });
   });
@@ -317,6 +331,11 @@ program
   .option("--port <port>", "Port to listen on")
   .option("--collect", "Also run the always-on live collector (links WhatsApp via QR on first run)")
   .action(async (options: { port?: string; collect?: boolean }) => {
+    // Route every console.* line (incl. third-party dumps) through pino with a
+    // timestamp + source, and drop/redact secret material. Must run before any
+    // log-capable code in this long-running process.
+    installConsoleGuard();
+    logLifecycle("boot", { proc: "serve" });
     const config = loadConfig();
     const port = options.port ? Number(options.port) : config.web.port;
     if (!Number.isInteger(port) || port <= 0) {
@@ -332,7 +351,6 @@ program
       pg,
       { backfillGroup },
       { isHealthy, getLastHeartbeatAt },
-      { createLogger },
       { startScheduler },
       { parseTimes },
       { enqueueScheduledRun },
@@ -350,7 +368,6 @@ program
       import("pg"),
       import("./collector/backfill.js"),
       import("./service/liveness.js"),
-      import("./logging/logger.js"),
       import("./scheduler/runner.js"),
       import("./scheduler/schedule.js"),
       import("./scheduler/enqueue-run.js"),
@@ -360,7 +377,14 @@ program
       import("./db/repositories/messages.js"),
       import("./db/repositories/service-status.js"),
     ]);
-    const webLogger = createLogger(config.logging);
+    const webLogger = getBaseLogger();
+    const log = {
+      scheduler: getLogger("scheduler"),
+      collector: getLogger("collector"),
+      nameResolver: getLogger("name-resolver"),
+      reconnect: getLogger("reconnect-sync"),
+      cli: getLogger("cli"),
+    };
     const pool = new pg.default.Pool({ connectionString: config.databaseUrl });
     const summarizer = new OllamaSummarizer({
       host: config.summarization.ollamaHost,
@@ -427,6 +451,8 @@ program
               awaitHistory: (toMs: number) => liveSession.awaitHistorySync(jid, toMs),
               downloadVoiceNote: (m: import("@whiskeysockets/baileys").WAMessage) =>
                 liveSession.downloadMedia(m),
+              lidForPn: (pn: string) => liveSession.lidForPn(pn),
+              pnForLid: (l: string) => liveSession.pnForLid(l),
             });
           },
         }
@@ -446,7 +472,8 @@ program
       process.exit(1);
     });
     server.listen(port, () => {
-      console.log(`Web UI running at http://localhost:${port}  (Ctrl-C to stop)`);
+      log.cli.info({ port }, `Web UI running at http://localhost:${port}  (Ctrl-C to stop)`);
+      logLifecycle("ready", { proc: "serve", port });
     });
 
     // ── Scheduled digest runner ──────────────────────────────────────────────
@@ -465,12 +492,11 @@ program
         enqueueRun: enqueueScheduledRun,
       });
       if (config.digest.enabled) {
-        console.log(`[scheduler] digest scheduler started (times: ${config.digest.times})`);
+        log.scheduler.info({ times: config.digest.times }, "digest scheduler started");
       }
     } catch (err) {
       // Scheduler startup failure must NOT crash the web server
-      const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`[scheduler] startup error (web server continues): ${msg}\n`);
+      log.scheduler.error({ err }, "digest scheduler startup error (web server continues)");
     }
 
     // ── Ops-sweep scheduler ──────────────────────────────────────────────────
@@ -502,12 +528,11 @@ program
         },
       });
       if (config.opsSweep.enabled) {
-        console.log(`[scheduler] ops-sweep scheduler started (times: ${config.opsSweep.times})`);
+        log.scheduler.info({ times: config.opsSweep.times }, "ops-sweep scheduler started");
       }
     } catch (err) {
       // Ops-sweep scheduler startup failure must NOT crash the web server
-      const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`[scheduler] ops-sweep startup error (web server continues): ${msg}\n`);
+      log.scheduler.error({ err }, "ops-sweep scheduler startup error (web server continues)");
     }
 
     // ── --collect mode: start live collector in the same process ──────────────
@@ -516,13 +541,12 @@ program
     if (options.collect) {
       // Safety banner (same wording as the standalone `collect` command)
       if (config.whatsapp.allowSend) {
-        console.log(
+        log.collector.warn(
           "⚠️  SENDING ENABLED (WHATSAPP_ALLOW_SEND=true): this tool may transmit to WhatsApp.",
         );
       } else {
-        console.log(
-          "🔒 Read-only mode: this tool will NOT send messages, read receipts, or presence.\n" +
-            "   It is a passive observer. (Sending stays off unless you set WHATSAPP_ALLOW_SEND=true.)",
+        log.collector.info(
+          "🔒 Read-only mode: passive observer — will NOT send messages, read receipts, or presence (set WHATSAPP_ALLOW_SEND=true to enable).",
         );
       }
 
@@ -564,9 +588,11 @@ program
             const tLast = await getNewestReadableSentAt(pool, g.id);
             bootSnapshots.push({ id: g.id, name: g.name, tLast });
           }
-          console.log(
-            `[reconnect-sync] armed: snapshotted ${bootSnapshots.length} active group(s) (pre-boot heartbeat stale).`,
+          log.reconnect.info(
+            { groups: bootSnapshots.length },
+            "armed: snapshotted active group(s) (pre-boot heartbeat stale)",
           );
+          logLifecycle("reconnect.armed", { groups: bootSnapshots.length });
         }
 
         // Gap-mode backfill: fill a single group's history backward to a timestamp.
@@ -591,14 +617,17 @@ program
             awaitHistory: (toMs: number) => liveSession.awaitHistorySync(jid, toMs),
             downloadVoiceNote: (m: import("@whiskeysockets/baileys").WAMessage) =>
               liveSession.downloadMedia(m),
+            lidForPn: (pn: string) => liveSession.lidForPn(pn),
+            pnForLid: (l: string) => liveSession.pnForLid(l),
           });
         };
 
         session.on("qr", () => {
-          console.log("Scan the QR code above with WhatsApp to link your account.");
+          process.stdout.write("Scan the QR code above with WhatsApp to link your account.\n");
         });
         session.on("connected", () => {
-          console.log("[collector] connected.");
+          log.collector.info("connected");
+          logLifecycle("collector.connected");
           // Proactive name resolution on connect (fire-and-forget).
           import("./collector/name-resolver.js")
             .then(({ resolveAllGroupNames }) =>
@@ -608,12 +637,11 @@ program
             )
             .then(({ resolved }) => {
               if (resolved > 0) {
-                console.log(`[name-resolver] resolved ${resolved} group name(s).`);
+                log.nameResolver.info({ resolved }, "resolved group name(s)");
               }
             })
             .catch((err: unknown) => {
-              const msg = err instanceof Error ? err.message : String(err);
-              process.stderr.write(`[name-resolver] error: ${msg}\n`);
+              log.nameResolver.error({ err }, "group name resolution error");
             });
 
           // Boot-time gap recovery: once per process, only if the pre-boot heartbeat
@@ -629,17 +657,22 @@ program
                 countReadableSince: (groupId, since) => countReadableSince(pool, groupId, since),
                 logger: webLogger,
               });
-              console.log(
-                `[reconnect-sync] done: recovered ${result.recovered} message(s) across ${result.groups} group(s).`,
+              log.reconnect.info(
+                { recovered: result.recovered, groups: result.groups },
+                "done: recovered message(s) across group(s)",
               );
+              logLifecycle("reconnect.done", {
+                recovered: result.recovered,
+                groups: result.groups,
+              });
             })().catch((err: unknown) => {
-              const msg = err instanceof Error ? err.message : String(err);
-              process.stderr.write(`[reconnect-sync] error: ${msg}\n`);
+              log.reconnect.error({ err }, "reconnect recovery error");
             });
           }
         });
         session.on("disconnected", () => {
-          console.log("[collector] disconnected (will auto-reconnect).");
+          log.collector.warn("disconnected (will auto-reconnect)");
+          logLifecycle("collector.disconnected");
         });
 
         // Resolve chat/contact display names from WhatsApp's directory (the only
@@ -653,16 +686,14 @@ program
               }),
             )
             .catch((err: unknown) => {
-              const msg = err instanceof Error ? err.message : String(err);
-              process.stderr.write(`[name-resolver] contacts resolution error: ${msg}\n`);
+              log.nameResolver.error({ err }, "contacts resolution error");
             });
         });
         session.on("chats", (chats) => {
           void import("./collector/name-resolver.js")
             .then(({ resolveChatNames }) => resolveChatNames(pool, chats))
             .catch((err: unknown) => {
-              const msg = err instanceof Error ? err.message : String(err);
-              process.stderr.write(`[name-resolver] chats resolution error: ${msg}\n`);
+              log.nameResolver.error({ err }, "chats resolution error");
             });
         });
 
@@ -672,23 +703,23 @@ program
           bus: brokerBus,
           dataDir: config.dataDir,
           onError: (err) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            process.stderr.write(
-              `[collector] message handler error (web server continues): ${msg}\n`,
-            );
+            log.collector.error({ err }, "message handler error (web server continues)");
           },
         });
 
-        console.log("[collector] started — web server and collector running together.");
+        log.collector.info("started — web server and collector running together");
       } catch (err) {
         // Collector startup failure must NOT exit (web server keeps running)
-        const msg = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`[collector] startup error (web server continues): ${msg}\n`);
+        log.collector.error({ err }, "startup error (web server continues)");
       }
     }
 
     // ── Graceful shutdown (SIGINT + SIGTERM) ─────────────────────────────────
-    const gracefulShutdown = () => {
+    let shuttingDown = false;
+    const gracefulShutdown = (signal: NodeJS.Signals) => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      logLifecycle("shutdown", { proc: "serve", signal });
       // Stop schedulers first (prevents new enqueue calls)
       schedulerHandle.stop();
       opsSweepHandle.stop();
@@ -700,10 +731,20 @@ program
       pool
         .end()
         .catch(() => {})
-        .finally(() => process.exit(0));
+        // Flush the shutdown event + any batched lines before exiting, with a
+        // safety timeout so a stalled transport can never hang shutdown.
+        .finally(() => {
+          const exit = () => process.exit(0);
+          try {
+            webLogger.flush(exit);
+          } catch {
+            exit();
+          }
+          setTimeout(exit, 1000).unref();
+        });
     };
-    process.on("SIGINT", gracefulShutdown);
-    process.on("SIGTERM", gracefulShutdown);
+    process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+    process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
   });
 
 program
@@ -910,7 +951,7 @@ program
 
     const session = await startSession(path.join(config.dataDir, "baileys-auth"), false);
     session.on("qr", () => {
-      console.log("Scan the QR code above with WhatsApp to link your account.");
+      process.stdout.write("Scan the QR code above with WhatsApp to link your account.\n");
     });
 
     const run = async () => {
@@ -1142,7 +1183,11 @@ program
       const jid = msg.key?.remoteJid;
       if (!jid || (whitelist && !whitelist.has(jid))) return;
       // Persist text/metadata only (no media downloads). --with-media is a future opt-in.
-      void handleIncomingMessage(pool, msg, { dataDir: config.dataDir })
+      void handleIncomingMessage(pool, msg, {
+        dataDir: config.dataDir,
+        lidForPn: (pn) => session.lidForPn(pn),
+        pnForLid: (lid) => session.pnForLid(lid),
+      })
         .then((stored) => {
           if (stored) kept++;
         })

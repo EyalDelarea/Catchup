@@ -38,6 +38,8 @@ export type HandleMessageFn = (
     downloadImage?: (m: WAMessage) => Promise<Buffer>;
     downloadVideo?: (m: WAMessage) => Promise<Buffer>;
     groupSubject?: (jid: string) => Promise<string>;
+    lidForPn?: (pn: string) => Promise<string | null>;
+    pnForLid?: (lid: string) => Promise<string | null>;
   },
 ) => Promise<boolean>;
 
@@ -155,6 +157,8 @@ export function attachCollector(deps: AttachCollectorDeps): LiveServiceHandle {
       downloadImage: (m) => session.downloadMedia(m),
       downloadVideo: (m) => session.downloadMedia(m),
       groupSubject: (jid) => session.groupSubject(jid),
+      lidForPn: (pn) => session.lidForPn(pn),
+      pnForLid: (lid) => session.pnForLid(lid),
     })
       .then((_stored) => {
         // stored can be used for logging; intentionally unused here.

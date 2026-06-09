@@ -1,6 +1,9 @@
 import "dotenv/config";
 import type { JobBus } from "../jobs/job-bus.js";
 import type { Job, JobType } from "../jobs/job-types.js";
+import { installConsoleGuard } from "../logging/install-console.js";
+import { logLifecycle } from "../logging/lifecycle.js";
+import { getLogger } from "../logging/log.js";
 import type { Logger } from "../logging/logger.js";
 
 export type HandlerMap = {
@@ -136,6 +139,10 @@ export async function buildWorker(
  * job types (passed via --types).
  */
 async function main(): Promise<void> {
+  // Route every console.* line (incl. third-party dumps) through pino with a
+  // timestamp + source, and drop/redact secret material — before anything logs.
+  installConsoleGuard();
+  logLifecycle("boot", { proc: "worker" });
   const [
     { loadConfig },
     { RabbitMqJobBus },
@@ -152,7 +159,6 @@ async function main(): Promise<void> {
     { analyzeVideo, extractFramesWithFfmpeg, extractAudioWithFfmpeg, fileSizeMbSync },
     { OllamaVisionAnalyzer },
     { IvritWhisperTranscriber },
-    { createLogger },
     { pruneMediaFile },
     { resetStaleRunningJobs },
     pg,
@@ -172,7 +178,6 @@ async function main(): Promise<void> {
     import("../vision/analyze-video.js"),
     import("../vision/ollama-analyzer.js"),
     import("../transcription/ivrit-whisper.js"),
-    import("../logging/logger.js"),
     import("../media/prune.js"),
     import("../db/repositories/job-runs.js"),
     import("pg"),
@@ -184,7 +189,7 @@ async function main(): Promise<void> {
   const concurrencyIdx = args.indexOf("--concurrency");
 
   const config = loadConfig();
-  const logger = createLogger(config.logging);
+  const logger = getLogger("worker");
   const concurrency =
     concurrencyIdx !== -1 ? Number(args[concurrencyIdx + 1]) : config.worker.concurrency;
 
@@ -387,20 +392,32 @@ async function main(): Promise<void> {
   const worker = await buildWorker({ bus, handlers, concurrency, logger });
 
   // Graceful shutdown (both SIGINT and SIGTERM)
-  const gracefulShutdown = () => {
+  let shuttingDown = false;
+  const gracefulShutdown = (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logLifecycle("shutdown", { proc: "worker", signal });
     void worker.close().then(() => {
       void pool.end();
       void dbClient.end();
-      process.exit(0);
+      // Flush the shutdown event before exiting, with a safety timeout.
+      const exit = () => process.exit(0);
+      try {
+        logger.flush(exit);
+      } catch {
+        exit();
+      }
+      setTimeout(exit, 1000).unref();
     });
   };
-  process.on("SIGINT", gracefulShutdown);
-  process.on("SIGTERM", gracefulShutdown);
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 
   logger.info(
     { concurrency, types: Object.keys(handlers) },
     `Worker started (concurrency=${concurrency}, types=${Object.keys(handlers).join(",")})`,
   );
+  logLifecycle("ready", { proc: "worker", concurrency });
 }
 
 // Only run main when this file is the entrypoint
