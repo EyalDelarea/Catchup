@@ -290,7 +290,7 @@ function renderDetail(group, autoStart) {
   setView("detail");
   markActiveRow(group);
   wireDetailButtons(group);
-  loadHistory(group);
+  if (!DEMO) loadHistory(group);
 
   if (autoStart) {
     setActiveChip("catchup");
