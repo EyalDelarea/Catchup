@@ -352,6 +352,38 @@ describe("message-media", () => {
       expect(rows[0].url).toBeNull();
       expect(rows[0].download_state).toBe("pruned");
     });
+
+    it("is a safe no-op when download_state is still pending (guard against stranding)", async () => {
+      const groupId = await upsertGroup(pool, { name: "MM-prune-guard-1", source: "import" });
+      const messageId = await seedMessage(groupId, { dedupeKey: "mm-prune-guard-1" });
+
+      await upsertMessageMedia(pool, {
+        messageId,
+        mediaKind: "image",
+        mimeType: "image/jpeg",
+        mediaKey: Buffer.from("secretkey"),
+        directPath: "/path/to/file",
+        url: "https://example.com/media",
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: Buffer.from("wamessage"),
+        downloadState: "pending",
+      });
+
+      // pruneMediaSecrets on a pending row must be a no-op
+      await pruneMediaSecrets(pool, messageId);
+
+      const { rows } = await pool.query<{
+        media_key: Buffer | null;
+        download_state: string;
+      }>(`SELECT media_key, download_state FROM message_media WHERE message_id = $1`, [messageId]);
+      expect(rows).toHaveLength(1);
+      // Row must be completely unchanged
+      expect(rows[0].download_state).toBe("pending");
+      expect(rows[0].media_key).not.toBeNull();
+    });
   });
 
   describe("downgrade guard", () => {

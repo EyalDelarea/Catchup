@@ -15,6 +15,25 @@ export type UpsertMessageMediaInput = {
   downloadState: "pending" | "present" | "unrecoverable" | "pruned";
 };
 
+/**
+ * Insert or update a `message_media` row keyed on `message_id`.
+ *
+ * **Stable fields** (`media_key`, `wa_message`, `file_enc_sha256`,
+ * `file_sha256`, `media_key_ts`) are write-once: they are kept via COALESCE so
+ * the first non-NULL write wins. Subsequent upserts with a different value for
+ * these fields are silently ignored, preserving the original cryptographic
+ * material.
+ *
+ * **Volatile fields** (`direct_path`, `url`, `mime_type`, `file_length`)
+ * always refresh to the incoming value, because CDN locations and metadata can
+ * legitimately change between re-pulls.
+ *
+ * **`download_state`** only advances FROM `'pending'`. Once a row reaches
+ * `'present'`, `'unrecoverable'`, or `'pruned'`, a re-pull that passes
+ * `downloadState: 'pending'` cannot downgrade it. This keeps the state machine
+ * monotonic and prevents race conditions between the downloader and a
+ * concurrent re-import.
+ */
 export async function upsertMessageMedia(
   client: pg.Pool | pg.PoolClient,
   input: UpsertMessageMediaInput,
@@ -67,6 +86,14 @@ export type PendingMedia = {
   waMessage: Buffer | null;
 };
 
+/**
+ * Returns up to `limit` rows whose `download_state` is `'pending'`,
+ * ordered oldest-first by `sent_at` (via a JOIN to `messages`) so the
+ * downloader processes historical media in chronological order.
+ *
+ * The JOIN to `messages` is solely for ordering — no message fields are
+ * returned in the result set.
+ */
 export async function selectPendingMedia(
   client: pg.Pool | pg.PoolClient,
   limit: number,
@@ -133,6 +160,18 @@ export async function recordMediaAttempt(
   );
 }
 
+/**
+ * Drops the decryption key, proto blob, and CDN location for a message once
+ * its media has been analyzed, so this sensitive material is not retained
+ * longer than necessary (privacy / data-minimization).
+ *
+ * **Precondition guard**: the UPDATE only runs when
+ * `download_state = 'present'`. Calling this on a `'pending'` row is a
+ * safe no-op — the row is left completely unchanged, preventing the row from
+ * being permanently stranded in a state where it can never be downloaded
+ * (the upsert state machine only advances FROM `'pending'` and would never
+ * be able to re-set a `'pruned'` row back to `'present'`).
+ */
 export async function pruneMediaSecrets(
   client: pg.Pool | pg.PoolClient,
   messageId: number,
@@ -141,7 +180,7 @@ export async function pruneMediaSecrets(
     `UPDATE message_media
        SET media_key=NULL, wa_message=NULL, direct_path=NULL, url=NULL,
            download_state='pruned', updated_at=now()
-     WHERE message_id=$1`,
+     WHERE message_id=$1 AND download_state = 'present'`,
     [messageId],
   );
 }
