@@ -21,6 +21,10 @@ import { deriveHealth } from "./lib/health.js";
 import { shouldStartBackgroundRefresh } from "./lib/open-state.js";
 import { PHASE_LABELS, PHASES, phaseFill, activeZoneIndex, phaseCaption, scanFill } from "./lib/phase-loader.js";
 import { createConversation, ask } from "./lib/ama-stub.js";
+import { DEMO_GROUPS, DEMO_SUMMARY, DEMO_TOTAL_HIGHLIGHTS, DEMO_TOTAL_PERCHAT } from "./lib/demo-data.js";
+
+/** Off by default. `?demo=1` previews dummy data; `?demo=tube` shows the loader. */
+const DEMO = new URLSearchParams(location.search).get("demo");
 
 /* ── 1. Globals ──────────────────────────────────────────── */
 
@@ -168,6 +172,7 @@ function renderShell() {
 
 /** Fetch groups and populate the list. */
 async function loadGroupsIntoList() {
+  if (DEMO) { cachedGroups = DEMO_GROUPS; renderGroupList(cachedGroups, ""); return; }
   try {
     cachedGroups = await getGroups();
   } catch {
@@ -289,6 +294,14 @@ function renderDetail(group, autoStart) {
 
   if (autoStart) {
     setActiveChip("catchup");
+    if (DEMO) {
+      if (DEMO === "tube") {
+        setSummaryRegion(buildPhaseTube({ phase: "read", messages: 247, elapsed: 12 }));
+      } else {
+        setSummaryRegion(buildSummaryCardDone(DEMO_SUMMARY, "נשמר • 8.4 שניות • 247 הודעות", false));
+      }
+      return;
+    }
     void runDetailWithCacheFirst(group);
   }
 }
@@ -855,7 +868,17 @@ function renderTotal(autoStart) {
     runTotal({ since: btn.dataset.since });
   });
 
-  if (autoStart) runTotal({ since: defaultTotalSince() });
+  if (autoStart) {
+    if (DEMO) {
+      const card = document.getElementById("total-highlights");
+      const body = document.getElementById("total-highlights-body");
+      if (card) card.hidden = false;
+      if (body) body.innerHTML = renderMarkdown(DEMO_TOTAL_HIGHLIGHTS);
+      renderTotalPerChat(DEMO_TOTAL_PERCHAT);
+      return;
+    }
+    runTotal({ since: defaultTotalSince() });
+  }
 }
 
 function defaultTotalSince() {
@@ -1098,7 +1121,8 @@ function resolveInitialRoute() {
 
 async function boot() {
   renderShell();
-  startHealthPolling();
+  if (DEMO) applyHealth(true);
+  else startHealthPolling();
   wireCopyButton();
 
   const route = resolveInitialRoute();
