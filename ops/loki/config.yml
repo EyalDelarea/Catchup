@@ -5,11 +5,13 @@ server:
 
 common:
   instance_addr: 127.0.0.1
-  path_prefix: /tmp/loki
+  # Durable path backed by the `loki-data` docker volume. Previously /tmp/loki,
+  # which is purged on reboot → logs were silently lost across host restarts.
+  path_prefix: /loki
   storage:
     filesystem:
-      chunks_directory: /tmp/loki/chunks
-      rules_directory: /tmp/loki/rules
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
   replication_factor: 1
   ring:
     kvstore:
@@ -25,5 +27,14 @@ schema_config:
         prefix: index_
         period: 24h
 
+# Rotation: the compactor enforces the retention window below, deleting log
+# chunks older than `retention_period`. Tune `retention_period` to trade history
+# depth against disk (single-user volume is modest; 720h = 30 days).
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
 limits_config:
   allow_structured_metadata: false
+  retention_period: 720h

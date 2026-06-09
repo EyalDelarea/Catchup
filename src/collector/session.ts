@@ -29,8 +29,13 @@ import makeWASocket, {
   type WAMessage,
   type WASocket,
 } from "@whiskeysockets/baileys";
+import { getLogger } from "../logging/log.js";
 import { createHistorySyncProgress, type HistorySyncProgress } from "./history-sync-progress.js";
 import { applyOutboundGuard } from "./outbound-guard.js";
+
+const collectorLog = getLogger("collector");
+const historySyncLog = getLogger("history-sync");
+const diagLog = getLogger("diag-names");
 
 export type SessionEvents = {
   message: [msg: WAMessage];
@@ -73,7 +78,7 @@ export class CollectorSession extends EventEmitter {
     this.authDir = authDir;
     this.allowSend = allowSend;
     this.historyProgress = createHistorySyncProgress({
-      log: (line) => process.stderr.write(`${line}\n`),
+      log: (line) => historySyncLog.info(line),
     });
     this.syncFullHistory = opts.syncFullHistory ?? false;
     this.acceptAllHistory = opts.acceptAllHistory ?? false;
@@ -322,8 +327,8 @@ export class CollectorSession extends EventEmitter {
 
       if (connection === "open") {
         if (DIAG_NAMES) {
-          process.stderr.write(
-            "[diag-names] active — watching contacts.upsert/update + history.set (chats/contacts/lidPnMappings)\n",
+          diagLog.debug(
+            "active — watching contacts.upsert/update + history.set (chats/contacts/lidPnMappings)",
           );
         }
         this.emit("connected");
@@ -340,12 +345,12 @@ export class CollectorSession extends EventEmitter {
         const loggedOut = statusCode === DisconnectReason.loggedOut;
 
         if (loggedOut) {
-          console.error("WhatsApp session logged out. Delete data/baileys-auth/ and re-link.");
+          collectorLog.error("WhatsApp session logged out. Delete data/baileys-auth/ and re-link.");
         } else {
           // Reconnect after a brief delay
           setTimeout(() => {
             this.connect().catch((err: unknown) => {
-              console.error("Reconnect failed:", err);
+              collectorLog.error({ err }, "reconnect failed");
             });
           }, 3000);
         }
@@ -362,7 +367,7 @@ export class CollectorSession extends EventEmitter {
       // Diagnostic: 'append' is the offline-replay channel — log how much arrives so
       // we can see whether WhatsApp actually delivers missed messages on reconnect.
       if (type === "append" && messages.length > 0) {
-        process.stderr.write(`[history-sync] append: ${messages.length} message(s)\n`);
+        historySyncLog.info({ count: messages.length }, "append: message(s)");
       }
       for (const msg of messages) {
         diagMessageKey(msg);
@@ -488,26 +493,45 @@ function diagMessageKey(msg: WAMessage): void {
     fromMe?: boolean | null;
   };
   diagMsgKeysLogged++;
-  process.stderr.write(
-    `[diag-names]   msgkey remoteJid=${k.remoteJid ?? "-"} remoteJidAlt=${k.remoteJidAlt ?? "-"} participant=${k.participant ?? "-"} participantAlt=${k.participantAlt ?? "-"} pushName=${msg.pushName ?? "-"} fromMe=${k.fromMe ?? "-"}\n`,
+  diagLog.debug(
+    {
+      remoteJid: k.remoteJid ?? null,
+      remoteJidAlt: k.remoteJidAlt ?? null,
+      participant: k.participant ?? null,
+      participantAlt: k.participantAlt ?? null,
+      pushName: msg.pushName ?? null,
+      fromMe: k.fromMe ?? null,
+    },
+    "msgkey",
   );
 }
 
 function diagContacts(source: string, contacts: Partial<Contact>[]): void {
   if (!DIAG_NAMES || contacts.length === 0) return;
   const has = (pred: (c: Partial<Contact>) => unknown) => contacts.filter(pred).length;
-  const summary =
-    `[diag-names] ${source}: total=${contacts.length}` +
-    ` name=${has((c) => c.name?.trim())}` +
-    ` notify=${has((c) => c.notify?.trim())}` +
-    ` verifiedName=${has((c) => c.verifiedName?.trim())}` +
-    ` phoneNumber=${has((c) => c.phoneNumber)}` +
-    ` id@s=${has((c) => c.id?.endsWith("@s.whatsapp.net"))}` +
-    ` id@lid=${has((c) => c.id?.endsWith("@lid"))}`;
-  process.stderr.write(`${summary}\n`);
+  diagLog.debug(
+    {
+      source,
+      total: contacts.length,
+      name: has((c) => c.name?.trim()),
+      notify: has((c) => c.notify?.trim()),
+      verifiedName: has((c) => c.verifiedName?.trim()),
+      phoneNumber: has((c) => c.phoneNumber),
+      "id@s": has((c) => c.id?.endsWith("@s.whatsapp.net")),
+      "id@lid": has((c) => c.id?.endsWith("@lid")),
+    },
+    `contacts summary (${source})`,
+  );
   for (const c of contacts.slice(0, 3)) {
-    process.stderr.write(
-      `[diag-names]   sample id=${c.id} lid=${c.lid ?? "-"} phoneNumber=${c.phoneNumber ?? "-"} name=${c.name ?? "-"} notify=${c.notify ?? "-"}\n`,
+    diagLog.debug(
+      {
+        id: c.id,
+        lid: c.lid ?? null,
+        phoneNumber: c.phoneNumber ?? null,
+        name: c.name ?? null,
+        notify: c.notify ?? null,
+      },
+      "contacts sample",
     );
   }
 }
@@ -518,19 +542,32 @@ function diagHistory(
   lidPnMappings: { pn: string; lid: string }[] | undefined,
 ): void {
   if (!DIAG_NAMES) return;
-  process.stderr.write(
-    `[diag-names] history.set: chats=${chats?.length ?? 0} contacts=${contacts?.length ?? 0} lidPnMappings=${lidPnMappings?.length ?? 0}\n`,
+  diagLog.debug(
+    {
+      chats: chats?.length ?? 0,
+      contacts: contacts?.length ?? 0,
+      lidPnMappings: lidPnMappings?.length ?? 0,
+    },
+    "history.set",
   );
   for (const c of (contacts ?? []).slice(0, 4)) {
-    process.stderr.write(
-      `[diag-names]   contact id=${c.id} lid=${c.lid ?? "-"} phoneNumber=${c.phoneNumber ?? "-"} name=${c.name ?? "-"} notify=${c.notify ?? "-"} verifiedName=${c.verifiedName ?? "-"}\n`,
+    diagLog.debug(
+      {
+        id: c.id,
+        lid: c.lid ?? null,
+        phoneNumber: c.phoneNumber ?? null,
+        name: c.name ?? null,
+        notify: c.notify ?? null,
+        verifiedName: c.verifiedName ?? null,
+      },
+      "history.set contact",
     );
   }
   for (const ch of (chats ?? []).slice(0, 4)) {
-    process.stderr.write(`[diag-names]   chat id=${ch.id} name=${ch.name ?? "-"}\n`);
+    diagLog.debug({ id: ch.id, name: ch.name ?? null }, "history.set chat");
   }
   for (const m of (lidPnMappings ?? []).slice(0, 3)) {
-    process.stderr.write(`[diag-names]   lidPn pn=${m.pn} lid=${m.lid}\n`);
+    diagLog.debug({ pn: m.pn, lid: m.lid }, "history.set lidPn");
   }
 }
 

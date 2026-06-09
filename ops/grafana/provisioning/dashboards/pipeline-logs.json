@@ -2,19 +2,79 @@
   "title": "Pipeline Logs",
   "uid": "catchup-pipeline",
   "schemaVersion": 38,
-  "version": 1,
-  "refresh": "10s",
-  "time": { "from": "now-1h", "to": "now" },
+  "version": 2,
+  "refresh": "5s",
+  "time": { "from": "now-6h", "to": "now" },
   "panels": [
     {
       "id": 1,
       "type": "logs",
-      "title": "All pipeline logs",
+      "title": "All pipeline logs (live — set refresh to 5s or use Explore → Live)",
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
       "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
         {
-          "expr": "{service=\"catchup\"}",
+          "expr": "{app=\"catchup\"}",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showLabels": true,
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 4,
+      "type": "logs",
+      "title": "Filter by component ($component)",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{app=\"catchup\"} | json | component=~\"$component\"",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showLabels": true,
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 5,
+      "type": "logs",
+      "title": "Filter by minimum level ($level)",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{app=\"catchup\"} | json | level >= ${level}",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showLabels": true,
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 6,
+      "type": "logs",
+      "title": "System Lifecycle (boot / ready / shutdown / connect / reconnect)",
+      "gridPos": { "x": 0, "y": 16, "w": 24, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{app=\"catchup\"} | json | component=\"lifecycle\"",
           "legendFormat": "",
           "refId": "A"
         }
@@ -29,12 +89,12 @@
     {
       "id": 2,
       "type": "logs",
-      "title": "Filter by jobId (use variable $jobId)",
-      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "title": "Filter by jobId ($jobId)",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
       "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
         {
-          "expr": "{service=\"catchup\"} | json | jobId=`$jobId`",
+          "expr": "{app=\"catchup\"} | json | jobId=`$jobId`",
           "legendFormat": "",
           "refId": "A"
         }
@@ -49,12 +109,12 @@
     {
       "id": 3,
       "type": "logs",
-      "title": "Filter by groupId (use variable $groupId)",
-      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "title": "Filter by groupId ($groupId)",
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
       "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
         {
-          "expr": "{service=\"catchup\"} | json | groupId=`$groupId`",
+          "expr": "{app=\"catchup\"} | json | groupId=`$groupId`",
           "legendFormat": "",
           "refId": "A"
         }
@@ -69,6 +129,23 @@
   ],
   "templating": {
     "list": [
+      {
+        "name": "component",
+        "type": "custom",
+        "label": "Component",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "query": "collector,name-resolver,scheduler,reconnect-sync,history-sync,diag-names,summary,worker,cli,lifecycle,console",
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "level",
+        "type": "custom",
+        "label": "Min level",
+        "query": "all : 0,info : 30,warn : 40,error : 50",
+        "current": { "text": "all", "value": "0" }
+      },
       {
         "name": "jobId",
         "type": "textbox",

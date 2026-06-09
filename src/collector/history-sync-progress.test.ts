@@ -44,7 +44,7 @@ describe("createHistorySyncProgress", () => {
     const h = harness();
     h.progress.record(50);
     expect(h.log).toHaveBeenCalledTimes(1);
-    expect(h.log).toHaveBeenCalledWith("[history-sync] syncing… 50 message(s) received");
+    expect(h.log).toHaveBeenCalledWith("syncing… 50 message(s) received");
   });
 
   it("throttles rapid batches but keeps a running total", () => {
@@ -60,7 +60,7 @@ describe("createHistorySyncProgress", () => {
     h.advance(1000); // past throttleMs since last log
     h.progress.record(50); // logs cumulative total = 200
     expect(h.log).toHaveBeenCalledTimes(2);
-    expect(h.log).toHaveBeenLastCalledWith("[history-sync] syncing… 200 message(s) received");
+    expect(h.log).toHaveBeenLastCalledWith("syncing… 200 message(s) received");
   });
 
   it("emits a completion summary once batches go idle, then resets", () => {
@@ -72,13 +72,13 @@ describe("createHistorySyncProgress", () => {
     h.flushTimer();
 
     expect(h.log).toHaveBeenLastCalledWith(
-      "[history-sync] sync complete: 50 message(s) received across 2 batch(es)",
+      "sync complete: 50 message(s) received across 2 batch(es)",
     );
 
     // After completion the counters reset — a new sync starts fresh.
     h.advance(5000);
     h.progress.record(7);
-    expect(h.log).toHaveBeenLastCalledWith("[history-sync] syncing… 7 message(s) received");
+    expect(h.log).toHaveBeenLastCalledWith("syncing… 7 message(s) received");
   });
 
   it("ignores empty batches", () => {

@@ -4,6 +4,7 @@ import pino from "pino";
 export type Logger = PinoLogger;
 
 export type CorrelationContext = {
+  component?: string;
   jobId?: string;
   jobType?: string;
   groupId?: string;
