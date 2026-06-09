@@ -1,4 +1,4 @@
-import { argon2id, hash, verify } from "@node-rs/argon2";
+import { Algorithm, hash, verify } from "@node-rs/argon2";
 
 /**
  * Password hashing with argon2id. Parameters are deliberately conservative defaults
@@ -7,7 +7,7 @@ import { argon2id, hash, verify } from "@node-rs/argon2";
  * column is needed.
  */
 const OPTIONS = {
-  algorithm: argon2id,
+  algorithm: Algorithm.Argon2id,
   // memoryCost in KiB (19 MiB), timeCost iterations, parallelism — OWASP-ish baseline.
   memoryCost: 19456,
   timeCost: 2,
