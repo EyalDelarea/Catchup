@@ -1210,6 +1210,70 @@ describe("GET /api/total-summary", () => {
   });
 });
 
+// ── GET /api/ask ──────────────────────────────────────────────────────────────
+
+describe("GET /api/ask", () => {
+  let pool: pg.Pool;
+  let base: string;
+  let server: ReturnType<typeof createServer>;
+
+  const fakeRetriever = {
+    retrieve: async () => [
+      {
+        messageId: 101,
+        chat: "גיבוש",
+        sender: "יוסי",
+        sentAt: new Date("2026-06-09T09:00:00Z"),
+        content: "ערב יום שני",
+        score: 1,
+      },
+    ],
+  };
+
+  class AskFakeSummarizer implements StreamingSummarizer {
+    async *summarizeStream() {
+      yield "קבעת עם יוסי [1].";
+    }
+  }
+
+  beforeAll(async () => {
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
+    server = createServer({
+      pool,
+      summarizer: new AskFakeSummarizer(),
+      tokenBudget: 24000,
+      model: "fake",
+      askRetrievers: [fakeRetriever],
+    });
+    await new Promise<void>((r) => server.listen(0, r));
+    base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  }, 120_000);
+
+  afterAll(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+    await pool?.end();
+  }, 30_000);
+
+  it("GET /api/ask streams tokens then citations then done", async () => {
+    const r = await fetch(`${base}/api/ask?q=${encodeURIComponent("מתי קבעת עם יוסי?")}`);
+    const text = await r.text();
+
+    expect(r.headers.get("content-type")).toContain("text/event-stream");
+    expect(text).toContain("event: token");
+    expect(text).toContain("event: citations");
+    expect(text).toContain("101");
+    expect(text).toContain("event: done");
+  });
+
+  it("missing q parameter emits error event", async () => {
+    const r = await fetch(`${base}/api/ask`);
+    const text = await r.text();
+    expect(r.headers.get("content-type")).toContain("text/event-stream");
+    expect(text).toContain("event: error");
+    expect(text).toContain("missing q parameter");
+  });
+});
+
 // ── Static asset handler ──────────────────────────────────────────────────────
 
 describe("static asset handler", () => {
