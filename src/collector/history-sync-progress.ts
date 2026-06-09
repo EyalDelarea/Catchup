@@ -63,9 +63,7 @@ export function createHistorySyncProgress(opts: HistorySyncProgressOptions): His
   };
 
   const emitComplete = () => {
-    log(
-      `[history-sync] sync complete: ${fmt(total)} message(s) received across ${fmt(batches)} batch(es)`,
-    );
+    log(`sync complete: ${fmt(total)} message(s) received across ${fmt(batches)} batch(es)`);
     reset();
   };
 
@@ -78,7 +76,7 @@ export function createHistorySyncProgress(opts: HistorySyncProgressOptions): His
       const t = now();
       if (t - lastLoggedAt >= throttleMs) {
         lastLoggedAt = t;
-        log(`[history-sync] syncing… ${fmt(total)} message(s) received`);
+        log(`syncing… ${fmt(total)} message(s) received`);
       }
 
       // (Re)arm the idle timer — the summary fires once batches go quiet.

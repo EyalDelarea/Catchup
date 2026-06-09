@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { getLogger } from "../logging/log.js";
 import { prepareSummary } from "./prepare.js";
 import { selectActiveGroups } from "./select-active-groups.js";
 import type { SummaryPrompt } from "./summarizer.js";
@@ -6,6 +7,8 @@ import { buildTotalPrompt } from "./total-prompt.js";
 import type { PerChatSummary, TotalSummaryOutput } from "./total-types.js";
 
 export type { PerChatSummary, TotalSummaryOutput };
+
+const log = getLogger("summary");
 
 export type GenerateTotalSummaryDeps = {
   pool: pg.Pool;
@@ -78,8 +81,7 @@ export async function generateTotalSummary(
         summary,
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`[generateTotalSummary] chat "${g.name}" failed, skipping: ${msg}\n`);
+      log.warn({ err, chat: g.name }, "chat failed, skipping");
       if (opts.signal?.aborted) break;
     }
   }

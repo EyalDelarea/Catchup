@@ -53,10 +53,19 @@ SERVE_PREFIX="${C_SERVE}[serve] ${C_RESET}"
 # Pretty-print pino JSON logs into readable, colored lines. Non-JSON lines pass
 # through unchanged, so plain console.log output and the QR survive. Falls back
 # to a passthrough (cat) if pino-pretty is somehow unavailable.
-PRETTY="cat"
-if [ -x node_modules/.bin/pino-pretty ]; then
-  PRETTY="node_modules/.bin/pino-pretty --translateTime SYS:HH:MM:ss --ignore pid,hostname --colorize"
-fi
+# A function (not a var) so the multi-word --messageFormat survives unquoted
+# pipe expansion. Renders the source inline: "[12:20:24] INFO (collector): connected".
+pretty() {
+  if [ -x node_modules/.bin/pino-pretty ]; then
+    # --singleLine keeps each log on ONE line (extra fields as a compact trailing
+    # object instead of an indented block). `component` is ignored from that
+    # object since it's already shown inline as "(component)" via messageFormat.
+    node_modules/.bin/pino-pretty --translateTime SYS:HH:MM:ss --ignore pid,hostname,component \
+      --colorize --singleLine --messageFormat '{if component}({component}) {end}{msg}'
+  else
+    cat
+  fi
+}
 
 # Media analysis (analyze.image/.video) re-enabled so NEW media gets captioned
 # going forward (gemma4:26b + think:false, multi-frame video). It shares the model
@@ -65,10 +74,10 @@ fi
 # summarize.group runs the scheduled per-chat digest (feature 011);
 # summarize.total runs the scheduled cross-chat total summary.
 ( npx tsx src/workers/worker.ts --types import.file,transcribe.voicenote,analyze.image,analyze.video,summarize.group,summarize.total 2>&1 \
-    | $PRETTY \
+    | pretty \
     | while IFS= read -r l; do printf '%s %s\n' "$WORKER_PREFIX" "$l"; done ) &
 ( npx tsx src/cli.ts serve --collect 2>&1 \
-    | $PRETTY \
+    | pretty \
     | while IFS= read -r l; do printf '%s %s\n' "$SERVE_PREFIX" "$l"; done ) &
 
 cat <<'EOF'
