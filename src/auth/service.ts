@@ -1,5 +1,4 @@
 import type pg from "pg";
-import { createTenant } from "../db/repositories/tenants.js";
 import {
   consumeTokenByHash,
   createEmailToken,
@@ -10,9 +9,10 @@ import {
   deleteSessionByTokenHash,
   findSessionByTokenHash,
 } from "../db/repositories/sessions.js";
+import { createTenant } from "../db/repositories/tenants.js";
 import {
-  EmailTakenError,
   createUser,
+  EmailTakenError,
   findUserForLogin,
   getUserById,
   markEmailVerified,
@@ -170,7 +170,14 @@ export async function verifyEmail(deps: AuthDeps, rawToken: string): Promise<boo
 export async function requestPasswordReset(deps: AuthDeps, email: string): Promise<void> {
   const user = await findUserForLogin(deps.operatorPool, email);
   if (!user) return;
-  await issueEmailToken(deps, user.tenantId, user.id, "reset", "Reset your Catchup password", "reset");
+  await issueEmailToken(
+    deps,
+    user.tenantId,
+    user.id,
+    "reset",
+    "Reset your Catchup password",
+    "reset",
+  );
 }
 
 /** Complete a password reset using a valid reset token. Returns true on success. */

@@ -1,20 +1,20 @@
 import type pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { EmailTakenError } from "../db/repositories/users.js";
 import { appPool, createTestDatabase, operatorPool } from "../test/db.js";
 import {
   type AuthDeps,
   ConsentRequiredError,
-  type Mailer,
   currentUser,
   login,
   logout,
+  type Mailer,
   register,
   requestPasswordReset,
   resetPassword,
   resolveSession,
   verifyEmail,
 } from "./service.js";
-import { EmailTakenError } from "../db/repositories/users.js";
 
 class CapturingMailer implements Mailer {
   sent: { to: string; subject: string; body: string }[] = [];
@@ -150,7 +150,9 @@ describe("password reset", () => {
 
     expect(await resetPassword(deps, token, "new-pw-67890")).toBe(true);
     expect(await login(deps, { email: "reset@acme.test", password: "old-pw-12345" })).toBeNull();
-    expect(await login(deps, { email: "reset@acme.test", password: "new-pw-67890" })).not.toBeNull();
+    expect(
+      await login(deps, { email: "reset@acme.test", password: "new-pw-67890" }),
+    ).not.toBeNull();
     expect(await resetPassword(deps, token, "third-pw-111")).toBe(false); // token single-use
   });
 });

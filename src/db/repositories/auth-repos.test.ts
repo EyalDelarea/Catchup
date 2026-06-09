@@ -2,18 +2,10 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { appPool, createTestDatabase, operatorPool } from "../../test/db.js";
 import { DEFAULT_TENANT_ID, withTenant } from "../tenant-context.js";
-import {
-  consumeTokenByHash,
-  createEmailToken,
-  findActiveTokenByHash,
-} from "./email-tokens.js";
-import {
-  createSession,
-  deleteSessionByTokenHash,
-  findSessionByTokenHash,
-} from "./sessions.js";
-import { EmailTakenError, createUser, findUserForLogin, getUserById } from "./users.js";
+import { consumeTokenByHash, createEmailToken, findActiveTokenByHash } from "./email-tokens.js";
+import { createSession, deleteSessionByTokenHash, findSessionByTokenHash } from "./sessions.js";
 import { createTenant } from "./tenants.js";
+import { createUser, EmailTakenError, findUserForLogin, getUserById } from "./users.js";
 
 /**
  * T2 auth-layer isolation + auth-before-tenant. Connects as catchup_app (RLS enforced) and
@@ -70,7 +62,9 @@ describe("users: creation, isolation, login lookup", () => {
 
   it("enforces ONE account per email across the whole instance", async () => {
     await expect(
-      withTenant(app, tenantB, (c) => createUser(c, { email: "alice@example.com", passwordHash: "x" })),
+      withTenant(app, tenantB, (c) =>
+        createUser(c, { email: "alice@example.com", passwordHash: "x" }),
+      ),
     ).rejects.toBeInstanceOf(EmailTakenError);
   });
 });

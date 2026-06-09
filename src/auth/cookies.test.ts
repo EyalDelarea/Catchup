@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SESSION_COOKIE, parseCookies, serializeSessionCookie } from "./cookies.js";
+import { parseCookies, SESSION_COOKIE, serializeSessionCookie } from "./cookies.js";
 
 describe("cookies", () => {
   it("parses a cookie header into a map", () => {
