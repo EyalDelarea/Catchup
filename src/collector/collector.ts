@@ -26,6 +26,13 @@ import type { JobBus } from "../jobs/job-bus.js";
 import { extractMediaDescriptor, type MediaDescriptor } from "./media-descriptor.js";
 import { mapWaMessage } from "./message-mapper.js";
 
+/**
+ * Media kinds that the analysis pipeline can handle. Only these kinds get a
+ * `message_media` descriptor row — sticker and document rows are never
+ * selected by `selectPendingMedia` and would sit in `'pending'` forever.
+ */
+const ANALYZABLE_MEDIA_KINDS = new Set(["image", "video", "audio"]);
+
 export type CollectorOptions = {
   /** Root data directory (from config.dataDir). Live voice-note media is written
    *  under `<dataDir>/media/live/`. */
@@ -199,15 +206,23 @@ export async function handleIncomingMessage(
   // found, this is a duplicate: optionally (re)attach the media descriptor so a
   // full re-pull enables deferred download, then short-circuit BEFORE the
   // expensive name resolution / participant upsert / media download / insert.
-  const existingId = mapped.externalId
+  const existing = mapped.externalId
     ? await getMessageIdByExternalId(client, groupId, mapped.externalId)
     : null;
-  if (existingId !== null) {
-    if (opts.persistMediaDescriptor && mapped.messageType === "media") {
+  if (existing !== null) {
+    // Re-pull of a duplicate: (re)attach the descriptor so deferred download
+    // works — but never resurrect a pruned message, and reflect already-present
+    // media so the backfill loop doesn't re-download it.
+    if (
+      opts.persistMediaDescriptor &&
+      mapped.messageType === "media" &&
+      existing.mediaStatus !== "pruned"
+    ) {
       try {
         const descriptor = extractMediaDescriptor(waMessage);
-        if (descriptor) {
-          await opts.persistMediaDescriptor(existingId, descriptor, "pending");
+        if (descriptor && ANALYZABLE_MEDIA_KINDS.has(descriptor.mediaKind)) {
+          const state = existing.mediaStatus === "present" ? "present" : "pending";
+          await opts.persistMediaDescriptor(existing.id, descriptor, state);
         }
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
@@ -391,12 +406,15 @@ export async function handleIncomingMessage(
   const isNew = result.inserted > 0;
 
   // --- Persist media descriptor for new media rows (deferred-download support) ---
+  // Only store descriptors for kinds the analysis pipeline can handle — stickers
+  // and documents are never selected by selectPendingMedia and would sit in
+  // 'pending' forever (table-bloat / dead rows).
   if (isNew && opts.persistMediaDescriptor && mapped.messageType === "media") {
     try {
       const messageId = result.ids[0];
       if (messageId !== undefined) {
         const descriptor = extractMediaDescriptor(waMessage);
-        if (descriptor) {
+        if (descriptor && ANALYZABLE_MEDIA_KINDS.has(descriptor.mediaKind)) {
           const state = normalized.mediaStatus === "present" ? "present" : "pending";
           await opts.persistMediaDescriptor(messageId, descriptor, state);
         }

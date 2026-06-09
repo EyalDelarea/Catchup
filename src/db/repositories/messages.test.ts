@@ -590,11 +590,28 @@ describe("messages read queries", () => {
   // -------------------------------------------------------------------------
 
   describe("getMessageIdByExternalId", () => {
-    it("returns the row id or null", async () => {
+    it("returns { id, mediaStatus } for an existing row and null when not found", async () => {
       const groupId = await seedGroup("getid-basic-group");
       const id = await seedMessageWithExternalId(groupId, "EXT-1");
-      expect(await getMessageIdByExternalId(pool, groupId, "EXT-1")).toBe(id);
+
+      const result = await getMessageIdByExternalId(pool, groupId, "EXT-1");
+      expect(result).not.toBeNull();
+      expect(result!.id).toBe(id);
+      // seedMessageWithExternalId uses makeMsg which has mediaStatus: null
+      expect(result!.mediaStatus).toBeNull();
+
       expect(await getMessageIdByExternalId(pool, groupId, "NOPE")).toBeNull();
+    });
+
+    it("reflects the actual media_status stored on the row", async () => {
+      const groupId = await seedGroup("getid-mediastatus-group");
+      const id = await seedMessageWithExternalId(groupId, "EXT-MS-1");
+      await markMessageMediaPresent(pool, id, "/tmp/test.jpg");
+
+      const result = await getMessageIdByExternalId(pool, groupId, "EXT-MS-1");
+      expect(result).not.toBeNull();
+      expect(result!.id).toBe(id);
+      expect(result!.mediaStatus).toBe("present");
     });
   });
 

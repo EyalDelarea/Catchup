@@ -177,22 +177,26 @@ export async function messageExistsByExternalId(
 }
 
 /**
- * Return the primary-key `id` of the message identified by (group_id, external_id),
- * or null when no such row exists.
+ * Return the primary-key `id` and `media_status` of the message identified by
+ * (group_id, external_id), or null when no such row exists.
  *
- * Used by the deferred-media backfill to resolve the row that needs a media
- * descriptor attached after a re-pull delivers the file.
+ * Used by the live collector's dedup branch to (re)attach a media descriptor on
+ * a history re-pull while avoiding re-downloads of already-present or intentionally
+ * pruned media.
  */
 export async function getMessageIdByExternalId(
   client: pg.Pool | pg.PoolClient,
   groupId: number,
   externalId: string,
-): Promise<number | null> {
-  const { rows } = await client.query<{ id: string }>(
-    `SELECT id FROM messages WHERE group_id = $1 AND external_id = $2 LIMIT 1`,
-    [groupId, externalId],
-  );
-  return rows[0] ? Number(rows[0].id) : null;
+): Promise<{ id: number; mediaStatus: "present" | "missing" | "pruned" | null } | null> {
+  const { rows } = await client.query<{
+    id: string;
+    media_status: "present" | "missing" | "pruned" | null;
+  }>(`SELECT id, media_status FROM messages WHERE group_id = $1 AND external_id = $2 LIMIT 1`, [
+    groupId,
+    externalId,
+  ]);
+  return rows[0] ? { id: Number(rows[0].id), mediaStatus: rows[0].media_status } : null;
 }
 
 /**

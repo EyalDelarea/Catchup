@@ -87,6 +87,40 @@ function makeFakeWAImageMessage(
   } as unknown as WAMessage;
 }
 
+function makeFakeWAStickerMessage(
+  overrides: Partial<{
+    id: string;
+    remoteJid: string;
+    pushName: string;
+    timestampSeconds: number;
+  }> = {},
+): WAMessage {
+  const {
+    id = "LIVE_STICKER_001",
+    remoteJid = "111222333-444555666@g.us",
+    pushName = "StickerSender",
+    timestampSeconds = 1700009000,
+  } = overrides;
+
+  return {
+    key: {
+      id,
+      remoteJid,
+      fromMe: false,
+    },
+    messageTimestamp: timestampSeconds,
+    pushName,
+    message: {
+      stickerMessage: {
+        mediaKey: new Uint8Array([5, 6, 7, 8]),
+        directPath: "/v/t62.7117-24/fake-sticker-path",
+        url: "https://mmg.whatsapp.net/fake-sticker-url",
+        mimetype: "image/webp",
+      },
+    },
+  } as unknown as WAMessage;
+}
+
 function makeFakeWAVoiceNoteMessage(
   overrides: Partial<{
     id: string;
@@ -664,6 +698,107 @@ describe("collector integration", () => {
     expect(recorded).toHaveLength(1);
     expect(recorded[0]!.kind).toBe("image");
     expect(recorded[0]!.state).toBe("present");
+  });
+
+  // Fix 3: sticker/document descriptors must never be persisted
+  it("descriptor: sticker message does NOT persist a descriptor (non-analyzable kind)", async () => {
+    const recorded: Recorded[] = [];
+    const persistMediaDescriptor = async (
+      messageId: number,
+      descriptor: { mediaKind: string },
+      state: "pending" | "present",
+    ) => {
+      recorded.push({ messageId, kind: descriptor.mediaKind, state });
+    };
+
+    const waMsg = makeFakeWAStickerMessage({
+      id: "DESC_STICKER_001",
+      remoteJid: "desc-sticker@g.us",
+      pushName: "StickerSender",
+      timestampSeconds: 1700053000,
+    });
+
+    const stored = await handleIncomingMessage(pool, waMsg, { dataDir, persistMediaDescriptor });
+    expect(stored).toBe(true);
+    // Stickers are not analyzable — no message_media row should be created.
+    expect(recorded).toHaveLength(0);
+  });
+
+  // Fix 4a: re-pull of a legacy already-present message must yield state='present'
+  it("descriptor: re-pull of a message with media_status='present' persists descriptor with state 'present'", async () => {
+    const waMsg = makeFakeWAImageMessage({
+      id: "DESC_LEGACY_PRESENT_001",
+      remoteJid: "desc-legacy-present@g.us",
+      pushName: "LegacySender",
+      timestampSeconds: 1700054000,
+    });
+
+    // First insertion with a live downloader (sets media_status='present'), but
+    // WITHOUT a persistMediaDescriptor — simulates a legacy row collected before
+    // the deferred-media feature was added.
+    const first = await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      downloadImage: async () => Buffer.from([0xff, 0xd8, 0xff]),
+    });
+    expect(first).toBe(true);
+
+    // Verify the row has media_status='present' but no message_media row yet.
+    const { rows } = await pool.query<{ id: string; media_status: string }>(
+      `SELECT id, media_status FROM messages WHERE external_id = $1`,
+      ["DESC_LEGACY_PRESENT_001"],
+    );
+    expect(rows[0]!.media_status).toBe("present");
+
+    // Second call (duplicate re-pull) — the descriptor spy must be called with
+    // state='present' so the backfill loop won't re-download the existing file.
+    const recorded: Recorded[] = [];
+    const persistMediaDescriptor = async (
+      messageId: number,
+      descriptor: { mediaKind: string },
+      state: "pending" | "present",
+    ) => {
+      recorded.push({ messageId, kind: descriptor.mediaKind, state });
+    };
+
+    const second = await handleIncomingMessage(pool, waMsg, { dataDir, persistMediaDescriptor });
+    expect(second).toBe(false); // still a duplicate
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.kind).toBe("image");
+    expect(recorded[0]!.state).toBe("present"); // NOT 'pending'
+  });
+
+  // Fix 4b: re-pull of a pruned message must not call persistMediaDescriptor at all
+  it("descriptor: re-pull of a message with media_status='pruned' does NOT persist a descriptor", async () => {
+    const waMsg = makeFakeWAImageMessage({
+      id: "DESC_PRUNED_001",
+      remoteJid: "desc-pruned@g.us",
+      pushName: "PrunedSender",
+      timestampSeconds: 1700055000,
+    });
+
+    // First insertion (no downloader, no descriptor).
+    const first = await handleIncomingMessage(pool, waMsg, { dataDir });
+    expect(first).toBe(true);
+
+    // Manually mark the row's media_status as 'pruned' to simulate a message
+    // whose media was intentionally discarded.
+    await pool.query(`UPDATE messages SET media_status='pruned' WHERE external_id = $1`, [
+      "DESC_PRUNED_001",
+    ]);
+
+    // Second call (duplicate re-pull) — spy must NOT be called for a pruned row.
+    const recorded: Recorded[] = [];
+    const persistMediaDescriptor = async (
+      messageId: number,
+      descriptor: { mediaKind: string },
+      state: "pending" | "present",
+    ) => {
+      recorded.push({ messageId, kind: descriptor.mediaKind, state });
+    };
+
+    const second = await handleIncomingMessage(pool, waMsg, { dataDir, persistMediaDescriptor });
+    expect(second).toBe(false); // still a duplicate
+    expect(recorded).toHaveLength(0); // pruned → skip entirely
   });
 });
 
