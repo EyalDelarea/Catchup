@@ -41,6 +41,9 @@ services:
       - "3100:3100"
     volumes:
       - ./ops/loki/config.yml:/etc/loki/local-config.yaml:ro
+      # Durable log storage — survives container recreate and host reboot.
+      # (Previously logs lived in the container's /tmp and were lost on restart.)
+      - loki-data:/loki
     command: -config.file=/etc/loki/local-config.yaml
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:3100/ready || exit 1"]
@@ -68,3 +71,4 @@ services:
 
 volumes:
   pgdata:
+  loki-data:

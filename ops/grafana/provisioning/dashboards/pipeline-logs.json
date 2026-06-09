@@ -1,92 +1,176 @@
 {
-  "title": "Pipeline Logs",
+  "title": "Catchup Logs",
   "uid": "catchup-pipeline",
   "schemaVersion": 38,
-  "version": 1,
-  "refresh": "10s",
-  "time": { "from": "now-1h", "to": "now" },
-  "panels": [
-    {
-      "id": 1,
-      "type": "logs",
-      "title": "All pipeline logs",
-      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
-      "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [
-        {
-          "expr": "{service=\"catchup\"}",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ],
-      "options": {
-        "showLabels": true,
-        "showTime": true,
-        "wrapLogMessage": true,
-        "sortOrder": "Descending"
-      }
-    },
-    {
-      "id": 2,
-      "type": "logs",
-      "title": "Filter by jobId (use variable $jobId)",
-      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
-      "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [
-        {
-          "expr": "{service=\"catchup\"} | json | jobId=`$jobId`",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ],
-      "options": {
-        "showLabels": true,
-        "showTime": true,
-        "wrapLogMessage": true,
-        "sortOrder": "Descending"
-      }
-    },
-    {
-      "id": 3,
-      "type": "logs",
-      "title": "Filter by groupId (use variable $groupId)",
-      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
-      "datasource": { "type": "loki", "uid": "loki" },
-      "targets": [
-        {
-          "expr": "{service=\"catchup\"} | json | groupId=`$groupId`",
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ],
-      "options": {
-        "showLabels": true,
-        "showTime": true,
-        "wrapLogMessage": true,
-        "sortOrder": "Descending"
-      }
-    }
-  ],
+  "version": 4,
+  "refresh": "5s",
+  "time": { "from": "now-6h", "to": "now" },
   "templating": {
     "list": [
       {
-        "name": "jobId",
-        "type": "textbox",
-        "label": "Job ID",
-        "current": { "value": "" }
+        "name": "component",
+        "type": "query",
+        "label": "Component",
+        "datasource": { "type": "loki", "uid": "loki" },
+        "query": "label_values({service_name=\"catchup\"}, component)",
+        "definition": "label_values({service_name=\"catchup\"}, component)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": { "text": "All", "value": "$__all" }
       },
       {
-        "name": "groupId",
-        "type": "textbox",
-        "label": "Group ID",
-        "current": { "value": "" }
-      },
-      {
-        "name": "messageId",
-        "type": "textbox",
-        "label": "Message ID",
-        "current": { "value": "" }
+        "name": "level",
+        "type": "custom",
+        "label": "Level",
+        "query": "debug : 20,info : 30,warning : 40,error : 50",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": { "text": "All", "value": "$__all" }
       }
     ]
-  }
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total logs (range)",
+      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"catchup\"}[$__range]))",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "text" }, "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "area" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Warnings (range)",
+      "gridPos": { "x": 8, "y": 0, "w": 8, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"catchup\", level=\"40\"}[$__range]))",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "yellow" }, "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Errors (range)",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"catchup\", level=\"50\"}[$__range]))",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" }, "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Log volume by level",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        { "expr": "sum(count_over_time({service_name=\"catchup\", level=\"30\"}[$__interval]))", "legendFormat": "info", "refId": "A" },
+        { "expr": "sum(count_over_time({service_name=\"catchup\", level=\"40\"}[$__interval]))", "legendFormat": "warning", "refId": "B" },
+        { "expr": "sum(count_over_time({service_name=\"catchup\", level=\"50\"}[$__interval]))", "legendFormat": "error", "refId": "C" },
+        { "expr": "sum(count_over_time({service_name=\"catchup\", level=\"20\"}[$__interval]))", "legendFormat": "debug", "refId": "D" }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 70, "stacking": { "mode": "normal" } }, "unit": "short" },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byName", "options": "warning" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }] },
+          { "matcher": { "id": "byName", "options": "info" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] },
+          { "matcher": { "id": "byName", "options": "debug" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Log volume by component",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum by (component) (count_over_time({service_name=\"catchup\"}[$__interval]))",
+          "legendFormat": "{{component}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 70, "stacking": { "mode": "normal" } }, "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 6,
+      "type": "logs",
+      "title": "⚠️ Errors & warnings",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 9 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{service_name=\"catchup\", level=~\"40|50\"} | json | line_format \"{{.component}}: {{.msg}}{{if .reason}} — {{.reason}}{{end}}\"",
+          "refId": "A"
+        }
+      ],
+      "options": { "showLabels": true, "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    },
+    {
+      "id": 7,
+      "type": "logs",
+      "title": "All logs (filter: $component / $level)",
+      "gridPos": { "x": 0, "y": 21, "w": 12, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{service_name=\"catchup\", component=~\"$component\", level=~\"$level\"} | json | line_format \"{{.component}}: {{.msg}}{{if .reason}} — {{.reason}}{{end}}\"",
+          "refId": "A"
+        }
+      ],
+      "options": { "showLabels": true, "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    },
+    {
+      "id": 8,
+      "type": "logs",
+      "title": "System Lifecycle (boot / ready / shutdown / connect / reconnect)",
+      "gridPos": { "x": 12, "y": 21, "w": 12, "h": 10 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{service_name=\"catchup\", component=\"lifecycle\"} | json | line_format \"{{.event}}{{if .proc}} ({{.proc}}){{end}}{{if .signal}} [{{.signal}}]{{end}}\"",
+          "refId": "A"
+        }
+      ],
+      "options": { "showLabels": false, "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    },
+    {
+      "id": 9,
+      "type": "text",
+      "title": "",
+      "gridPos": { "x": 0, "y": 31, "w": 24, "h": 2 },
+      "options": {
+        "mode": "markdown",
+        "content": "To browse/search **all** logs interactively, use **[Logs Drilldown](/a/grafana-lokiexplore-app/explore)** (service `catchup`, drill by `component`/`level`) or **[Explore](/explore)**."
+      }
+    }
+  ]
 }

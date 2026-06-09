@@ -4,6 +4,7 @@ import pino from "pino";
 export type Logger = PinoLogger;
 
 export type CorrelationContext = {
+  component?: string;
   jobId?: string;
   jobType?: string;
   groupId?: string;
@@ -36,7 +37,14 @@ export function createLogger(opts: LoggingOptions): Logger {
         batching: true,
         interval: 5,
         silenceErrors: true, // never surface transport errors into the app
-        labels: { app: "catchup" },
+        // `service_name` is what Grafana Logs Drilldown lists services by; `app`
+        // is kept for the existing dashboard queries ({app="catchup"}).
+        labels: { app: "catchup", service_name: "catchup" },
+        // Promote these per-line fields to Loki stream labels so Grafana Logs
+        // Drilldown can navigate by them ("show me the collector area"). Both are
+        // low-cardinality (component ~11 values, level ~4) so this is safe label
+        // design; high-cardinality ids (jobId/groupId/messageId) stay in the body.
+        propsToLabels: ["component", "level"],
       },
     },
   ];
