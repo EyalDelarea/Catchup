@@ -31,15 +31,20 @@ function nextWeekday(now: Date, weekday: number): Date {
  * next-<weekday> / <weekday> הבא|הקרוב in English and Hebrew.
  */
 export function resolveRelativeDay(question: string, now: Date): Date | null {
+  // Floor to UTC midnight so all returned dates are midnight-aligned.
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const q = question.toLowerCase();
-  // Use \b only for English (ASCII word boundary); Hebrew patterns use simple substring match.
-  if (/מחר/.test(q) || /\btomorrow\b/.test(q)) return addDays(now, 1);
-  if (/אתמול/.test(q) || /\byesterday\b/.test(q)) return addDays(now, -1);
-  if (/שבוע הבא/.test(q) || /\bnext week\b/.test(q)) return addDays(now, 7);
+  // Hebrew bare-word matches are guarded with Hebrew-letter boundaries to avoid false positives
+  // (e.g. מחר inside מחרוזת). English uses standard \b word boundaries.
+  if (/(?<![א-ת])מחר(?![א-ת])/.test(q) || /\btomorrow\b/.test(q)) return addDays(today, 1);
+  if (/(?<![א-ת])אתמול(?![א-ת])/.test(q) || /\byesterday\b/.test(q)) return addDays(today, -1);
+  if (/שבוע הבא/.test(q) || /\bnext week\b/.test(q)) return addDays(today, 7);
 
   for (const [name, idx] of Object.entries(WEEKDAYS)) {
-    const re = new RegExp(`(next\\s+${name})|(${name}\\s+(הבא|הקרוב))`);
-    if (re.test(q)) return nextWeekday(now, idx);
+    // \b after the English name prevents matching "next mondays" etc.
+    // The Hebrew branch already requires an explicit suffix (הבא|הקרוב).
+    const re = new RegExp(`(next\\s+${name}\\b)|(${name}\\s+(הבא|הקרוב))`);
+    if (re.test(q)) return nextWeekday(today, idx);
   }
   return null;
 }
@@ -50,8 +55,10 @@ export function resolveRelativeDay(question: string, now: Date): Date | null {
  * day. `now` is always injected for deterministic tests.
  */
 export function resolveWindow(question: string, now: Date, lookbackDays = 90): AskWindow {
-  const since = addDays(now, -lookbackDays);
-  let until = addDays(now, FUTURE_BUFFER_DAYS);
+  // Floor to UTC midnight so since/until boundaries are always day-aligned.
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const since = addDays(today, -lookbackDays);
+  let until = addDays(today, FUTURE_BUFFER_DAYS);
   const ref = resolveRelativeDay(question, now);
   if (ref && ref.getTime() > until.getTime()) until = addDays(ref, FUTURE_BUFFER_DAYS);
   return { since, until };
