@@ -34,6 +34,7 @@ const SCOPED: Record<string, string[]> = {
   summaries: ["tenant_id", "group_id", "created_at"],
   total_summaries: ["tenant_id", "created_at"],
   media_analyses: ["tenant_id", "message_id"],
+  message_media: ["tenant_id", "message_id"],
   read_watermarks: ["tenant_id", "group_id"],
   job_runs: ["tenant_id", "status", "created_at"],
   scheduler_state: ["tenant_id", "slot_key"],

@@ -38,6 +38,7 @@ const SCOPED_TABLES_DELETE_ORDER = [
   "read_watermarks",
   "transcripts",
   "media_analyses",
+  "message_media",
   "messages",
   "summaries",
   "total_summaries",

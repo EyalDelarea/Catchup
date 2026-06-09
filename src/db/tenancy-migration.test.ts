@@ -21,6 +21,7 @@ const SCOPED_TABLES = [
   "summaries",
   "total_summaries",
   "media_analyses",
+  "message_media",
   "read_watermarks",
   "job_runs",
   "scheduler_state",

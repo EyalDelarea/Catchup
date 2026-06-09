@@ -14,8 +14,8 @@ import { runMigrationsUp } from "./migrate.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = path.resolve(__dirname, "migrations");
 
-// Number of migrations that predate tenancy (1748649600000 .. 1748649600019).
-const PRE_TENANCY_COUNT = 20;
+// Number of migrations that predate tenancy (1748649600000 .. 1748649600020_create_message_media).
+const PRE_TENANCY_COUNT = 21;
 const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
 
 const SCOPED_TABLES = [
@@ -27,6 +27,7 @@ const SCOPED_TABLES = [
   "summaries",
   "total_summaries",
   "media_analyses",
+  "message_media",
   "read_watermarks",
   "job_runs",
   "scheduler_state",
@@ -60,6 +61,10 @@ beforeAll(async () => {
   const messageId = Number(m[0].id);
   await pool.query(
     `INSERT INTO transcripts (message_id, status, engine, transcript) VALUES ($1, 'completed', 'whisper', 'hi')`,
+    [messageId],
+  );
+  await pool.query(
+    `INSERT INTO message_media (message_id, media_kind, download_state) VALUES ($1, 'image', 'pending')`,
     [messageId],
   );
   await pool.query(
