@@ -105,7 +105,7 @@ starts the worker + web server + live collector together.
 |---|---|
 | `collector/` | Baileys live collector, message mapping, name resolution, **outbound-guard** (hardened so it can never send), backfill, session. |
 | `importer/` | WhatsApp `.txt`/`.zip` parsing, normalization, dedupe, bulk import, media extraction. |
-| `db/` | Postgres client, 18 migrations, repositories (groups, messages, summaries, transcripts, media-analyses, job-runs, watermarks, scheduler-state, status-snapshots, service-status). |
+| `db/` | Postgres client, migrations, repositories (tenants, groups, messages, summaries, transcripts, media-analyses, job-runs, watermarks, scheduler-state, status-snapshots, service-status). **Tenancy foundation (019):** a `tenants` table + mandatory `tenant_id` on every tenant-scoped table, isolated by Postgres RLS (policy keys off the `app.tenant_id` GUC) plus an app-layer `withTenant()`. Existing single-user data runs as a fixed default tenant; the live app still connects as the owner until the per-request cutover (T2). |
 | `jobs/` | Job bus abstraction — in-memory bus (tests) + RabbitMQ bus (prod), job types, run recorder. |
 | `workers/` | Worker process + handlers: `import-file`, `transcribe-voicenote`, `analyze-media`, `summarize-group`. |
 | `transcription/` | Python `faster-whisper` worker (`worker.py`), Node wrapper, ivrit-whisper integration. |

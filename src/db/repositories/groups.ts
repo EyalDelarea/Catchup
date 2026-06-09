@@ -25,7 +25,7 @@ export async function upsertGroup(
     `
     INSERT INTO groups (name, source)
     VALUES ($1, $2)
-    ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+    ON CONFLICT (tenant_id, name) DO UPDATE SET name = EXCLUDED.name
     RETURNING id
     `,
     [input.name, input.source],
@@ -122,7 +122,7 @@ export async function upsertGroupByCanonicalJid(
     `
     INSERT INTO groups (whatsapp_id, name, source)
     VALUES ($1, $2, $3)
-    ON CONFLICT (name) DO UPDATE
+    ON CONFLICT (tenant_id, name) DO UPDATE
       SET whatsapp_id = EXCLUDED.whatsapp_id,
           source = CASE
             WHEN groups.source = 'import' THEN 'mixed'

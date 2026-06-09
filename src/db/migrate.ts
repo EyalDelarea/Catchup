@@ -14,6 +14,7 @@ export const DEFAULT_MIGRATIONS_DIR = path.resolve(__dirname, "migrations");
 export async function runMigrationsUp(
   databaseUrl?: string,
   migrationsDir: string = DEFAULT_MIGRATIONS_DIR,
+  count: number = Infinity,
 ): Promise<void> {
   const url = databaseUrl ?? loadConfig().databaseUrl;
   await runner({
@@ -21,8 +22,10 @@ export async function runMigrationsUp(
     dir: migrationsDir,
     direction: "up",
     migrationsTable: "pgmigrations",
-    // Run all pending migrations
-    count: Infinity,
+    // Number of pending migrations to apply (default: all). A finite count is used
+    // by tests to stop before a given migration (e.g. seed pre-tenancy data, then
+    // run the tenancy migrations to verify zero-loss backfill).
+    count,
     // Suppress noisy console output
     log: () => {},
   });

@@ -318,7 +318,7 @@ describe("messages read queries", () => {
       // Create a group with whatsapp_id
       const groupJid = "anchor-test-group@g.us";
       await pool.query(
-        `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (name) DO NOTHING`,
+        `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (tenant_id, name) DO NOTHING`,
         [groupJid, "anchor-live-group"],
       );
       const { rows: gRows } = await pool.query(`SELECT id FROM groups WHERE whatsapp_id = $1`, [
@@ -375,7 +375,7 @@ describe("messages read queries", () => {
     it("coalesces from_me=null to false", async () => {
       const groupJid = "anchor-fromme-null@g.us";
       await pool.query(
-        `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (name) DO NOTHING`,
+        `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (tenant_id, name) DO NOTHING`,
         [groupJid, "anchor-fromme-null-group"],
       );
       const { rows: gRows } = await pool.query(`SELECT id FROM groups WHERE whatsapp_id = $1`, [
@@ -405,7 +405,7 @@ describe("messages read queries", () => {
     it("orders by (sent_at DESC, id DESC) to pick the newest", async () => {
       const groupJid = "anchor-order@g.us";
       await pool.query(
-        `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (name) DO NOTHING`,
+        `INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live') ON CONFLICT (tenant_id, name) DO NOTHING`,
         [groupJid, "anchor-order-group"],
       );
       const { rows: gRows } = await pool.query(`SELECT id FROM groups WHERE whatsapp_id = $1`, [
