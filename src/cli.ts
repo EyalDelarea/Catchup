@@ -1246,6 +1246,19 @@ program
           `   All chats: ${rows[0]?.c ?? 0} messages across ${rows[0]?.g ?? 0} chats, oldest ${rows[0]?.oldest ?? "none"}`,
         );
       }
+      // Onboarding parity: resolve group display names from WhatsApp's directory
+      // so onboarding ends with human names, not JIDs (mirrors collect/serve).
+      try {
+        const { resolveAllGroupNames } = await import("./collector/name-resolver.js");
+        const { resolved } = await resolveAllGroupNames(pool, {
+          groupSubject: (jid: string) => session.groupSubject(jid),
+        });
+        if (resolved > 0) console.log(`[name-resolver] resolved ${resolved} group name(s).`);
+      } catch (err) {
+        process.stderr.write(
+          `[name-resolver] full-sync resolution error: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
       session.stop();
       await pool.end().catch(() => {});
       process.exit(0);
