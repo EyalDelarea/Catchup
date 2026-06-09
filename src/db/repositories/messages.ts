@@ -205,15 +205,29 @@ export async function getMessageIdByExternalId(
  * Called by the backfill loop once the media file has been successfully
  * downloaded and moved to its final storage location.
  */
+/**
+ * Mark a message's media as downloaded/present at `mediaPath`.
+ *
+ * Also records `media_filename` (basename of the path) when it is currently
+ * blank — deferred-backfill media arrives with no filename, and the vision
+ * analyzer classifies image vs. video purely from the filename extension
+ * (IMAGE_PREDICATE/VIDEO_PREDICATE). Without this, every backfilled image/video
+ * is `present` yet unanalyzable ("not a present visual media file"). An existing
+ * non-blank filename (e.g. CSV-imported `IMG-001.jpg`) is preserved.
+ */
 export async function markMessageMediaPresent(
   client: pg.Pool | pg.PoolClient,
   messageId: number,
   mediaPath: string,
 ): Promise<void> {
-  await client.query(`UPDATE messages SET media_path=$2, media_status='present' WHERE id=$1`, [
-    messageId,
-    mediaPath,
-  ]);
+  await client.query(
+    `UPDATE messages
+        SET media_path=$2,
+            media_status='present',
+            media_filename=COALESCE(NULLIF(media_filename, ''), regexp_replace($2, '^.*/', ''))
+      WHERE id=$1`,
+    [messageId, mediaPath],
+  );
 }
 
 type MessageRow = NormalizedMessage & {
