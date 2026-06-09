@@ -12,7 +12,7 @@ export async function upsertParticipant(
     `
     INSERT INTO participants (display_name)
     VALUES ($1)
-    ON CONFLICT (display_name) DO UPDATE SET display_name = EXCLUDED.display_name
+    ON CONFLICT (tenant_id, display_name) DO UPDATE SET display_name = EXCLUDED.display_name
     RETURNING id
     `,
     [displayName],
