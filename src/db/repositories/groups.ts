@@ -38,45 +38,86 @@ export async function upsertGroup(
   return Number(row.id);
 }
 
-/**
- * Upsert a group by whatsapp_id (JID) for live-collected groups.
- *
- * The groups table has UNIQUE(name) but no unique constraint on whatsapp_id,
- * so we implement this as a select-then-insert pattern in a transaction:
- *
- * 1. If a row with this whatsapp_id already exists:
- *    - If source is 'import', upgrade to 'mixed'.
- *    - Otherwise leave source as-is.
- *    - Return its id.
- * 2. If no row exists, INSERT a new one with source='live'.
- *
- * Returns the group id.
- */
-export async function upsertGroupByWhatsappId(
+type UpsertGroupByCanonicalJidInput = {
+  /** The identity the message actually arrived under. */
+  primaryJid: string;
+  /**
+   * The person's *other* identity (lid<->pn sibling), or null when there is none
+   * (e.g. a @g.us group, or an unresolvable 1:1). When the primary identity has
+   * no row but the sibling does, the message is routed into the sibling's row so
+   * a duplicate group never forms.
+   */
+  siblingJid: string | null;
+  name: string;
+  source: "live";
+};
+
+/** Look up a group row by its whatsapp_id, or null. */
+async function findGroupByJid(
   client: pg.Pool | pg.PoolClient,
-  input: UpsertGroupByWhatsappIdInput,
-): Promise<number> {
-  // Check for existing group with this whatsapp_id
-  const existing = await client.query<{ id: string; source: string }>(
+  jid: string,
+): Promise<{ id: number; source: string } | null> {
+  const { rows } = await client.query<{ id: string; source: string }>(
     `SELECT id, source FROM groups WHERE whatsapp_id = $1 LIMIT 1`,
-    [input.whatsappId],
+    [jid],
   );
+  const row = rows[0];
+  return row ? { id: Number(row.id), source: row.source } : null;
+}
 
-  if (existing.rows.length > 0) {
-    const existingRow = existing.rows[0]!;
-    const existingId = Number(existingRow.id);
+/** Upgrade a group whose source is 'import' to 'mixed' once live messages land. */
+async function upgradeImportSource(
+  client: pg.Pool | pg.PoolClient,
+  id: number,
+  source: string,
+): Promise<void> {
+  if (source === "import") {
+    await client.query(`UPDATE groups SET source = 'mixed' WHERE id = $1`, [id]);
+  }
+}
 
-    // If currently 'import', upgrade to 'mixed'
-    if (existingRow.source === "import") {
-      await client.query(`UPDATE groups SET source = 'mixed' WHERE id = $1`, [existingId]);
-    }
-
-    return existingId;
+/**
+ * Upsert a group for an incoming live message, canonicalizing the person's
+ * identity so all of their messages land in ONE row regardless of which
+ * WhatsApp identity (@lid vs @s.whatsapp.net) the message arrived under.
+ *
+ * WhatsApp's LID migration delivers a person's messages under either identity.
+ * Keying a group on the raw JID splits one person across two rows; once a CLI
+ * merge folds them, a message under the other identity re-creates the duplicate
+ * (issue #17). Routing to the existing row at ingest stops duplicates re-forming.
+ *
+ * Resolution order:
+ * 1. A row already exists under `primaryJid` → use it.
+ * 2. Else a row exists under `siblingJid` → route into it (no new row).
+ * 3. Else INSERT a new row keyed on `primaryJid`.
+ *
+ * Returns the group id plus the `canonicalJid` the row is actually keyed under,
+ * so callers can target downstream updates (e.g. display-name) at the right row.
+ */
+export async function upsertGroupByCanonicalJid(
+  client: pg.Pool | pg.PoolClient,
+  input: UpsertGroupByCanonicalJidInput,
+): Promise<{ groupId: number; canonicalJid: string }> {
+  // 1. A row already exists under the identity the message arrived under.
+  const primary = await findGroupByJid(client, input.primaryJid);
+  if (primary) {
+    await upgradeImportSource(client, primary.id, primary.source);
+    return { groupId: primary.id, canonicalJid: input.primaryJid };
   }
 
-  // No existing row — insert a new live group.
-  // The name may collide with an existing import group (by name, not JID).
-  // In that case, update its whatsapp_id and upgrade source to 'mixed'.
+  // 2. No primary row, but the person's other identity already has a chat —
+  //    route this message into it instead of spawning a duplicate.
+  if (input.siblingJid) {
+    const sibling = await findGroupByJid(client, input.siblingJid);
+    if (sibling) {
+      await upgradeImportSource(client, sibling.id, sibling.source);
+      return { groupId: sibling.id, canonicalJid: input.siblingJid };
+    }
+  }
+
+  // 3. Neither identity has a row — insert a new live group keyed on primaryJid.
+  //    The name may collide with an existing import group (by name, not JID); in
+  //    that case adopt its row and upgrade source to 'mixed'.
   const inserted = await client.query<{ id: string }>(
     `
     INSERT INTO groups (whatsapp_id, name, source)
@@ -89,16 +130,34 @@ export async function upsertGroupByWhatsappId(
           END
     RETURNING id
     `,
-    [input.whatsappId, input.name, "live"],
+    [input.primaryJid, input.name, input.source],
   );
 
   const row = inserted.rows[0];
   if (!row) {
     throw new Error(
-      `upsertGroupByWhatsappId: no row returned for whatsapp_id="${input.whatsappId}"`,
+      `upsertGroupByCanonicalJid: no row returned for whatsapp_id="${input.primaryJid}"`,
     );
   }
-  return Number(row.id);
+  return { groupId: Number(row.id), canonicalJid: input.primaryJid };
+}
+
+/**
+ * Upsert a group by whatsapp_id (JID) for live-collected groups. Thin wrapper
+ * over {@link upsertGroupByCanonicalJid} with no sibling identity (the legacy
+ * single-identity behavior). Returns the group id.
+ */
+export async function upsertGroupByWhatsappId(
+  client: pg.Pool | pg.PoolClient,
+  input: UpsertGroupByWhatsappIdInput,
+): Promise<number> {
+  const { groupId } = await upsertGroupByCanonicalJid(client, {
+    primaryJid: input.whatsappId,
+    siblingJid: null,
+    name: input.name,
+    source: input.source,
+  });
+  return groupId;
 }
 
 /**

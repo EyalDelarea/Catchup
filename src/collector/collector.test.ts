@@ -536,3 +536,181 @@ describe("collector integration", () => {
     expect(rows[0].name).toBe("Another Lid Person");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Ingest identity-canonicalization (#17): a person's messages land in ONE chat
+// regardless of which WhatsApp identity (@lid vs @s.whatsapp.net) they arrive
+// under, so LID-migration duplicates stop re-forming.
+// ---------------------------------------------------------------------------
+
+/** Build a fake 1:1 WAMessage, optionally carrying an alternate identity on the key. */
+function makeFakeWADmMessage(opts: {
+  id: string;
+  remoteJid: string;
+  remoteJidAlt?: string;
+  pushName?: string;
+  text?: string;
+  timestampSeconds?: number;
+}): WAMessage {
+  return {
+    key: {
+      id: opts.id,
+      remoteJid: opts.remoteJid,
+      remoteJidAlt: opts.remoteJidAlt,
+      fromMe: false,
+    },
+    messageTimestamp: opts.timestampSeconds ?? 1700040000,
+    pushName: opts.pushName ?? "Sender",
+    message: { conversation: opts.text ?? "hi" },
+  } as unknown as WAMessage;
+}
+
+describe("collector identity-canonicalization (#17)", () => {
+  let pool: pg.Pool;
+  let dataDir: string;
+
+  beforeAll(async () => {
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "catchup-collector-canon-test-"));
+  }, 120_000);
+
+  afterAll(async () => {
+    await pool?.end();
+    if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true });
+  }, 30_000);
+
+  async function groupIdForJid(jid: string): Promise<number | null> {
+    const { rows } = await pool.query<{ id: string }>(
+      `SELECT id FROM groups WHERE whatsapp_id = $1`,
+      [jid],
+    );
+    return rows[0] ? Number(rows[0].id) : null;
+  }
+
+  it("routes a phone-JID message into the existing @lid chat via lidForPn (no duplicate group)", async () => {
+    const lid = "4578552635558@lid";
+    const pn = "972542795343@s.whatsapp.net";
+    // The named survivor already exists under @lid.
+    await pool.query(`INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live')`, [
+      lid,
+      "Royi",
+    ]);
+    const lidGroupId = await groupIdForJid(lid);
+
+    const waMsg = makeFakeWADmMessage({
+      id: "CANON_BRIDGE_001",
+      remoteJid: pn,
+      pushName: "Royi",
+      text: "message under the phone identity",
+    });
+
+    const stored = await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      lidForPn: async (j) => (j === pn ? lid : null),
+      pnForLid: async () => null,
+    });
+    expect(stored).toBe(true);
+
+    // The message landed in the existing @lid chat...
+    const { rows } = await pool.query<{ group_id: string }>(
+      `SELECT group_id FROM messages WHERE external_id = $1`,
+      ["CANON_BRIDGE_001"],
+    );
+    expect(rows.length).toBe(1);
+    expect(Number(rows[0]!.group_id)).toBe(lidGroupId);
+    // ...and NO duplicate group was created under the phone JID.
+    expect(await groupIdForJid(pn)).toBeNull();
+    // Survivor keeps its resolved name (no UNIQUE(name) collision warning path).
+    const named = await pool.query(`SELECT name FROM groups WHERE whatsapp_id = $1`, [lid]);
+    expect(named.rows[0].name).toBe("Royi");
+  });
+
+  it("routes a @lid message into the existing phone-JID chat via pnForLid (reverse direction)", async () => {
+    const pn = "972540000099@s.whatsapp.net";
+    const lid = "9999999999999@lid";
+    // The existing named chat is keyed under the phone JID this time.
+    await pool.query(`INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live')`, [
+      pn,
+      "Phone-Keyed Person",
+    ]);
+    const pnGroupId = await groupIdForJid(pn);
+
+    const waMsg = makeFakeWADmMessage({
+      id: "CANON_REVERSE_001",
+      remoteJid: lid,
+      pushName: "Phone-Keyed Person",
+      text: "message under the lid identity",
+    });
+
+    const stored = await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      lidForPn: async () => null,
+      pnForLid: async (j) => (j === lid ? pn : null),
+    });
+    expect(stored).toBe(true);
+
+    const { rows } = await pool.query<{ group_id: string }>(
+      `SELECT group_id FROM messages WHERE external_id = $1`,
+      ["CANON_REVERSE_001"],
+    );
+    expect(rows.length).toBe(1);
+    expect(Number(rows[0]!.group_id)).toBe(pnGroupId);
+    expect(await groupIdForJid(lid)).toBeNull();
+  });
+
+  it("falls back to key.remoteJidAlt when the lid<->pn bridge is cold (returns null)", async () => {
+    const lid = "1111111111111@lid";
+    const pn = "972500000001@s.whatsapp.net";
+    await pool.query(`INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live')`, [
+      lid,
+      "Cold Bridge Person",
+    ]);
+    const lidGroupId = await groupIdForJid(lid);
+
+    const waMsg = makeFakeWADmMessage({
+      id: "CANON_ALT_001",
+      remoteJid: pn,
+      remoteJidAlt: lid, // WhatsApp ships the alternate identity on the key itself
+      pushName: "Cold Bridge Person",
+      text: "bridge store not warm yet",
+    });
+
+    // Bridge returns null (store cold) — routing must use remoteJidAlt instead.
+    const stored = await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      lidForPn: async () => null,
+      pnForLid: async () => null,
+    });
+    expect(stored).toBe(true);
+
+    const { rows } = await pool.query<{ group_id: string }>(
+      `SELECT group_id FROM messages WHERE external_id = $1`,
+      ["CANON_ALT_001"],
+    );
+    expect(rows.length).toBe(1);
+    expect(Number(rows[0]!.group_id)).toBe(lidGroupId);
+    expect(await groupIdForJid(pn)).toBeNull();
+  });
+
+  it("creates a single chat keyed on the phone JID when the person has no existing chat", async () => {
+    const pn = "972500000002@s.whatsapp.net";
+    const lid = "2222222222222@lid";
+
+    const waMsg = makeFakeWADmMessage({
+      id: "CANON_FRESH_001",
+      remoteJid: pn,
+      pushName: "Brand New",
+      text: "first ever message",
+    });
+
+    await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      lidForPn: async (j) => (j === pn ? lid : null),
+      pnForLid: async () => null,
+    });
+
+    // No existing chat under either identity → new chat keyed on the phone JID.
+    expect(await groupIdForJid(pn)).not.toBeNull();
+    expect(await groupIdForJid(lid)).toBeNull();
+  });
+});

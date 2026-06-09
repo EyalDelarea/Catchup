@@ -15,6 +15,7 @@ type FakeWAMessage = {
   key: {
     id: string;
     remoteJid: string;
+    remoteJidAlt?: string;
     fromMe?: boolean;
     participant?: string;
   };
@@ -109,6 +110,28 @@ describe("mapWaMessage()", () => {
     expect(result!.messageType).toBe("text");
     expect(result!.textContent).toBe("Hello group!");
     expect(result!.mediaFilename).toBeNull();
+  });
+
+  it("extracts remoteJidAlt (the alternate LID/PN identity) from the key when present", () => {
+    const wa = makeTextMessage({
+      key: {
+        id: "ALT001",
+        remoteJid: "972542795343@s.whatsapp.net",
+        remoteJidAlt: "4578552635558@lid",
+        fromMe: false,
+      },
+    });
+    const result = mapWaMessage(wa as any);
+    expect(result).not.toBeNull();
+    expect(result!.remoteJid).toBe("972542795343@s.whatsapp.net");
+    expect(result!.remoteJidAlt).toBe("4578552635558@lid");
+  });
+
+  it("sets remoteJidAlt to null when the key has no alternate identity", () => {
+    const wa = makeTextMessage();
+    const result = mapWaMessage(wa as any);
+    expect(result).not.toBeNull();
+    expect(result!.remoteJidAlt).toBeNull();
   });
 
   it("maps extendedTextMessage to text", () => {

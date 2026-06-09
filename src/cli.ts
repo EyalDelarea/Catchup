@@ -196,6 +196,8 @@ program
           downloadImage: (m) => session.downloadMedia(m),
           downloadVideo: (m) => session.downloadMedia(m),
           groupSubject: (jid) => session.groupSubject(jid),
+          lidForPn: (pn) => session.lidForPn(pn),
+          pnForLid: (lid) => session.pnForLid(lid),
         });
         if (stored) {
           storedCount++;
@@ -449,6 +451,8 @@ program
               awaitHistory: (toMs: number) => liveSession.awaitHistorySync(jid, toMs),
               downloadVoiceNote: (m: import("@whiskeysockets/baileys").WAMessage) =>
                 liveSession.downloadMedia(m),
+              lidForPn: (pn: string) => liveSession.lidForPn(pn),
+              pnForLid: (l: string) => liveSession.pnForLid(l),
             });
           },
         }
@@ -613,6 +617,8 @@ program
             awaitHistory: (toMs: number) => liveSession.awaitHistorySync(jid, toMs),
             downloadVoiceNote: (m: import("@whiskeysockets/baileys").WAMessage) =>
               liveSession.downloadMedia(m),
+            lidForPn: (pn: string) => liveSession.lidForPn(pn),
+            pnForLid: (l: string) => liveSession.pnForLid(l),
           });
         };
 
@@ -1177,7 +1183,11 @@ program
       const jid = msg.key?.remoteJid;
       if (!jid || (whitelist && !whitelist.has(jid))) return;
       // Persist text/metadata only (no media downloads). --with-media is a future opt-in.
-      void handleIncomingMessage(pool, msg, { dataDir: config.dataDir })
+      void handleIncomingMessage(pool, msg, {
+        dataDir: config.dataDir,
+        lidForPn: (pn) => session.lidForPn(pn),
+        pnForLid: (lid) => session.pnForLid(lid),
+      })
         .then((stored) => {
           if (stored) kept++;
         })
