@@ -40,6 +40,11 @@ export type HandleMessageFn = (
     groupSubject?: (jid: string) => Promise<string>;
     lidForPn?: (pn: string) => Promise<string | null>;
     pnForLid?: (lid: string) => Promise<string | null>;
+    persistMediaDescriptor?: (
+      messageId: number,
+      descriptor: import("../collector/media-descriptor.js").MediaDescriptor,
+      state: "pending" | "present",
+    ) => Promise<void>;
   },
 ) => Promise<boolean>;
 
@@ -159,6 +164,12 @@ export function attachCollector(deps: AttachCollectorDeps): LiveServiceHandle {
       groupSubject: (jid) => session.groupSubject(jid),
       lidForPn: (pn) => session.lidForPn(pn),
       pnForLid: (lid) => session.pnForLid(lid),
+      persistMediaDescriptor: async (messageId, descriptor, state) => {
+        const { upsertMessageMedia, descriptorToUpsertInput } = await import(
+          "../db/repositories/message-media.js"
+        );
+        await upsertMessageMedia(pool, descriptorToUpsertInput(messageId, descriptor, state));
+      },
     })
       .then((_stored) => {
         // stored can be used for logging; intentionally unused here.

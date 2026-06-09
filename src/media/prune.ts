@@ -22,6 +22,7 @@
  */
 import fs from "node:fs";
 import type pg from "pg";
+import { pruneMediaSecrets } from "../db/repositories/message-media.js";
 
 export type PruneMediaFileDeps = {
   /**
@@ -87,4 +88,10 @@ export async function pruneMediaFile(
     `UPDATE messages SET media_status = 'pruned', media_path = NULL WHERE id = $1`,
     [messageId],
   );
+
+  // Wipe decryption secrets (media_key, wa_message, CDN paths) from
+  // message_media now that the file is gone — data-minimisation / privacy §5.
+  // pruneMediaSecrets is internally guarded by `download_state = 'present'`
+  // so it is a safe no-op for text/imported messages that have no media row.
+  await pruneMediaSecrets(client, messageId);
 }
