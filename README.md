@@ -16,21 +16,26 @@
 
 A **local-first** personal WhatsApp summarizer. Messages are collected passively via a read-only linked device (using [Baileys](https://github.com/WhiskeySockets/Baileys)), stored in your own Postgres, transcribed locally (faster-whisper), captioned locally (Ollama vision), and summarized locally (Ollama) — then displayed in a mobile-first, RTL Hebrew web UI. **Nothing leaves your machine.** No cloud API keys, no hosted service, no data sharing.
 
-<p align="center">
-  <img src="assets/screens/feed-mobile.png" alt="Mobile feed — Ask-Me-Anything + general summary cards and freshness-only group cards" width="240" />
-  &nbsp;
-  <img src="assets/screens/detail-mobile.png" alt="Group catch-up summary with time-range chips and a scoped ask bar" width="240" />
-  &nbsp;
-  <img src="assets/screens/loader-mobile.png" alt="Liquid Phase Tube loader showing the sync → read → summarize → done journey" width="240" />
-</p>
+<table align="center">
+  <tr>
+    <td align="center" width="25%"><img src="assets/screens/feed-mobile.png" alt="Mobile feed — Ask-Me-Anything + general-summary cards and freshness-only group cards" /></td>
+    <td align="center" width="25%"><img src="assets/screens/detail-mobile.png" alt="Group catch-up summary with time-range chips and a scoped ask bar" /></td>
+    <td align="center" width="25%"><img src="assets/screens/loader-mobile.png" alt="Liquid Phase Tube loader — sync → read → summarize → done" /></td>
+    <td align="center" width="25%"><img src="assets/screens/ama-mobile.png" alt="Ask Me Anything chat panel" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Feed</b><br/>ask bar · general summary · freshness-only chats</sub></td>
+    <td align="center"><sub><b>Catch-up</b><br/>per-chat summary + time ranges</sub></td>
+    <td align="center"><sub><b>Phase loader</b><br/>live סנכרון→קריאה→סיכום→מוכן</sub></td>
+    <td align="center"><sub><b>Ask Me Anything</b><br/>chat over your messages</sub></td>
+  </tr>
+</table>
 
 <p align="center">
-  <img src="assets/screens/ama-mobile.png" alt="Ask Me Anything chat panel" width="240" />
-  &nbsp;
-  <img src="assets/screens/desktop.png" alt="Desktop two-pane layout — group sidebar and summary main pane" width="480" />
+  <img src="assets/screens/desktop.png" alt="Desktop two-pane layout — group sidebar and summary main pane" width="760" />
 </p>
 
-<p align="center"><sub>📱 The "Elevated Glacier" web UI — feed, a group catch-up, the phase-aware loader, the Ask-Me-Anything panel, and the responsive desktop two-pane. <strong>All screenshots use fabricated demo data</strong> (run the UI with <code>?demo=1</code>).</sub></p>
+<p align="center"><sub>📱 The "Elevated Glacier" web UI: mobile single-column ↔ responsive desktop two-pane. <strong>All screenshots use fabricated demo data</strong> — run the UI with <code>?demo=1</code> to reproduce them.</sub></p>
 
 ---
 
