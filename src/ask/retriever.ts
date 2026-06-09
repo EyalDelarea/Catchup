@@ -27,7 +27,8 @@ export interface Retriever {
  * Reciprocal Rank Fusion: merge N ranked lists into one. Parameter-free beyond
  * `k` (standard default 60). A message ranked high by ANY list floats up; a
  * message ranked high by MULTIPLE lists floats highest. Deduped by messageId,
- * first-seen metadata wins. Returns the fused list sorted by score desc.
+ * first-seen metadata wins. The returned `score` is the RRF score and REPLACES
+ * any per-retriever score the input candidates carried. Sorted by score desc.
  */
 export function fuse(lists: Candidate[][], k = 60): Candidate[] {
   const acc = new Map<number, { cand: Candidate; score: number }>();
