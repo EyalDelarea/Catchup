@@ -1,0 +1,27 @@
+name: "Catchup CodeQL config"
+
+# Scoped exclusions for CodeQL code scanning. Everything not listed here is
+# still analyzed with the security-extended query suite (configured in the
+# workflow). Each entry below documents *why* the path is excluded.
+paths-ignore:
+  # --- Test fixtures (js/insecure-temporary-file false positives) ---
+  # Tests build their data dir with `fs.mkdtempSync(os.tmpdir(), …)` — the
+  # *secure* temp-dir pattern (unique, 0700). CodeQL taints that os.tmpdir()
+  # source through the test call sites into the production `fs.writeFileSync`
+  # sinks in src/collector/collector.ts, flagging them as insecure temp-file
+  # creation. In production `dataDir` is `config.dataDir` (default ./data,
+  # see src/config.ts) and never the OS temp dir, so these are false
+  # positives induced purely by test code. Tests are not a meaningful
+  # scanning surface, so exclude them.
+  - "**/*.test.ts"
+  - "**/*.spec.ts"
+
+  # --- Ollama HTTP transport (js/file-access-to-http, by design) ---
+  # summarizer.ts performs no file I/O itself; it sends user message content
+  # (some of which originates from media files) to the *local* Ollama LLM for
+  # summarization. CodeQL flags this file→HTTP flow as potential information
+  # disclosure, but sending content to the local model is the application's
+  # entire purpose — there is no fix that preserves the feature. Path-scoped
+  # so js/file-access-to-http stays active everywhere else and a genuine
+  # future file→network exfiltration is still caught.
+  - "src/summarization/summarizer.ts"

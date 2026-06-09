@@ -35,6 +35,7 @@ jobs:
         with:
           languages: javascript-typescript
           queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
 
       # JS/TS is interpreted — no build step needed for analysis.
       - name: Perform CodeQL Analysis
