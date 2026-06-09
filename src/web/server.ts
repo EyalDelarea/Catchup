@@ -556,7 +556,8 @@ async function handleAsk(
     process.stderr.write(
       `Error handling /api/ask: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
     );
-    if (!res.headersSent) res.writeHead(500);
+    // SSE headers are already sent (200) before the try; errors are signaled
+    // in-band via an `error` event rather than an HTTP status.
     send("error", { message: "Internal server error." });
     res.end();
   }
