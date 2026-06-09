@@ -21,7 +21,7 @@ import { deriveHealth } from "./lib/health.js";
 import { shouldStartBackgroundRefresh } from "./lib/open-state.js";
 import { PHASE_LABELS, PHASES, phaseFill, activeZoneIndex, phaseCaption, scanFill } from "./lib/phase-loader.js";
 import { createConversation, ask } from "./lib/ama-stub.js";
-import { DEMO_GROUPS, DEMO_SUMMARY, DEMO_TOTAL_HIGHLIGHTS, DEMO_TOTAL_PERCHAT } from "./lib/demo-data.js";
+import { DEMO_GROUPS, DEMO_SUMMARY, DEMO_SUMMARIES, DEMO_TOTAL_HIGHLIGHTS, DEMO_TOTAL_PERCHAT } from "./lib/demo-data.js";
 
 /** Off by default. `?demo=1` previews dummy data; `?demo=tube` shows the loader. */
 const DEMO = new URLSearchParams(location.search).get("demo");
@@ -298,7 +298,7 @@ function renderDetail(group, autoStart) {
       if (DEMO === "tube") {
         setSummaryRegion(buildPhaseTube({ phase: "read", messages: 247, elapsed: 12 }));
       } else {
-        setSummaryRegion(buildSummaryCardDone(DEMO_SUMMARY, "נשמר • 8.4 שניות • 247 הודעות", false));
+        setSummaryRegion(buildSummaryCardDone(DEMO_SUMMARIES[group] || DEMO_SUMMARY, "נשמר • 8.4 שניות • 247 הודעות", false));
       }
       return;
     }
