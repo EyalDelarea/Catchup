@@ -74,6 +74,14 @@ export async function deleteSessionByTokenHash(
   await client.query(`DELETE FROM user_sessions WHERE token_hash = $1`, [tokenHash]);
 }
 
+/** Revoke ALL of a user's sessions (within tenant context) — e.g. after a password reset. */
+export async function deleteSessionsForUser(
+  client: pg.Pool | pg.PoolClient,
+  userId: string,
+): Promise<void> {
+  await client.query(`DELETE FROM user_sessions WHERE user_id = $1`, [userId]);
+}
+
 /** Bump last_seen_at for an active session (within tenant context). */
 export async function touchSession(
   client: pg.Pool | pg.PoolClient,

@@ -7,6 +7,7 @@ import {
 import {
   createSession,
   deleteSessionByTokenHash,
+  deleteSessionsForUser,
   findSessionByTokenHash,
 } from "../db/repositories/sessions.js";
 import { createTenant } from "../db/repositories/tenants.js";
@@ -193,6 +194,8 @@ export async function resetPassword(
     const consumed = await consumeTokenByHash(c, hashToken(rawToken));
     if (!consumed) return false;
     await setPasswordHash(c, tok.userId, newHash);
+    // A reset often happens BECAUSE the account is compromised: kill every live session.
+    await deleteSessionsForUser(c, tok.userId);
     return true;
   });
 }

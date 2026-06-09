@@ -155,4 +155,17 @@ describe("password reset", () => {
     ).not.toBeNull();
     expect(await resetPassword(deps, token, "third-pw-111")).toBe(false); // token single-use
   });
+
+  it("revokes all existing sessions on reset (a stolen session must not survive)", async () => {
+    await register(deps, { email: "revoke@acme.test", password: "old-pw-12345", consent: true });
+    const live = await login(deps, { email: "revoke@acme.test", password: "old-pw-12345" });
+    expect(await resolveSession(deps, live!.rawToken)).not.toBeNull();
+
+    mailer.sent = [];
+    await requestPasswordReset(deps, "revoke@acme.test");
+    const token = mailer.lastTokenFor("revoke@acme.test")!;
+    expect(await resetPassword(deps, token, "new-pw-67890")).toBe(true);
+
+    expect(await resolveSession(deps, live!.rawToken)).toBeNull();
+  });
 });
