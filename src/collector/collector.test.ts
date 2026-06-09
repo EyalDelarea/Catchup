@@ -634,6 +634,8 @@ describe("collector integration", () => {
     expect(second).toBe(false); // still a duplicate, no new row
     expect(recorded).toHaveLength(1);
     expect(recorded[0]!.messageId).toBe(existingId);
+    expect(recorded[0]!.kind).toBe("image");
+    expect(recorded[0]!.state).toBe("pending");
   });
 
   it("descriptor: marks descriptor 'present' when the image is downloaded inline (live path)", async () => {
