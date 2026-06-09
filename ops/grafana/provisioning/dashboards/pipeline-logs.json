@@ -22,12 +22,9 @@
       },
       {
         "name": "level",
-        "type": "query",
+        "type": "custom",
         "label": "Level",
-        "datasource": { "type": "loki", "uid": "loki" },
-        "query": "label_values({service_name=\"catchup\"}, level)",
-        "definition": "label_values({service_name=\"catchup\"}, level)",
-        "refresh": 2,
+        "query": "debug : 20,info : 30,warning : 40,error : 50",
         "multi": true,
         "includeAll": true,
         "allValue": ".+",
@@ -91,13 +88,20 @@
       "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
       "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
-        {
-          "expr": "sum by (level) (count_over_time({service_name=\"catchup\"}[$__interval]))",
-          "legendFormat": "level {{level}}",
-          "refId": "A"
-        }
+        { "expr": "sum(count_over_time({service_name=\"catchup\", level=\"30\"}[$__interval]))", "legendFormat": "info", "refId": "A" },
+        { "expr": "sum(count_over_time({service_name=\"catchup\", level=\"40\"}[$__interval]))", "legendFormat": "warning", "refId": "B" },
+        { "expr": "sum(count_over_time({service_name=\"catchup\", level=\"50\"}[$__interval]))", "legendFormat": "error", "refId": "C" },
+        { "expr": "sum(count_over_time({service_name=\"catchup\", level=\"20\"}[$__interval]))", "legendFormat": "debug", "refId": "D" }
       ],
-      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 70, "stacking": { "mode": "normal" } }, "unit": "short" }, "overrides": [] },
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 70, "stacking": { "mode": "normal" } }, "unit": "short" },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byName", "options": "warning" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } }] },
+          { "matcher": { "id": "byName", "options": "info" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] },
+          { "matcher": { "id": "byName", "options": "debug" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] }
+        ]
+      },
       "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
     },
     {
