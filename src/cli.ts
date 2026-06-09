@@ -320,6 +320,11 @@ program
       process.stderr.write(`Error: invalid --now "${options.now}".\n`);
       process.exit(1);
     }
+    const limitNum = options.limit !== undefined ? Number(options.limit) : undefined;
+    if (limitNum !== undefined && (!Number.isInteger(limitNum) || limitNum <= 0)) {
+      process.stderr.write("Error: --limit must be a positive integer.\n");
+      process.exit(1);
+    }
     const [{ OllamaSummarizer }, { LexicalRetriever }, { askStream }, pg] = await Promise.all([
       import("./summarization/summarizer.js"),
       import("./ask/lexical-retriever.js"),
@@ -345,7 +350,7 @@ program
         },
         question,
         now,
-        { chat: options.chat, limit: options.limit ? Number(options.limit) : undefined },
+        { chat: options.chat, limit: limitNum },
       )) {
         if (ev.type === "token") process.stdout.write(ev.delta);
         else if (ev.type === "citations") pendingCitations = ev.citations;

@@ -544,11 +544,11 @@ async function handleAsk(
       { summarizer: deps.summarizer, retrievers, tokenBudget: deps.tokenBudget },
       question,
       new Date(),
-      { chat },
+      { chat, signal: ac.signal },
     )) {
       if (ac.signal.aborted) return;
       if (ev.type === "token") send("token", { delta: ev.delta });
-      else if (ev.type === "citations") send("citations", ev.citations);
+      else if (ev.type === "citations") send("citations", { citations: ev.citations });
       else send("done", { candidateCount: ev.candidateCount });
     }
     res.end();

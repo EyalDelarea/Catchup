@@ -1274,6 +1274,91 @@ describe("GET /api/ask", () => {
   });
 });
 
+// ── GET /api/ask — client disconnect aborts summarizer ────────────────────────
+
+describe("GET /api/ask — client disconnect aborts summarizer", () => {
+  let pool: pg.Pool;
+
+  beforeAll(async () => {
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
+  }, 120_000);
+
+  afterAll(async () => {
+    await pool?.end();
+  }, 30_000);
+
+  it("disconnect mid-stream → AbortSignal propagated to summarizer", async () => {
+    const fakeRetriever = {
+      retrieve: async () => [
+        {
+          messageId: 303,
+          chat: "גיבוש",
+          sender: "יוסי",
+          sentAt: new Date("2026-06-09T09:00:00Z"),
+          content: "ערב יום שני",
+          score: 1,
+        },
+      ],
+    };
+
+    let signalReceived = false;
+    const summarizer: StreamingSummarizer = {
+      async *summarizeStream(_prompt: SummaryPrompt, opts?: { signal?: AbortSignal }) {
+        signalReceived = opts?.signal != null;
+        yield "partial-ask-token";
+        // Hang until the AbortSignal fires (or 10s safety timeout)
+        await new Promise<void>((resolve) => {
+          if (opts?.signal?.aborted) {
+            resolve();
+            return;
+          }
+          if (opts?.signal) {
+            opts.signal.addEventListener("abort", () => resolve(), { once: true });
+          } else {
+            setTimeout(resolve, 10_000);
+          }
+        });
+      },
+    };
+
+    const srv = createServer({
+      pool,
+      summarizer,
+      tokenBudget: 24000,
+      model: "fake",
+      askRetrievers: [fakeRetriever],
+    });
+    await new Promise<void>((r) => srv.listen(0, r));
+    const port = (srv.address() as AddressInfo).port;
+
+    try {
+      // Open request, wait for first data chunk (first token), then destroy
+      await new Promise<void>((resolve) => {
+        const req = http.get(
+          `http://localhost:${port}/api/ask?q=${encodeURIComponent("מתי קבעת עם יוסי?")}`,
+          (res) => {
+            res.once("data", () => {
+              req.destroy();
+              resolve();
+            });
+            res.on("error", () => resolve());
+          },
+        );
+        req.on("error", () => resolve());
+        setTimeout(resolve, 5000);
+      });
+
+      // Wait for server-side abort propagation
+      await new Promise((r) => setTimeout(r, 400));
+
+      // Signal must have been forwarded to the summarizer
+      expect(signalReceived).toBe(true);
+    } finally {
+      await new Promise<void>((r) => srv.close(() => r()));
+    }
+  }, 30_000);
+});
+
 // ── Static asset handler ──────────────────────────────────────────────────────
 
 describe("static asset handler", () => {
