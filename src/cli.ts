@@ -516,6 +516,7 @@ program
 
     // ── --collect mode: start live collector in the same process ──────────────
     let liveHandle: { stop: () => void } | null = null;
+    let backfillHandle: { stop: () => void } | null = null;
 
     if (options.collect) {
       // Safety banner (same wording as the standalone `collect` command)
@@ -685,6 +686,49 @@ program
           },
         });
 
+        // ── Deferred media backfill loop ─────────────────────────────────────
+        const { startBackfillLoop } = await import("./collector/media-backfill-loop.js");
+        const { proto } = await import("@whiskeysockets/baileys");
+        const mediaRepo = await import("./db/repositories/message-media.js");
+        const msgRepo = await import("./db/repositories/messages.js");
+        const fsp = await import("node:fs/promises");
+        const nodePath = await import("node:path");
+        const MEDIA_EXT: Record<string, string> = {
+          image: ".jpg",
+          video: ".mp4",
+          audio: ".opus",
+          sticker: ".webp",
+          document: ".bin",
+        };
+
+        backfillHandle = startBackfillLoop(
+          {
+            selectPending: (limit) => mediaRepo.selectPendingMedia(pool, limit),
+            decodeWaMessage: (blob) => proto.WebMessageInfo.decode(blob),
+            download: (waMessage) =>
+              liveSession.downloadMedia(waMessage as import("@whiskeysockets/baileys").WAMessage),
+            writeFile: async (messageId, kind, bytes) => {
+              const dir = nodePath.join(config.dataDir, "media", "backfill");
+              await fsp.mkdir(dir, { recursive: true });
+              const file = nodePath.join(dir, `bf-${messageId}${MEDIA_EXT[kind] ?? ".bin"}`);
+              await fsp.writeFile(file, bytes);
+              return file;
+            },
+            markPresentMessage: (id, p) => msgRepo.markMessageMediaPresent(pool, id, p),
+            markPresentMedia: (id, dp) => mediaRepo.markMediaPresent(pool, id, dp),
+            markUnrecoverable: (id, e) => mediaRepo.markMediaUnrecoverable(pool, id, e),
+            recordAttempt: (id, e) => mediaRepo.recordMediaAttempt(pool, id, e),
+            enqueue: async (type, payload) => {
+              await brokerBus.enqueue(type, payload);
+            },
+            log: (m) => process.stdout.write(`${m}\n`),
+          },
+          {
+            intervalMs: Number(process.env["MEDIA_BACKFILL_INTERVAL_MS"] ?? 15_000),
+            batchSize: Number(process.env["MEDIA_BACKFILL_BATCH"] ?? 3),
+          },
+        );
+
         console.log("[collector] started — web server and collector running together.");
       } catch (err) {
         // Collector startup failure must NOT exit (web server keeps running)
@@ -700,6 +744,7 @@ program
       opsSweepHandle.stop();
       // Stop collector wiring (if started)
       liveHandle?.stop();
+      backfillHandle?.stop();
       server.close();
       brokerBus.close().catch(() => {});
       dbClient.end().catch(() => {});

@@ -139,6 +139,9 @@ describe("attachCollector", () => {
       // and LID-migration duplicates don't re-form (issue #17).
       lidForPn: expect.any(Function),
       pnForLid: expect.any(Function),
+      // The live path threads a media-descriptor persister so deferred backfill
+      // can later download media that wasn't available at ingest time.
+      persistMediaDescriptor: expect.any(Function),
     });
   });
 
@@ -226,5 +229,30 @@ describe("attachCollector", () => {
 
     expect(() => handle.stop()).not.toThrow();
     expect(session.stop).toHaveBeenCalled();
+  });
+
+  it("persistMediaDescriptor is threaded through to handleMessage opts", async () => {
+    const { session, bus, setConnected, recordHeartbeat, handleMessage } = makeFakeDeps();
+
+    attachCollector({
+      session: session as unknown as CollectorSession,
+      pool: fakePool,
+      bus,
+      dataDir: "/tmp/data",
+      setConnected,
+      recordHeartbeat,
+      handleMessage,
+      heartbeatMs: 60_000,
+    });
+
+    const fakeMsg = { key: { id: "media-test" } };
+    session.emit("message", fakeMsg);
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Verify opts received by handleMessage includes persistMediaDescriptor as a function.
+    const receivedOpts = (handleMessage.mock.calls[0] as unknown[])[2] as Record<string, unknown>;
+    expect(typeof receivedOpts["persistMediaDescriptor"]).toBe("function");
   });
 });
