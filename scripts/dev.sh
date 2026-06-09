@@ -57,8 +57,11 @@ SERVE_PREFIX="${C_SERVE}[serve] ${C_RESET}"
 # pipe expansion. Renders the source inline: "[12:20:24] INFO (collector): connected".
 pretty() {
   if [ -x node_modules/.bin/pino-pretty ]; then
-    node_modules/.bin/pino-pretty --translateTime SYS:HH:MM:ss --ignore pid,hostname \
-      --colorize --messageFormat '{if component}({component}) {end}{msg}'
+    # --singleLine keeps each log on ONE line (extra fields as a compact trailing
+    # object instead of an indented block). `component` is ignored from that
+    # object since it's already shown inline as "(component)" via messageFormat.
+    node_modules/.bin/pino-pretty --translateTime SYS:HH:MM:ss --ignore pid,hostname,component \
+      --colorize --singleLine --messageFormat '{if component}({component}) {end}{msg}'
   else
     cat
   fi
