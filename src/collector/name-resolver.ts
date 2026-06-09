@@ -80,8 +80,10 @@ export async function resolveAllGroupNames(
         }
       }
     } catch (err) {
-      // One failure must never abort the batch (incl. UNIQUE name collisions)
-      log.warn({ err, jid: whatsappId }, "skipped");
+      // One failure must never abort the batch (incl. UNIQUE name collisions).
+      // These are expected/benign, so log only the reason — not a full stack.
+      const reason = err instanceof Error ? err.message : String(err);
+      log.warn({ jid: whatsappId, reason }, "skipped");
     }
   }
 
@@ -149,7 +151,9 @@ async function applyName(
   try {
     return await updateDisplayName(pool, jid, name);
   } catch (err) {
-    log.warn({ err, jid }, "directory update skipped");
+    // Expected/benign (forbidden, item-not-found, name collision) — reason only.
+    const reason = err instanceof Error ? err.message : String(err);
+    log.warn({ jid, reason }, "directory update skipped");
     return false;
   }
 }

@@ -14,7 +14,7 @@
       "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
         {
-          "expr": "{app=\"catchup\"}",
+          "expr": "{app=\"catchup\"} | json | line_format \"{{.component}}: {{.msg}}{{if .reason}} — {{.reason}}{{end}}\"",
           "legendFormat": "",
           "refId": "A"
         }
@@ -34,7 +34,7 @@
       "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
         {
-          "expr": "{app=\"catchup\"} | json | component=~\"$component\"",
+          "expr": "{app=\"catchup\"} | json | component=~\"$component\" | line_format \"{{.component}}: {{.msg}}{{if .reason}} — {{.reason}}{{end}}\"",
           "legendFormat": "",
           "refId": "A"
         }
@@ -54,7 +54,7 @@
       "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
         {
-          "expr": "{app=\"catchup\"} | json | level >= ${level}",
+          "expr": "{app=\"catchup\"} | json | level >= ${level} | line_format \"[{{.level}}] {{.component}}: {{.msg}}{{if .reason}} — {{.reason}}{{end}}\"",
           "legendFormat": "",
           "refId": "A"
         }
@@ -74,7 +74,7 @@
       "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
         {
-          "expr": "{app=\"catchup\"} | json | component=\"lifecycle\"",
+          "expr": "{app=\"catchup\"} | json | component=\"lifecycle\" | line_format \"{{.event}}{{if .proc}} ({{.proc}}){{end}}\"",
           "legendFormat": "",
           "refId": "A"
         }
@@ -94,7 +94,7 @@
       "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
         {
-          "expr": "{app=\"catchup\"} | json | jobId=`$jobId`",
+          "expr": "{app=\"catchup\"} | json | jobId=`$jobId` | line_format \"{{.component}} [{{.jobType}}]: {{.msg}}\"",
           "legendFormat": "",
           "refId": "A"
         }
@@ -114,7 +114,7 @@
       "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
         {
-          "expr": "{app=\"catchup\"} | json | groupId=`$groupId`",
+          "expr": "{app=\"catchup\"} | json | groupId=`$groupId` | line_format \"{{.component}}: {{.msg}}\"",
           "legendFormat": "",
           "refId": "A"
         }
