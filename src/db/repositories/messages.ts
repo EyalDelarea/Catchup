@@ -176,6 +176,42 @@ export async function messageExistsByExternalId(
   return rows.length > 0;
 }
 
+/**
+ * Return the primary-key `id` of the message identified by (group_id, external_id),
+ * or null when no such row exists.
+ *
+ * Used by the deferred-media backfill to resolve the row that needs a media
+ * descriptor attached after a re-pull delivers the file.
+ */
+export async function getMessageIdByExternalId(
+  client: pg.Pool | pg.PoolClient,
+  groupId: number,
+  externalId: string,
+): Promise<number | null> {
+  const { rows } = await client.query<{ id: string }>(
+    `SELECT id FROM messages WHERE group_id = $1 AND external_id = $2 LIMIT 1`,
+    [groupId, externalId],
+  );
+  return rows[0] ? Number(rows[0].id) : null;
+}
+
+/**
+ * Flip a message's media_status to 'present' and record the on-disk path.
+ *
+ * Called by the backfill loop once the media file has been successfully
+ * downloaded and moved to its final storage location.
+ */
+export async function markMessageMediaPresent(
+  client: pg.Pool | pg.PoolClient,
+  messageId: number,
+  mediaPath: string,
+): Promise<void> {
+  await client.query(`UPDATE messages SET media_path=$2, media_status='present' WHERE id=$1`, [
+    messageId,
+    mediaPath,
+  ]);
+}
+
 type MessageRow = NormalizedMessage & {
   participantId: number | null;
 };
