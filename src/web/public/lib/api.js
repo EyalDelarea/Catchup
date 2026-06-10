@@ -109,3 +109,44 @@ export function summarizeStream(params, handlers = {}) {
 
   return es;
 }
+
+/**
+ * Open an SSE stream to /api/ask and wire up event handlers.
+ *
+ * params:
+ *   { q: "<question>" }            — required free-form question
+ *   { q, chat: "<group name>" }    — optional: restrict retrieval to one chat
+ *
+ * handlers (all optional):
+ *   token(data)     — {delta}                              — incremental answer token
+ *   citations(data) — {citations: [{n, messageId, chat, sender, sentAt}]}
+ *   done(data)      — {candidateCount}                     — stream ends here
+ *   error(data)     — {message}                            — server-side error; stream ends here
+ *
+ * The caller is responsible for calling .close() on the returned EventSource
+ * on "done" / "error". The native onerror fires when the connection drops;
+ * we close automatically in that case and report it via handlers.error.
+ *
+ * @param {{q: string, chat?: string}} params
+ * @param {Partial<Record<string, Function>>} handlers
+ * @returns {EventSource}
+ */
+export function askStream(params, handlers = {}) {
+  const qs = new URLSearchParams({ q: params.q });
+  if (params.chat) qs.set("chat", params.chat);
+
+  const es = new EventSource(`/api/ask?${qs}`);
+
+  for (const event of ["token", "citations", "done", "error"]) {
+    es.addEventListener(event, (e) => {
+      handlers[event]?.(JSON.parse(e.data));
+    });
+  }
+
+  es.onerror = () => {
+    es.close();
+    handlers.error?.({});
+  };
+
+  return es;
+}

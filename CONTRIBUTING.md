@@ -26,25 +26,18 @@ Both checks are required. Docker must be running for the test suite because test
 
 ## Database migrations
 
-Migrations live in `src/db/migrations/` and are named `<number>_<description>.ts`,
-applied in ascending numeric order by `node-pg-migrate`.
+Migrations live in `src/db/migrations/`, named `<number>_<description>.ts`, and run
+in ascending numeric order by `node-pg-migrate`. Their numbers must be **unique** —
+two files with the same number break deploys (the later one sorts before an applied
+migration and `checkOrder` aborts).
 
-**The number must be unique across the whole directory.** Because several
-branches (and agents) are often in flight at once, two PRs can independently
-pick the same "next" number; each passes CI alone, but once both merge `main`
-ends up with a duplicate. On any database that already ran the first one, the
-second then sorts *before* an applied migration and `node-pg-migrate`
-(`checkOrder` defaults to `true`) aborts with an out-of-order error — breaking
-deploys even though every PR was individually green.
+**Always create migrations with `npm run migrate:create -- <name>`.** It prefixes the
+filename with a millisecond timestamp, so parallel branches/agents can't pick the same
+number — collisions are prevented by construction. Never hand-number a file.
 
-To prevent this:
-
-- When you rebase/merge `main`, if your migration's number now collides with one
-  that landed first, **renumber yours to the next free number** (and rename the
-  file). Never reuse a number.
-- `src/db/migrations.test.ts` enforces uniqueness; it runs against the PR's
-  merged state in CI, so a collision fails the check *before* it reaches `main`.
-  If that test goes red after merging `main`, renumber and push.
+As a backstop, `src/db/migrations.test.ts` fails CI on any duplicate number, on the
+PR's merged state — so even a hand-numbered collision is caught before it reaches
+`main` (renumber and push if it goes red).
 
 ## Local-first principle
 

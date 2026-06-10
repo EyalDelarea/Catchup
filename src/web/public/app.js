@@ -14,13 +14,13 @@
  * Teardown: EventSource is closed when leaving a streaming view
  */
 
-import { getGroups, getStatus, getSummaries, summarizeStream } from "./lib/api.js";
+import { askStream, getGroups, getStatus, getSummaries, summarizeStream } from "./lib/api.js";
 import { formatAgo, presetToSince, validateRangeInput } from "./lib/time.js";
 import { renderMarkdown } from "./lib/markdown.js";
 import { deriveHealth } from "./lib/health.js";
 import { shouldStartBackgroundRefresh } from "./lib/open-state.js";
 import { PHASE_LABELS, PHASES, phaseFill, activeZoneIndex, phaseCaption, scanFill } from "./lib/phase-loader.js";
-import { createConversation, ask } from "./lib/ama-stub.js";
+import { appendToken, beginQuestion, createConversation, failAnswer, finishAnswer } from "./lib/ama-conversation.js";
 import { DEMO_GROUPS, DEMO_SUMMARY, DEMO_SUMMARIES, DEMO_TOTAL_HIGHLIGHTS, DEMO_TOTAL_PERCHAT } from "./lib/demo-data.js";
 
 /** Off by default. `?demo=1` previews dummy data; `?demo=tube` shows the loader. */
@@ -1001,7 +1001,7 @@ function runTotal({ since }) {
   });
 }
 
-/* ── 7. AMA view (stub) ──────────────────────────────────── */
+/* ── 7. AMA view ─────────────────────────────────────────── */
 
 /**
  * Render the Ask-Me-Anything chat panel.
@@ -1039,12 +1039,36 @@ function renderAma(scope) {
   document.getElementById("ama-back-btn")?.addEventListener("click", () => history.back());
   document.getElementById("ama-form")?.addEventListener("submit", (e) => {
     e.preventDefault();
-    const input = document.getElementById("ama-q");
-    const val = input?.value || "";
-    if (!val.trim()) return;
-    ask(amaConversation, val);
-    if (input) input.value = "";
+    submitAmaQuestion(scope);
+  });
+}
+
+/** Send the typed question to /api/ask and stream the answer into the panel. */
+function submitAmaQuestion(scope) {
+  if (activeEventSource) return; // one question at a time
+  const input = document.getElementById("ama-q");
+  const q = (input?.value || "").trim();
+  const reply = beginQuestion(amaConversation, q);
+  if (!reply) return;
+  if (input) input.value = "";
+  renderAmaMessages();
+
+  const settle = () => {
+    teardownStream();
     renderAmaMessages();
+  };
+  activeEventSource = askStream({ q, chat: scope ?? undefined }, {
+    token: (d) => {
+      appendToken(reply, d.delta);
+      renderAmaMessages();
+    },
+    citations: (d) => finishAnswer(reply, d.citations),
+    done: settle,
+    error: (d) => {
+      // A dropped connection after the answer completed is not a failure.
+      if (reply.pending) failAnswer(reply, d.message);
+      settle();
+    },
   });
 }
 
@@ -1055,10 +1079,22 @@ function renderAmaMessages() {
     if (m.role === "user") {
       return `<div class="ama-bubble ama-bubble--user">${escHtml(m.text)}</div>`;
     }
-    return `<div class="ama-bubble ama-bubble--ai">${escHtml(m.text)}
-      <span class="ama-bubble__src">↳ מקורות יחוברו בהמשך</span></div>`;
+    if (m.pending && !m.text) {
+      return `<div class="ama-bubble ama-bubble--ai ama-bubble--pending">חושב…</div>`;
+    }
+    const err = m.error ? `<span class="ama-bubble__err">${escHtml(m.error)}</span>` : "";
+    return `<div class="ama-bubble ama-bubble--ai">${escHtml(m.text)}${err}${renderAmaSources(m.citations)}</div>`;
   }).join("");
   el.scrollTop = el.scrollHeight;
+}
+
+/** Render the resolved [n] citations under an answer bubble. */
+function renderAmaSources(citations) {
+  if (!citations?.length) return "";
+  const items = citations.map((c) =>
+    `<span class="ama-src">[${c.n}] ${escHtml(c.sender)} · ${escHtml(formatGroupName(c.chat))} · ${escHtml(fmtTime(c.sentAt))}</span>`
+  ).join("");
+  return `<span class="ama-bubble__src">↳ ${items}</span>`;
 }
 
 /* ── 8. Helpers ──────────────────────────────────────────── */
