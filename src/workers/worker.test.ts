@@ -194,6 +194,55 @@ describe("buildWorker", () => {
     expect(seenTenants).toEqual([TENANT_B, DEFAULT_TENANT_ID]);
   });
 
+  it("fairShareWindow raises prefetch on slow types and runs each job under ITS tenant (T3)", async () => {
+    // NOTE: the in-memory bus awaits each delivery before the next, so round-robin
+    // ordering is not observable through it — that property is pinned by
+    // fair-share.test.ts. What matters HERE: the prefetch knob reaches consume(), and
+    // the dispatcher establishes tenant context at execution time, per job.
+    const { currentTenantId } = await import("../db/tenant-context.js");
+    const bus = makeBus();
+    const consumeSpy = vi.spyOn(bus, "consume");
+    const seen: Array<{ id: string; tenant: string }> = [];
+
+    const A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    await bus.enqueue("summarize.group", { groupId: "a1", tenantId: A });
+    await bus.enqueue("summarize.group", { groupId: "b1", tenantId: B });
+
+    await buildWorker({
+      bus,
+      handlers: {
+        "summarize.group": async (job: Job<"summarize.group">) => {
+          seen.push({ id: job.payload.groupId, tenant: currentTenantId() });
+        },
+      },
+      concurrency: 1,
+      fairShareWindow: 4,
+    });
+
+    // Slow type gets the fair window as its prefetch (was always 1).
+    expect(consumeSpy).toHaveBeenCalledWith("summarize.group", expect.any(Function), {
+      prefetch: 4,
+    });
+    expect(seen).toEqual([
+      { id: "a1", tenant: A },
+      { id: "b1", tenant: B },
+    ]);
+  });
+
+  it("without fairShareWindow behavior is unchanged (prefetch 1 on slow types)", async () => {
+    const bus = makeBus();
+    const consumeSpy = vi.spyOn(bus, "consume");
+    await buildWorker({
+      bus,
+      handlers: { "summarize.group": vi.fn() },
+      concurrency: 5,
+    });
+    expect(consumeSpy).toHaveBeenCalledWith("summarize.group", expect.any(Function), {
+      prefetch: 1,
+    });
+  });
+
   it("Fix 5: rejects if bus.consume throws (startup error surfaces loudly)", async () => {
     const bus = makeBus();
     vi.spyOn(bus, "consume").mockRejectedValueOnce(new Error("broker down"));

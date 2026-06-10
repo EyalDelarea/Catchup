@@ -6,6 +6,7 @@ import { installConsoleGuard } from "../logging/install-console.js";
 import { logLifecycle } from "../logging/lifecycle.js";
 import { getLogger } from "../logging/log.js";
 import type { Logger } from "../logging/logger.js";
+import { makeFairShareDispatcher } from "./fair-share.js";
 
 export type HandlerMap = {
   [T in JobType]?: (job: Job<T>) => Promise<void>;
@@ -17,6 +18,13 @@ export type BuildWorkerOptions = {
   concurrency: number;
   /** Optional logger; defaults to no-op so tests produce no output. */
   logger?: Logger;
+  /**
+   * T3 fair-share: when set, slow (PREFETCH_ONE) job types consume with THIS prefetch
+   * and run through a per-type round-robin-by-tenant dispatcher, so one tenant's
+   * backlog cannot starve another's single job. Unset (single-user mode) = exact
+   * pre-T3 behavior.
+   */
+  fairShareWindow?: number;
 };
 
 /** A no-op logger used in tests so worker test output stays clean. */
@@ -94,7 +102,18 @@ export async function buildWorker(
     [JobType, (job: Job) => Promise<void>]
   >) {
     if (handler) {
-      const prefetch = PREFETCH_ONE_TYPES.has(type) ? 1 : concurrency;
+      const isSlow = PREFETCH_ONE_TYPES.has(type);
+      const prefetch = isSlow ? (opts.fairShareWindow ?? 1) : concurrency;
+
+      // Tenant context is established here — at EXECUTION time — so a job parked in a
+      // fair-share lane still runs under its own tenant, not the dispatcher caller's.
+      const runInTenant = (job: Job): Promise<void> => {
+        const p = job.payload as Record<string, unknown>;
+        const t = typeof p["tenantId"] === "string" ? (p["tenantId"] as string) : DEFAULT_TENANT_ID;
+        return runWithTenantContext(t, () => handler(job));
+      };
+      const execute =
+        isSlow && opts.fairShareWindow ? makeFairShareDispatcher(runInTenant) : runInTenant;
 
       const wrappedHandler = async (job: Job): Promise<void> => {
         // Build correlation context: common fields + payload-specific ids
@@ -106,10 +125,8 @@ export async function buildWorker(
         if (typeof payload["messageId"] === "string") ctx["messageId"] = payload["messageId"];
         if (typeof payload["filePath"] === "string") ctx["filePath"] = payload["filePath"];
 
-        // T2: process the job inside its tenant's context. Handler dependency closures
-        // were built once at startup, so the tenant travels via AsyncLocalStorage and
-        // the worker's scoped pool reads it per query. Jobs enqueued before T2 carry no
-        // tenantId → default tenant (their original behavior).
+        // T2: each job runs inside its tenant's context (see runInTenant above —
+        // jobs enqueued before T2 carry no tenantId → default tenant).
         const tenantId =
           typeof payload["tenantId"] === "string" ? payload["tenantId"] : DEFAULT_TENANT_ID;
         ctx["tenantId"] = tenantId;
@@ -119,7 +136,7 @@ export async function buildWorker(
         const startedAt = Date.now();
         const op = opForJobType(job.type);
         try {
-          await runWithTenantContext(tenantId, () => handler(job));
+          await execute(job);
           child.info({ durationMs: Date.now() - startedAt, op }, "job done");
         } catch (err) {
           child.error({ err, durationMs: Date.now() - startedAt, op }, "job failed");
@@ -407,7 +424,15 @@ async function main(): Promise<void> {
     });
   }
 
-  const worker = await buildWorker({ bus, handlers, concurrency, logger });
+  const worker = await buildWorker({
+    bus,
+    handlers,
+    concurrency,
+    logger,
+    // T3: in multi-tenant mode, slow queues get a small visibility window so one
+    // tenant's backlog can't starve another's job. Single-user mode: unchanged.
+    ...(config.auth.enabled ? { fairShareWindow: 4 } : {}),
+  });
 
   // Graceful shutdown (both SIGINT and SIGTERM)
   let shuttingDown = false;
