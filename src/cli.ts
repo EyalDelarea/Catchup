@@ -544,6 +544,70 @@ program
         }
       : {};
 
+    // ── T3/T4: per-tenant WhatsApp session registry (multi-tenant mode) ──────
+    // Created BEFORE the server so /api/onboarding/* can drive it (link → QR →
+    // connected). Hosts the supervised sessions for every tenant except the default,
+    // whose rich legacy pipeline stays in the --collect block below.
+    let tenantRegistry:
+      | import("./collector/tenant-session-registry.js").TenantSessionRegistry
+      | null = null;
+    if (config.auth.enabled) {
+      try {
+        const [{ TenantSessionRegistry }, { makeTenantIngest }, { startSession }] =
+          await Promise.all([
+            import("./collector/tenant-session-registry.js"),
+            import("./collector/tenant-ingest.js"),
+            import("./collector/session.js"),
+          ]);
+        const registry = new TenantSessionRegistry({
+          authRoot: path.join(config.dataDir, "baileys-auth"),
+          startSession: (dir) => startSession(dir, config.whatsapp.allowSend),
+        });
+        const ingest = makeTenantIngest({
+          appPool,
+          dataDir: config.dataDir,
+          bus: brokerBus,
+          sessionGlue: (tenantId) => {
+            const s = registry.session(tenantId) as
+              | import("./collector/session.js").CollectorSession
+              | null;
+            if (!s) return {};
+            return {
+              downloadVoiceNote: (m) => s.downloadMedia(m),
+              downloadImage: (m) => s.downloadMedia(m),
+              downloadVideo: (m) => s.downloadMedia(m),
+              groupSubject: (jid) => s.groupSubject(jid),
+              lidForPn: (pn) => s.lidForPn(pn),
+              pnForLid: (lid) => s.pnForLid(lid),
+            };
+          },
+        });
+        registry.on(
+          "message",
+          (tenantId: string, msg: import("@whiskeysockets/baileys").WAMessage) => {
+            ingest(tenantId, msg).catch((err: unknown) => {
+              log.collector.warn({ err, tenantId }, "tenant ingest failed");
+            });
+          },
+        );
+        registry.on("connected", (tenantId: string) => {
+          log.collector.info({ tenantId }, "tenant session connected");
+        });
+        registry.on("logged-out", (tenantId: string) => {
+          log.collector.error({ tenantId }, "tenant session logged out — re-link required");
+        });
+        // Reconnect tenants already linked on disk (the default tenant is handled by
+        // the legacy --collect path, never doubled). New links arrive via onboarding.
+        const started = await registry.startDiscovered({ exclude: [DEFAULT_TENANT_ID] });
+        if (started.length > 0) {
+          log.collector.info({ tenants: started }, "tenant session(s) reconnected");
+        }
+        tenantRegistry = registry;
+      } catch (err) {
+        log.collector.error({ err }, "tenant session registry startup error (server continues)");
+      }
+    }
+
     const server = createServer({
       pool: appPool, // raw app pool — createServer scopes it per request
       summarizer,
@@ -551,6 +615,7 @@ program
       model: config.summarization.model,
       getQueueDepths,
       logger: webLogger,
+      onboarding: tenantRegistry ?? undefined,
       auth: {
         deps: {
           appPool,
@@ -638,7 +703,6 @@ program
     // ── --collect mode: start live collector in the same process ──────────────
     let liveHandle: { stop: () => void } | null = null;
     let backfillHandle: { stop: () => void } | null = null;
-    let tenantRegistry: { stopAll: () => void } | null = null;
 
     if (options.collect) {
       // Safety banner (same wording as the standalone `collect` command)
@@ -858,66 +922,6 @@ program
       } catch (err) {
         // Collector startup failure must NOT exit (web server keeps running)
         log.collector.error({ err }, "startup error (web server continues)");
-      }
-
-      // ── T3: per-tenant WhatsApp sessions (multi-tenant mode only) ───────────
-      // The default tenant keeps the rich legacy pipeline above (boot recovery,
-      // on-demand backfill, media-backfill loop). Additional tenants get supervised
-      // sessions with tenant-attributed ingest; their QR onboarding arrives in T4.
-      if (config.auth.enabled) {
-        try {
-          const [{ TenantSessionRegistry }, { makeTenantIngest }, { startSession }] =
-            await Promise.all([
-              import("./collector/tenant-session-registry.js"),
-              import("./collector/tenant-ingest.js"),
-              import("./collector/session.js"),
-            ]);
-          const registry = new TenantSessionRegistry({
-            authRoot: path.join(config.dataDir, "baileys-auth"),
-            startSession: (dir) => startSession(dir, config.whatsapp.allowSend),
-          });
-          const ingest = makeTenantIngest({
-            appPool,
-            dataDir: config.dataDir,
-            bus: brokerBus,
-            sessionGlue: (tenantId) => {
-              const s = registry.session(tenantId) as
-                | import("./collector/session.js").CollectorSession
-                | null;
-              if (!s) return {};
-              return {
-                downloadVoiceNote: (m) => s.downloadMedia(m),
-                downloadImage: (m) => s.downloadMedia(m),
-                downloadVideo: (m) => s.downloadMedia(m),
-                groupSubject: (jid) => s.groupSubject(jid),
-                lidForPn: (pn) => s.lidForPn(pn),
-                pnForLid: (lid) => s.pnForLid(lid),
-              };
-            },
-          });
-          registry.on(
-            "message",
-            (tenantId: string, msg: import("@whiskeysockets/baileys").WAMessage) => {
-              ingest(tenantId, msg).catch((err: unknown) => {
-                log.collector.warn({ err, tenantId }, "tenant ingest failed");
-              });
-            },
-          );
-          registry.on("connected", (tenantId: string) => {
-            log.collector.info({ tenantId }, "tenant session connected");
-          });
-          registry.on("logged-out", (tenantId: string) => {
-            log.collector.error({ tenantId }, "tenant session logged out — re-link required");
-          });
-          // The default tenant's session is the legacy block above — never doubled.
-          const started = await registry.startDiscovered({ exclude: [DEFAULT_TENANT_ID] });
-          if (started.length > 0) {
-            log.collector.info({ tenants: started }, "tenant session(s) started");
-          }
-          tenantRegistry = registry;
-        } catch (err) {
-          log.collector.error({ err }, "tenant session registry startup error (server continues)");
-        }
       }
     }
 
