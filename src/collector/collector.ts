@@ -18,6 +18,7 @@ import {
   updateDisplayName,
   upsertGroupByCanonicalJid,
 } from "../db/repositories/groups.js";
+import { recordLink, siblingForJid } from "../db/repositories/identity-links.js";
 import { getMessageIdByExternalId, insertMessages } from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
 import { normalize } from "../importer/normalize.js";
@@ -105,12 +106,17 @@ export type CollectorOptions = {
  * Resolve the person's *other* identity (the lid<->pn sibling) for a 1:1 chat,
  * so an incoming message can be routed into an existing chat under either form.
  *
- * Tries Baileys' lid<->pn mapping first; falls back to `remoteJidAlt` (the
- * alternate identity WhatsApp ships on the message key) when the mapping store
- * isn't warm yet. Returns null for group JIDs (@g.us — not part of LID
- * migration) and when no alternate identity is known. Never throws.
+ * Priority order:
+ * 1. Durable DB map (identity_links) — works even when Baileys is cold or in
+ *    worker-only contexts (no live session).
+ * 2. Live Baileys lid<->pn bridge — fast-path when the session is warm.
+ * 3. Cold-store fallback: the alternate identity carried on the message key.
+ *
+ * Returns null for group JIDs (@g.us — not part of LID migration) and when no
+ * alternate identity is known. Never throws.
  */
 async function resolveSiblingJid(
+  client: pg.Pool | pg.PoolClient,
   remoteJid: string,
   remoteJidAlt: string | null,
   opts: CollectorOptions,
@@ -118,6 +124,17 @@ async function resolveSiblingJid(
   // Group chats are not subject to LID migration.
   if (remoteJid.endsWith("@g.us")) return null;
 
+  // 1. Durable DB map first — works even when Baileys is cold / in worker-only runs.
+  try {
+    const fromDb = await siblingForJid(client, remoteJid);
+    if (fromDb && fromDb !== remoteJid) return fromDb;
+  } catch (e) {
+    process.stderr.write(
+      `Warning: identity-link sibling lookup failed (jid=${remoteJid}): ${e instanceof Error ? e.message : String(e)}\n`,
+    );
+  }
+
+  // 2. Live Baileys lid<->pn mapping.
   try {
     if (remoteJid.endsWith("@s.whatsapp.net") && opts.lidForPn) {
       const lid = await opts.lidForPn(remoteJid);
@@ -130,7 +147,7 @@ async function resolveSiblingJid(
     // Bridge failures must never break ingest — fall through to the alt key.
   }
 
-  // Cold-store fallback: the alternate identity carried on the message key.
+  // 3. Cold-store fallback: the alternate identity carried on the message key.
   if (remoteJidAlt && remoteJidAlt !== remoteJid) return remoteJidAlt;
   return null;
 }
@@ -193,7 +210,24 @@ export async function handleIncomingMessage(
   // identity (@lid vs @s.whatsapp.net) so LID-migration duplicates can't form.
   // `canonicalJid` is the identity the chat is actually keyed under — use it for
   // the display-name resolution below so we target the right row.
-  const siblingJid = await resolveSiblingJid(mapped.remoteJid, mapped.remoteJidAlt, opts);
+  const siblingJid = await resolveSiblingJid(client, mapped.remoteJid, mapped.remoteJidAlt, opts);
+
+  // Persist the pairing durably so future ingest (incl. worker-only, cold bridge)
+  // and the reconcile job can canonicalize without a live session. Best-effort.
+  if (siblingJid) {
+    const lid = mapped.remoteJid.endsWith("@lid") ? mapped.remoteJid : siblingJid;
+    const pn = mapped.remoteJid.endsWith("@lid") ? siblingJid : mapped.remoteJid;
+    if (lid.endsWith("@lid") && pn.endsWith("@s.whatsapp.net")) {
+      try {
+        await recordLink(client, { lidJid: lid, pnJid: pn, source: "message_alt" });
+      } catch (e) {
+        process.stderr.write(
+          `Warning: identity-link capture failed (lid=${lid}, pn=${pn}): ${e instanceof Error ? e.message : String(e)}\n`,
+        );
+      }
+    }
+  }
+
   const { groupId, canonicalJid } = await upsertGroupByCanonicalJid(client, {
     primaryJid: mapped.remoteJid,
     siblingJid,
