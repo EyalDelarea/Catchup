@@ -4,7 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type pg from "pg";
 import { askStream } from "../ask/ask.js";
+import type { Embedder } from "../ask/embedder.js";
+import { EmbeddingRetriever } from "../ask/embedding-retriever.js";
 import { LexicalRetriever } from "../ask/lexical-retriever.js";
+import { RecencyRetriever } from "../ask/recency-retriever.js";
 import type { Retriever } from "../ask/retriever.js";
 import type { AuthDeps } from "../auth/service.js";
 import { findGroupByName, listGroups } from "../db/repositories/groups.js";
@@ -49,8 +52,14 @@ export type ServerDeps = {
   backfillTargetWindow?: number;
   /** Optional structured logger (pino). Used to record backfill outcomes for the trace/dashboard. */
   logger?: { info: (obj: Record<string, unknown>, msg?: string) => void };
-  /** Retrievers for the ask flow. Defaults to [LexicalRetriever(pool)] when absent. */
+  /** Retrievers for the ask flow. Defaults to the lexical/recency/embedding set when absent. */
   askRetrievers?: Retriever[];
+  /**
+   * Embedder for semantic retrieval. When present, an EmbeddingRetriever is fused
+   * into the default set. When absent (e.g. Ollama not configured), the ask flow
+   * gracefully falls back to lexical (+ recency) only.
+   */
+  embedder?: Embedder;
   /**
    * T2 auth wiring. When absent, the server runs exactly as before (single-user, no
    * login) except every /api request is tenant-scoped to the default tenant. When
@@ -595,6 +604,23 @@ async function handleTotalSummary(
   }
 }
 
+/**
+ * Production retriever set for the ask flow. Lexical always runs. When an embedder
+ * is configured we also fuse in semantic (embedding) retrieval — the general fix
+ * for poor Hebrew lexical recall: a question can match a reply by MEANING even with
+ * zero shared words. For a chat-scoped question we also fuse in recency: NL
+ * questions like "מה גיא שאל אותי היום" rarely share content words with the replies,
+ * so lexical alone returns none of the relevant messages — recency supplies the
+ * actual recent context. We skip recency for all-chats questions, where "most
+ * recent across every chat" would just be noise.
+ */
+function defaultAskRetrievers(pool: pg.Pool, chat?: string, embedder?: Embedder): Retriever[] {
+  const retrievers: Retriever[] = [new LexicalRetriever(pool)];
+  if (embedder) retrievers.push(new EmbeddingRetriever(pool, embedder));
+  if (chat) retrievers.push(new RecencyRetriever(pool));
+  return retrievers;
+}
+
 async function handleAsk(
   url: URL,
   req: http.IncomingMessage,
@@ -621,7 +647,19 @@ async function handleAsk(
       return;
     }
     const chat = url.searchParams.get("chat") ?? undefined;
-    const retrievers = deps.askRetrievers ?? [new LexicalRetriever(deps.pool)];
+    const retrievers = deps.askRetrievers ?? defaultAskRetrievers(deps.pool, chat, deps.embedder);
+
+    // Observability: log on arrival (so a hung/slow ask is still visible in
+    // Loki) and again on completion with timings. component:"ask" is promoted
+    // to a Loki stream label by the logger, so the ask dashboard can filter on
+    // it; high-cardinality fields stay in the body.
+    const start = Date.now();
+    deps.logger?.info(
+      { component: "ask", evt: "ask_start", chat: chat ?? null, scoped: Boolean(chat) },
+      "ask start",
+    );
+    let firstTokenAt: number | null = null;
+    let candidateCount = 0;
 
     for await (const ev of askStream(
       { summarizer: deps.summarizer, retrievers, tokenBudget: deps.tokenBudget },
@@ -629,15 +667,43 @@ async function handleAsk(
       new Date(),
       { chat, signal: ac.signal },
     )) {
-      if (ac.signal.aborted) return;
-      if (ev.type === "token") send("token", { delta: ev.delta });
-      else if (ev.type === "citations") send("citations", { citations: ev.citations });
-      else send("done", { candidateCount: ev.candidateCount });
+      if (ac.signal.aborted) break;
+      if (ev.type === "phase") send("phase", { phase: ev.phase });
+      else if (ev.type === "token") {
+        if (firstTokenAt === null) firstTokenAt = Date.now();
+        send("token", { delta: ev.delta });
+      } else if (ev.type === "citations") send("citations", { citations: ev.citations });
+      else {
+        candidateCount = ev.candidateCount;
+        send("done", { candidateCount: ev.candidateCount });
+      }
     }
+    deps.logger?.info(
+      {
+        component: "ask",
+        evt: "ask",
+        chat: chat ?? null,
+        scoped: Boolean(chat),
+        candidateCount,
+        ttfbMs: firstTokenAt === null ? null : firstTokenAt - start,
+        totalMs: Date.now() - start,
+        aborted: ac.signal.aborted,
+      },
+      "ask done",
+    );
+    if (ac.signal.aborted) return;
     res.end();
   } catch (err) {
     process.stderr.write(
       `Error handling /api/ask: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+    );
+    deps.logger?.info(
+      {
+        component: "ask",
+        evt: "ask_error",
+        message: err instanceof Error ? err.message : String(err),
+      },
+      "ask error",
     );
     // SSE headers are already sent (200) before the try; errors are signaled
     // in-band via an `error` event rather than an HTTP status.

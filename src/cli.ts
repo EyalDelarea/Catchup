@@ -329,9 +329,20 @@ program
       process.stderr.write("Error: --limit must be a positive integer.\n");
       process.exit(1);
     }
-    const [{ OllamaSummarizer }, { LexicalRetriever }, { askStream }, pg] = await Promise.all([
+    const [
+      { OllamaSummarizer },
+      { OllamaEmbedder },
+      { LexicalRetriever },
+      { RecencyRetriever },
+      { EmbeddingRetriever },
+      { askStream },
+      pg,
+    ] = await Promise.all([
       import("./summarization/summarizer.js"),
+      import("./ask/embedder.js"),
       import("./ask/lexical-retriever.js"),
+      import("./ask/recency-retriever.js"),
+      import("./ask/embedding-retriever.js"),
       import("./ask/ask.js"),
       import("pg"),
     ]);
@@ -344,12 +355,24 @@ program
       repeatPenalty: config.summarization.repeatPenalty,
       numPredict: config.summarization.numPredict,
     });
+    const embedder = new OllamaEmbedder({
+      host: config.embedding.ollamaHost,
+      model: config.embedding.model,
+      dimension: config.embedding.dimension,
+    });
+    // Mirror the web server's default retriever set: lexical + semantic always,
+    // recency when the question is scoped to one chat.
+    const retrievers = [
+      new LexicalRetriever(pool),
+      new EmbeddingRetriever(pool, embedder),
+      ...(options.chat ? [new RecencyRetriever(pool)] : []),
+    ];
     try {
       let pendingCitations: { n: number; chat: string; sender: string; sentAt: Date }[] = [];
       for await (const ev of askStream(
         {
           summarizer,
-          retrievers: [new LexicalRetriever(pool)],
+          retrievers,
           tokenBudget: config.summarization.tokenBudget,
         },
         question,
@@ -414,6 +437,7 @@ program
     const [
       { createServer },
       { OllamaSummarizer },
+      { OllamaEmbedder },
       { RabbitMqJobBus },
       { PostgresJobRunRecorder },
       { createDbClient, createAppPool, createOperatorPool },
@@ -432,6 +456,7 @@ program
     ] = await Promise.all([
       import("./web/server.js"),
       import("./summarization/summarizer.js"),
+      import("./ask/embedder.js"),
       import("./jobs/rabbitmq-bus.js"),
       import("./jobs/job-run-recorder.js"),
       import("./db/client.js"),
@@ -470,6 +495,13 @@ program
       temperature: config.summarization.temperature,
       repeatPenalty: config.summarization.repeatPenalty,
       numPredict: config.summarization.numPredict,
+    });
+    // Semantic retrieval for the ask flow — embeds questions against stored message
+    // vectors. Local-only (Ollama), same privacy contract as summarization.
+    const embedder = new OllamaEmbedder({
+      host: config.embedding.ollamaHost,
+      model: config.embedding.model,
+      dimension: config.embedding.dimension,
     });
 
     // Build a RabbitMQ bus for best-effort queue depth queries.
@@ -611,6 +643,7 @@ program
     const server = createServer({
       pool: appPool, // raw app pool — createServer scopes it per request
       summarizer,
+      embedder,
       tokenBudget: config.summarization.tokenBudget,
       model: config.summarization.model,
       getQueueDepths,
@@ -1130,6 +1163,67 @@ program
       await pool.end();
     }
     process.exit(failed ? 1 : 0);
+  });
+
+program
+  .command("embed-backfill")
+  .description(
+    "Embed stored messages for semantic (meaning-based) ask retrieval. Recent-first, batched, resumable — safe to re-run; already-embedded messages are skipped.",
+  )
+  .option("--limit <n>", "Max messages to embed this run", "500")
+  .option("--batch <n>", "Messages per model call", "32")
+  .option("--chat <name>", "Only embed messages in this chat")
+  .action(async (options: { limit?: string; batch?: string; chat?: string }) => {
+    const limit = Number(options.limit ?? "500");
+    const batch = Number(options.batch ?? "32");
+    if (!Number.isInteger(limit) || limit <= 0) {
+      process.stderr.write("Error: --limit must be a positive integer.\n");
+      process.exit(1);
+    }
+    if (!Number.isInteger(batch) || batch <= 0) {
+      process.stderr.write("Error: --batch must be a positive integer.\n");
+      process.exit(1);
+    }
+
+    const config = loadConfig();
+    const [{ OllamaEmbedder }, { runEmbeddingBackfill }, embRepo, pgMod] = await Promise.all([
+      import("./ask/embedder.js"),
+      import("./ask/embedding-backfill.js"),
+      import("./db/repositories/message-embeddings.js"),
+      import("pg"),
+    ]);
+
+    const pool = new pgMod.default.Pool({ connectionString: config.databaseUrl });
+    const embedder = new OllamaEmbedder({
+      host: config.embedding.ollamaHost,
+      model: config.embedding.model,
+      dimension: config.embedding.dimension,
+    });
+
+    try {
+      const before = await embRepo.countEmbeddedMessages(pool);
+      const { embedded } = await runEmbeddingBackfill(
+        {
+          selectPending: (l) =>
+            embRepo.selectMessagesNeedingEmbedding(pool, { limit: l, chat: options.chat }),
+          embed: (texts) => embedder.embed(texts),
+          upsert: (messageId, embedding) =>
+            embRepo.upsertEmbedding(pool, { messageId, embedding, model: embedder.model }),
+          log: (m) => process.stdout.write(`${m}\n`),
+        },
+        { limit, batchSize: batch },
+      );
+      const after = await embRepo.countEmbeddedMessages(pool);
+      console.log(
+        `Embedded ${embedded} message(s) this run (${embedder.model}). Total embedded: ${after} (was ${before}).`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`Error: embed-backfill failed: ${message}\n`);
+      process.exitCode = 1;
+    } finally {
+      await pool.end();
+    }
   });
 
 program
