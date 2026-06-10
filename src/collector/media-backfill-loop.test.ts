@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_TENANT_ID } from "../db/tenant-context.js";
 import { runBackfillBatch, startBackfillLoop } from "./media-backfill-loop.js";
 
 const baseDeps = (over: Partial<any> = {}) => ({
@@ -24,7 +25,10 @@ describe("runBackfillBatch", () => {
     expect(deps.download).toHaveBeenCalledOnce();
     expect(deps.markPresentMessage).toHaveBeenCalledWith(1, "/data/media/backfill/1.jpg");
     expect(deps.markPresentMedia).toHaveBeenCalledWith(1, null);
-    expect(deps.enqueue).toHaveBeenCalledWith("analyze.image", { messageId: "1" });
+    expect(deps.enqueue).toHaveBeenCalledWith("analyze.image", {
+      messageId: "1",
+      tenantId: DEFAULT_TENANT_ID, // T2/T3: every payload is tenant-stamped
+    });
     // Fix 2: markPresentMedia must be called AFTER enqueue (state gate is last)
     const enqueueOrder = (deps.enqueue as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
     const markMediaOrder = (deps.markPresentMedia as ReturnType<typeof vi.fn>).mock
@@ -53,7 +57,10 @@ describe("runBackfillBatch", () => {
         .mockResolvedValue([{ messageId: 2, mediaKind: "audio", waMessage: Buffer.from([1]) }]),
     });
     await runBackfillBatch(deps as any, 10);
-    expect(deps.enqueue).toHaveBeenCalledWith("transcribe.voicenote", { messageId: "2" });
+    expect(deps.enqueue).toHaveBeenCalledWith("transcribe.voicenote", {
+      messageId: "2",
+      tenantId: DEFAULT_TENANT_ID,
+    });
   });
 
   it("marks unrecoverable on a 404/NOT_FOUND download error", async () => {
@@ -99,7 +106,10 @@ describe("runBackfillBatch", () => {
         .mockResolvedValue([{ messageId: 5, mediaKind: "video", waMessage: Buffer.from([1]) }]),
     });
     await runBackfillBatch(deps as any, 10);
-    expect(deps.enqueue).toHaveBeenCalledWith("analyze.video", { messageId: "5" });
+    expect(deps.enqueue).toHaveBeenCalledWith("analyze.video", {
+      messageId: "5",
+      tenantId: DEFAULT_TENANT_ID,
+    });
   });
 
   it("marks unrecoverable on a 410 download error", async () => {

@@ -17,6 +17,7 @@ import { upsertGroup } from "../db/repositories/groups.js";
 import { insertMessages } from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
 import { upsertWatermark } from "../db/repositories/read-watermarks.js";
+import { DEFAULT_TENANT_ID } from "../db/tenant-context.js";
 import type { JobBus } from "../jobs/job-bus.js";
 import type { JobPayloads, JobType } from "../jobs/job-types.js";
 import { createTestDatabase } from "../test/db.js";
@@ -193,7 +194,10 @@ describe("enqueueScheduledRun", () => {
     await enqueueScheduledRun(pool, bus, { all: true, sinceForTotal: since });
     const totals = bus.calls.filter((e) => e.type === "summarize.total");
     expect(totals.length).toBe(1);
-    expect(totals[0]!.payload).toEqual({ since: since.toISOString() });
+    expect(totals[0]!.payload).toEqual({
+      since: since.toISOString(),
+      tenantId: DEFAULT_TENANT_ID, // T2: every payload is tenant-stamped
+    });
   });
 
   it("does NOT enqueue a total when sinceForTotal is omitted", async () => {

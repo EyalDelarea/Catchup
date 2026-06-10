@@ -1196,7 +1196,159 @@ function resolveInitialRoute() {
   return { view: "feed" };
 }
 
+// ── T2 auth gate (multi-tenant mode) ─────────────────────────────────────────
+// Single-user local mode: /api/* is open → the gate is a no-op. Multi-tenant mode
+// (MULTI_TENANT=true server-side): /api/* returns 401 without a session → show the
+// login/register pane. /verify + /reset are the emailed-link landing pages.
+
+async function authGate() {
+  const token = new URLSearchParams(location.search).get("token");
+  if (location.pathname === "/verify" && token) {
+    await renderVerifyResult(token);
+    return false;
+  }
+  if (location.pathname === "/reset" && token) {
+    renderResetForm(token);
+    return false;
+  }
+  const me = await fetch("/api/auth/me").catch(() => null);
+  if (me && me.ok) return true;
+  // No session. Distinguish single-user (APIs open) from multi-tenant (gated).
+  const probe = await fetch("/api/status").catch(() => null);
+  if (probe && probe.status !== 401) return true;
+  renderAuthPane("login");
+  return false;
+}
+
+function authShell(innerHtml) {
+  document.getElementById("layout").innerHTML = `
+    <div class="auth-pane">
+      <div class="auth-card">
+        <h1 class="auth-card__title">סיכום וואטסאפ</h1>
+        ${innerHtml}
+      </div>
+    </div>
+  `;
+}
+
+function renderAuthPane(mode) {
+  const isLogin = mode === "login";
+  authShell(`
+    <div class="auth-tabs">
+      <button id="tab-login" class="auth-tab ${isLogin ? "auth-tab--active" : ""}">התחברות</button>
+      <button id="tab-register" class="auth-tab ${isLogin ? "" : "auth-tab--active"}">הרשמה</button>
+    </div>
+    <form id="auth-form" class="auth-form">
+      <label class="auth-label">אימייל
+        <input id="auth-email" class="auth-input" type="email" required autocomplete="email" />
+      </label>
+      <label class="auth-label">סיסמה (8 תווים לפחות)
+        <input id="auth-password" class="auth-input" type="password" required minlength="8"
+               autocomplete="${isLogin ? "current-password" : "new-password"}" />
+      </label>
+      ${
+        isLogin
+          ? `<button type="button" id="auth-forgot" class="auth-link">שכחתי סיסמה</button>`
+          : `<label class="auth-consent"><input id="auth-consent" type="checkbox" required />
+               אני מסכים/ה לתנאי השימוש: ההודעות שלי (כולל של אנשי הקשר שלי) יאוחסנו ויעובדו
+               בשרת המופעל ע"י מנהל המערכת לצורך סיכומים. ניתן לבקש מחיקה מלאה בכל עת.</label>`
+      }
+      <p id="auth-error" class="auth-error" hidden></p>
+      <button type="submit" class="auth-submit">${isLogin ? "התחברות" : "הרשמה"}</button>
+    </form>
+  `);
+  document.getElementById("tab-login").onclick = () => renderAuthPane("login");
+  document.getElementById("tab-register").onclick = () => renderAuthPane("register");
+  const forgot = document.getElementById("auth-forgot");
+  if (forgot) forgot.onclick = () => renderForgotForm();
+  document.getElementById("auth-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const body = {
+      email: document.getElementById("auth-email").value.trim(),
+      password: document.getElementById("auth-password").value,
+    };
+    if (!isLogin) body.consent = document.getElementById("auth-consent").checked;
+    const r = await fetch(`/api/auth/${isLogin ? "login" : "register"}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => null);
+    if (r && (r.status === 200 || r.status === 201)) {
+      location.href = "/";
+      return;
+    }
+    const err = document.getElementById("auth-error");
+    err.textContent = r ? ((await r.json().catch(() => ({}))).error ?? "שגיאה") : "שגיאת רשת";
+    err.hidden = false;
+  };
+}
+
+function renderForgotForm() {
+  authShell(`
+    <form id="auth-form" class="auth-form">
+      <p>נשלח קישור לאיפוס סיסמה אם האימייל רשום אצלנו (חפשו בלוג של השרת בהתקנה עצמית).</p>
+      <label class="auth-label">אימייל
+        <input id="auth-email" class="auth-input" type="email" required />
+      </label>
+      <button type="submit" class="auth-submit">שליחת קישור איפוס</button>
+      <button type="button" id="auth-back" class="auth-link">חזרה להתחברות</button>
+    </form>
+  `);
+  document.getElementById("auth-back").onclick = () => renderAuthPane("login");
+  document.getElementById("auth-form").onsubmit = async (e) => {
+    e.preventDefault();
+    await fetch("/api/auth/request-reset", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: document.getElementById("auth-email").value.trim() }),
+    }).catch(() => null);
+    authShell(`<p>אם האימייל רשום — נשלח קישור איפוס.</p><a class="auth-link" href="/">חזרה</a>`);
+  };
+}
+
+async function renderVerifyResult(token) {
+  const r = await fetch("/api/auth/verify", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token }),
+  }).catch(() => null);
+  const ok = r && r.ok;
+  authShell(`
+    <p>${ok ? "✅ האימייל אומת בהצלחה!" : "❌ קישור האימות לא תקין או שפג תוקפו."}</p>
+    <a class="auth-submit auth-submit--link" href="/">המשך לאפליקציה</a>
+  `);
+}
+
+function renderResetForm(token) {
+  authShell(`
+    <form id="auth-form" class="auth-form">
+      <label class="auth-label">סיסמה חדשה (8 תווים לפחות)
+        <input id="auth-password" class="auth-input" type="password" required minlength="8"
+               autocomplete="new-password" />
+      </label>
+      <p id="auth-error" class="auth-error" hidden></p>
+      <button type="submit" class="auth-submit">איפוס סיסמה</button>
+    </form>
+  `);
+  document.getElementById("auth-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const r = await fetch("/api/auth/reset", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token, password: document.getElementById("auth-password").value }),
+    }).catch(() => null);
+    if (r && r.ok) {
+      authShell(`<p>✅ הסיסמה אופסה. התחברו מחדש.</p><a class="auth-submit auth-submit--link" href="/">להתחברות</a>`);
+      return;
+    }
+    const err = document.getElementById("auth-error");
+    err.textContent = "קישור האיפוס לא תקין או שפג תוקפו.";
+    err.hidden = false;
+  };
+}
+
 async function boot() {
+  if (!(await authGate())) return;
   renderShell();
   if (DEMO) applyHealth(true);
   else startHealthPolling();

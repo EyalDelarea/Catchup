@@ -8,7 +8,9 @@
  * write the file, flip media_status='present', and enqueue the EXISTING
  * analysis job. Per-item failures never abort the batch.
  */
+
 import type { PendingMedia } from "../db/repositories/message-media.js";
+import { currentTenantId } from "../db/tenant-context.js";
 import type { JobType } from "../jobs/job-types.js";
 
 /** Filename extension per media kind, for the backfill writeFile sink. */
@@ -70,7 +72,7 @@ export type BackfillDeps = {
   markPresentMedia: (messageId: number, directPath: string | null) => Promise<void>;
   markUnrecoverable: (messageId: number, error: string) => Promise<void>;
   recordAttempt: (messageId: number, error: string) => Promise<void>;
-  enqueue: (type: JobType, payload: { messageId: string }) => Promise<void>;
+  enqueue: (type: JobType, payload: { messageId: string; tenantId?: string }) => Promise<void>;
   /**
    * Retire pending rows whose signed URL already expired (returns the count).
    * Run once per batch BEFORE selecting so the doomed rows never enter the queue
@@ -132,7 +134,8 @@ export async function runBackfillBatch(deps: BackfillDeps, limit: number): Promi
       const path = await deps.writeFile(row.messageId, row.mediaKind, bytes);
       await deps.markPresentMessage(row.messageId, path);
       const job = analysisJobFor(row.mediaKind);
-      if (job) await deps.enqueue(job, { messageId: String(row.messageId) });
+      if (job)
+        await deps.enqueue(job, { messageId: String(row.messageId), tenantId: currentTenantId() });
       await deps.markPresentMedia(row.messageId, null);
       done++;
     } catch (err) {

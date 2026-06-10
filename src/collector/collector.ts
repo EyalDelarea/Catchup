@@ -9,6 +9,7 @@
  * - Inserts into messages table
  * - Returns true if a new row was stored, false if it was a duplicate
  */
+
 import fs from "node:fs";
 import path from "node:path";
 import type { WAMessage } from "@whiskeysockets/baileys";
@@ -20,6 +21,7 @@ import {
 } from "../db/repositories/groups.js";
 import { getMessageIdByExternalId, insertMessages } from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
+import { currentTenantId } from "../db/tenant-context.js";
 import { normalize } from "../importer/normalize.js";
 import type { ImportedMessage } from "../importer/types.js";
 import type { JobBus } from "../jobs/job-bus.js";
@@ -433,7 +435,10 @@ export async function handleIncomingMessage(
   if (isNew && mapped.isVoiceNote && opts.bus && normalized.mediaStatus === "present") {
     const messageId = result.ids[0];
     if (messageId !== undefined) {
-      await opts.bus.enqueue("transcribe.voicenote", { messageId: String(messageId) });
+      await opts.bus.enqueue("transcribe.voicenote", {
+        messageId: String(messageId),
+        tenantId: currentTenantId(),
+      });
     }
   }
 
@@ -443,7 +448,10 @@ export async function handleIncomingMessage(
   if (isNew && willDownloadImage && opts.bus && normalized.mediaStatus === "present") {
     const messageId = result.ids[0];
     if (messageId !== undefined) {
-      await opts.bus.enqueue("analyze.image", { messageId: String(messageId) });
+      await opts.bus.enqueue("analyze.image", {
+        messageId: String(messageId),
+        tenantId: currentTenantId(),
+      });
     }
   }
 
@@ -456,7 +464,10 @@ export async function handleIncomingMessage(
     if (hasMedia || hasThumbnail) {
       const messageId = result.ids[0];
       if (messageId !== undefined) {
-        await opts.bus.enqueue("analyze.video", { messageId: String(messageId) });
+        await opts.bus.enqueue("analyze.video", {
+          messageId: String(messageId),
+          tenantId: currentTenantId(),
+        });
       }
     }
   }

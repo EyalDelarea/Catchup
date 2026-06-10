@@ -21,6 +21,7 @@
     "check": "biome check src"
   },
   "dependencies": {
+    "@node-rs/argon2": "^2.0.2",
     "@whiskeysockets/baileys": "^7.0.0-rc13",
     "amqplib": "^2.0.1",
     "commander": "^15.0.0",

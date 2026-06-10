@@ -138,16 +138,20 @@ program
     const nameResolverLog = getLogger("name-resolver");
     const config = loadConfig();
     const authDir = path.join(config.dataDir, "baileys-auth");
-    const dbUrl = config.databaseUrl;
 
     // Import lazily to avoid loading Baileys at startup for non-collect commands
-    const [{ startSession }, { handleIncomingMessage }, pg] = await Promise.all([
-      import("./collector/session.js"),
-      import("./collector/collector.js"),
-      import("pg"),
-    ]);
+    const [{ startSession }, { handleIncomingMessage }, { createAppPool }, tenantCtx] =
+      await Promise.all([
+        import("./collector/session.js"),
+        import("./collector/collector.js"),
+        import("./db/client.js"),
+        import("./db/tenant-context.js"),
+      ]);
 
-    const pool = new pg.default.Pool({ connectionString: dbUrl });
+    // T2 cutover: ingest runs on the RLS-enforced app pool, attributed to the default
+    // tenant (single-user mode; T3 makes this per-tenant via the session registry).
+    const appPool = createAppPool();
+    const pool = tenantCtx.scopedPool(appPool, () => tenantCtx.DEFAULT_TENANT_ID);
     let storedCount = 0;
 
     // SAFETY BANNER — make the outbound posture unmistakable before linking.
@@ -213,7 +217,7 @@ program
       collectorLog.info({ stored: storedCount }, "stopping collector");
       logLifecycle("shutdown", { proc: "collect", signal: "SIGINT" });
       session.stop();
-      pool
+      appPool
         .end()
         .catch(() => {})
         .finally(() => {
@@ -412,8 +416,9 @@ program
       { OllamaSummarizer },
       { RabbitMqJobBus },
       { PostgresJobRunRecorder },
-      { createDbClient },
-      pg,
+      { createDbClient, createAppPool, createOperatorPool },
+      { scopedPool, DEFAULT_TENANT_ID },
+      { createLogMailer },
       { backfillGroup },
       { isHealthy, getLastHeartbeatAt },
       { startScheduler },
@@ -430,7 +435,8 @@ program
       import("./jobs/rabbitmq-bus.js"),
       import("./jobs/job-run-recorder.js"),
       import("./db/client.js"),
-      import("pg"),
+      import("./db/tenant-context.js"),
+      import("./auth/mailer.js"),
       import("./collector/backfill.js"),
       import("./service/liveness.js"),
       import("./scheduler/runner.js"),
@@ -450,7 +456,13 @@ program
       reconnect: getLogger("reconnect-sync"),
       cli: getLogger("cli"),
     };
-    const pool = new pg.default.Pool({ connectionString: config.databaseUrl });
+    // T2 cutover: this process talks to Postgres as the RLS-enforced catchup_app role.
+    // The web server scopes each request to its session's tenant; everything else here
+    // (schedulers, collector, backfill, reconnect recovery) is default-tenant work and
+    // runs through a default-scoped adapter — identical local behavior, now attributed.
+    const appPool = createAppPool();
+    const pool = scopedPool(appPool, () => DEFAULT_TENANT_ID);
+    const operatorPool = createOperatorPool();
     const summarizer = new OllamaSummarizer({
       host: config.summarization.ollamaHost,
       model: config.summarization.model,
@@ -533,12 +545,26 @@ program
       : {};
 
     const server = createServer({
-      pool,
+      pool: appPool, // raw app pool — createServer scopes it per request
       summarizer,
       tokenBudget: config.summarization.tokenBudget,
       model: config.summarization.model,
       getQueueDepths,
       logger: webLogger,
+      auth: {
+        deps: {
+          appPool,
+          operatorPool,
+          mailer: createLogMailer(getLogger("auth")),
+          now: () => new Date(),
+          sessionTtlSeconds: config.auth.sessionTtlSeconds,
+          emailTokenTtlSeconds: config.auth.emailTokenTtlSeconds,
+          tosVersion: config.auth.tosVersion,
+          publicBaseUrl: config.auth.publicBaseUrl,
+        },
+        cookieSecure: config.auth.cookieSecure,
+        required: config.auth.enabled,
+      },
       ...collectDeps,
     });
     server.on("error", (err: Error) => {
@@ -612,6 +638,7 @@ program
     // ── --collect mode: start live collector in the same process ──────────────
     let liveHandle: { stop: () => void } | null = null;
     let backfillHandle: { stop: () => void } | null = null;
+    let tenantRegistry: { stopAll: () => void } | null = null;
 
     if (options.collect) {
       // Safety banner (same wording as the standalone `collect` command)
@@ -832,6 +859,66 @@ program
         // Collector startup failure must NOT exit (web server keeps running)
         log.collector.error({ err }, "startup error (web server continues)");
       }
+
+      // ── T3: per-tenant WhatsApp sessions (multi-tenant mode only) ───────────
+      // The default tenant keeps the rich legacy pipeline above (boot recovery,
+      // on-demand backfill, media-backfill loop). Additional tenants get supervised
+      // sessions with tenant-attributed ingest; their QR onboarding arrives in T4.
+      if (config.auth.enabled) {
+        try {
+          const [{ TenantSessionRegistry }, { makeTenantIngest }, { startSession }] =
+            await Promise.all([
+              import("./collector/tenant-session-registry.js"),
+              import("./collector/tenant-ingest.js"),
+              import("./collector/session.js"),
+            ]);
+          const registry = new TenantSessionRegistry({
+            authRoot: path.join(config.dataDir, "baileys-auth"),
+            startSession: (dir) => startSession(dir, config.whatsapp.allowSend),
+          });
+          const ingest = makeTenantIngest({
+            appPool,
+            dataDir: config.dataDir,
+            bus: brokerBus,
+            sessionGlue: (tenantId) => {
+              const s = registry.session(tenantId) as
+                | import("./collector/session.js").CollectorSession
+                | null;
+              if (!s) return {};
+              return {
+                downloadVoiceNote: (m) => s.downloadMedia(m),
+                downloadImage: (m) => s.downloadMedia(m),
+                downloadVideo: (m) => s.downloadMedia(m),
+                groupSubject: (jid) => s.groupSubject(jid),
+                lidForPn: (pn) => s.lidForPn(pn),
+                pnForLid: (lid) => s.pnForLid(lid),
+              };
+            },
+          });
+          registry.on(
+            "message",
+            (tenantId: string, msg: import("@whiskeysockets/baileys").WAMessage) => {
+              ingest(tenantId, msg).catch((err: unknown) => {
+                log.collector.warn({ err, tenantId }, "tenant ingest failed");
+              });
+            },
+          );
+          registry.on("connected", (tenantId: string) => {
+            log.collector.info({ tenantId }, "tenant session connected");
+          });
+          registry.on("logged-out", (tenantId: string) => {
+            log.collector.error({ tenantId }, "tenant session logged out — re-link required");
+          });
+          // The default tenant's session is the legacy block above — never doubled.
+          const started = await registry.startDiscovered({ exclude: [DEFAULT_TENANT_ID] });
+          if (started.length > 0) {
+            log.collector.info({ tenants: started }, "tenant session(s) started");
+          }
+          tenantRegistry = registry;
+        } catch (err) {
+          log.collector.error({ err }, "tenant session registry startup error (server continues)");
+        }
+      }
     }
 
     // ── Graceful shutdown (SIGINT + SIGTERM) ─────────────────────────────────
@@ -846,10 +933,12 @@ program
       // Stop collector wiring (if started)
       liveHandle?.stop();
       backfillHandle?.stop();
+      tenantRegistry?.stopAll();
       server.close();
       brokerBus.close().catch(() => {});
       dbClient.end().catch(() => {});
-      pool
+      operatorPool.end().catch(() => {});
+      appPool
         .end()
         .catch(() => {})
         // Flush the shutdown event + any batched lines before exiting, with a
@@ -913,7 +1002,8 @@ program
       for (const { messageId, kind } of rows) {
         const jobType = kind === "video" ? "analyze.video" : "analyze.image";
         if (!allowedTypes.has(jobType)) continue;
-        await bus.enqueue(jobType, { messageId: String(messageId) });
+        const { currentTenantId } = await import("./db/tenant-context.js");
+        await bus.enqueue(jobType, { messageId: String(messageId), tenantId: currentTenantId() });
         enqueued++;
       }
 
