@@ -1272,6 +1272,32 @@ describe("GET /api/ask", () => {
     expect(text).toContain("event: error");
     expect(text).toContain("missing q parameter");
   });
+
+  it("logs an ask_start and an ask line with timings and candidateCount", async () => {
+    const lines: Array<Record<string, unknown>> = [];
+    const srv = createServer({
+      pool,
+      summarizer: new AskFakeSummarizer(),
+      tokenBudget: 24000,
+      model: "fake",
+      askRetrievers: [fakeRetriever],
+      logger: { info: (obj) => lines.push(obj) },
+    });
+    await new Promise<void>((r) => srv.listen(0, r));
+    const port = (srv.address() as AddressInfo).port;
+    try {
+      const u = `http://localhost:${port}/api/ask?q=${encodeURIComponent("שאלה")}&chat=${encodeURIComponent("גיבוש")}`;
+      await fetch(u).then((r) => r.text());
+    } finally {
+      await new Promise<void>((r) => srv.close(() => r()));
+    }
+    const startLine = lines.find((l) => l.evt === "ask_start");
+    const doneLine = lines.find((l) => l.evt === "ask");
+    expect(startLine).toMatchObject({ component: "ask", chat: "גיבוש", scoped: true });
+    expect(doneLine).toMatchObject({ component: "ask", candidateCount: 1, aborted: false });
+    expect(typeof doneLine?.totalMs).toBe("number");
+    expect(typeof doneLine?.ttfbMs).toBe("number");
+  });
 });
 
 // ── GET /api/ask — client disconnect aborts summarizer ────────────────────────
