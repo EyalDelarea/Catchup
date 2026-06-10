@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type pg from "pg";
 import { askStream } from "../ask/ask.js";
 import { LexicalRetriever } from "../ask/lexical-retriever.js";
+import { RecencyRetriever } from "../ask/recency-retriever.js";
 import type { Retriever } from "../ask/retriever.js";
 import { findGroupByName, listGroups } from "../db/repositories/groups.js";
 import { countReadableByGroup, getOldestSentAt } from "../db/repositories/messages.js";
@@ -512,6 +513,20 @@ async function handleTotalSummary(
   }
 }
 
+/**
+ * Production retriever set for the ask flow. Lexical always runs. For a
+ * chat-scoped question we also fuse in recency: NL questions like
+ * "מה גיא שאל אותי היום" rarely share content words with the replies, so lexical
+ * alone returns none of the relevant messages — recency supplies the actual
+ * recent context. We skip recency for all-chats questions, where "most recent
+ * across every chat" would just be noise.
+ */
+function defaultAskRetrievers(pool: pg.Pool, chat?: string): Retriever[] {
+  const retrievers: Retriever[] = [new LexicalRetriever(pool)];
+  if (chat) retrievers.push(new RecencyRetriever(pool));
+  return retrievers;
+}
+
 async function handleAsk(
   url: URL,
   req: http.IncomingMessage,
@@ -538,7 +553,7 @@ async function handleAsk(
       return;
     }
     const chat = url.searchParams.get("chat") ?? undefined;
-    const retrievers = deps.askRetrievers ?? [new LexicalRetriever(deps.pool)];
+    const retrievers = deps.askRetrievers ?? defaultAskRetrievers(deps.pool, chat);
 
     for await (const ev of askStream(
       { summarizer: deps.summarizer, retrievers, tokenBudget: deps.tokenBudget },
