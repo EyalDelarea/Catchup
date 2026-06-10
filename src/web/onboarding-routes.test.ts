@@ -98,26 +98,25 @@ describe("GET /api/onboarding/qr (SSE)", () => {
     const reg = new FakeRegistry();
     const base = await listen(reg);
 
-    const controller = new AbortController();
-    const resPromise = fetch(`${base}/api/onboarding/qr`, { signal: controller.signal });
+    const resPromise = fetch(`${base}/api/onboarding/qr`);
 
-    // Give the handler a tick to subscribe, then emit events.
-    await new Promise((r) => setTimeout(r, 30));
+    // The handler subscribes synchronously when the request lands; emit on the next tick.
+    await new Promise((r) => setTimeout(r, 20));
     reg.emit("qr", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "OTHER-TENANT-QR"); // ignored
     reg.emit("qr", TENANT, "QR-PAYLOAD-1");
-    // QR rendering is async (server-side encode); let it flush before "connected"
-    // ends the stream — which is also the real-world order (scan, THEN connect).
-    await new Promise((r) => setTimeout(r, 50));
+    // connected ends the stream — the server serializes it AFTER the async qr render, so
+    // the qr frame is always present (no sleep needed; deterministic by construction).
     reg.emit("connected", TENANT);
 
     const res = await resPromise;
     expect(res.headers.get("content-type")).toContain("text/event-stream");
-    // The stream ends on connected; read it fully.
     const text = await res.text();
     expect(text).toContain("event: qr");
     expect(text).toContain("data:image/png;base64"); // rendered server-side, browser shows <img>
     expect(text).not.toContain("OTHER-TENANT-QR");
     expect(text).toContain("event: connected");
+    // Ordering guarantee: the qr frame precedes the connected frame.
+    expect(text.indexOf("event: qr")).toBeLessThan(text.indexOf("event: connected"));
   });
 
   it("starts the session if it isn't already linking (so opening the pane shows a QR)", async () => {

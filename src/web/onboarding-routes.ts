@@ -96,25 +96,39 @@ export function makeOnboardingRoutes(opts: OnboardingRoutesOptions) {
     });
     const send = (event: string, data: unknown) => res.write(sseFrame(event, data));
 
+    // Serialize sends: QR rendering is async, so a "connected"/"logged-out" event that
+    // ends the stream must run AFTER any in-flight QR render — otherwise a fast connect
+    // could end the response before the QR frame is written (events delivered in order,
+    // never dropped). This makes the stream deterministic regardless of render latency.
+    let chain: Promise<void> = Promise.resolve();
+    const enqueue = (work: () => void | Promise<void>): void => {
+      chain = chain.then(work).catch(() => {});
+    };
+
     const onQr = (...args: unknown[]): void => {
       if (args[0] !== tenantId) return;
       // Render server-side to a data URL so the browser just shows an <img> — no
       // client-side QR library (and no CSP exception) needed.
-      void renderQrDataUrl(String(args[1]))
-        .then((dataUrl) => send("qr", { dataUrl }))
-        .catch(() => {});
+      enqueue(async () => {
+        const dataUrl = await renderQrDataUrl(String(args[1]));
+        send("qr", { dataUrl });
+      });
     };
     const onConnected = (...args: unknown[]): void => {
       if (args[0] !== tenantId) return;
-      send("connected", { tenantId });
-      cleanup();
-      res.end();
+      enqueue(() => {
+        send("connected", { tenantId });
+        cleanup();
+        res.end();
+      });
     };
     const onLoggedOut = (...args: unknown[]): void => {
       if (args[0] !== tenantId) return;
-      send("logged-out", { tenantId });
-      cleanup();
-      res.end();
+      enqueue(() => {
+        send("logged-out", { tenantId });
+        cleanup();
+        res.end();
+      });
     };
     const cleanup = (): void => {
       registry.off("qr", onQr);
