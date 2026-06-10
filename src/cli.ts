@@ -307,6 +307,71 @@ program
   });
 
 program
+  .command("ask")
+  .description("Ask a free-form question about your chat history (local RAG)")
+  .argument("<question>", "Natural-language question (quote it)")
+  .option("--chat <name>", "Limit the search to a single chat by name")
+  .option("--now <iso>", "Override 'now' for relative dates (ISO 8601) — for testing")
+  .option("--limit <n>", "Max messages to retrieve (default 30)")
+  .action(async (question: string, options: { chat?: string; now?: string; limit?: string }) => {
+    const config = loadConfig();
+    const now = options.now ? new Date(options.now) : new Date();
+    if (Number.isNaN(now.getTime())) {
+      process.stderr.write(`Error: invalid --now "${options.now}".\n`);
+      process.exit(1);
+    }
+    const limitNum = options.limit !== undefined ? Number(options.limit) : undefined;
+    if (limitNum !== undefined && (!Number.isInteger(limitNum) || limitNum <= 0)) {
+      process.stderr.write("Error: --limit must be a positive integer.\n");
+      process.exit(1);
+    }
+    const [{ OllamaSummarizer }, { LexicalRetriever }, { askStream }, pg] = await Promise.all([
+      import("./summarization/summarizer.js"),
+      import("./ask/lexical-retriever.js"),
+      import("./ask/ask.js"),
+      import("pg"),
+    ]);
+    const pool = new pg.default.Pool({ connectionString: config.databaseUrl });
+    const summarizer = new OllamaSummarizer({
+      host: config.summarization.ollamaHost,
+      model: config.summarization.model,
+      numCtx: config.summarization.numCtx,
+      temperature: config.summarization.temperature,
+      repeatPenalty: config.summarization.repeatPenalty,
+      numPredict: config.summarization.numPredict,
+    });
+    try {
+      let pendingCitations: { n: number; chat: string; sender: string; sentAt: Date }[] = [];
+      for await (const ev of askStream(
+        {
+          summarizer,
+          retrievers: [new LexicalRetriever(pool)],
+          tokenBudget: config.summarization.tokenBudget,
+        },
+        question,
+        now,
+        { chat: options.chat, limit: limitNum },
+      )) {
+        if (ev.type === "token") process.stdout.write(ev.delta);
+        else if (ev.type === "citations") pendingCitations = ev.citations;
+      }
+      process.stdout.write("\n");
+      if (pendingCitations.length > 0) {
+        process.stdout.write("\nמקורות:\n");
+        for (const c of pendingCitations) {
+          const ts = c.sentAt.toISOString().slice(0, 16).replace("T", " ");
+          process.stdout.write(`  [${c.n}] ${c.chat} · ${c.sender} · ${ts}\n`);
+        }
+      }
+    } catch (err) {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exitCode = 1;
+    } finally {
+      await pool.end();
+    }
+  });
+
+program
   .command("transcribe")
   .description("Transcribe pending Hebrew voice notes locally (nothing leaves the machine)")
   .option("--group <name>", "Only transcribe voice notes in this group")
@@ -750,6 +815,7 @@ program
             markPresentMedia: (id, dp) => mediaRepo.markMediaPresent(pool, id, dp),
             markUnrecoverable: (id, e) => mediaRepo.markMediaUnrecoverable(pool, id, e),
             recordAttempt: (id, e) => mediaRepo.recordMediaAttempt(pool, id, e),
+            sweepExpired: () => mediaRepo.markExpiredMediaUnrecoverable(pool),
             enqueue: async (type, payload) => {
               await brokerBus.enqueue(type, payload);
             },
@@ -950,6 +1016,7 @@ program
           markPresentMedia: (id, dp) => mediaRepo.markMediaPresent(pool, id, dp),
           markUnrecoverable: (id, e) => mediaRepo.markMediaUnrecoverable(pool, id, e),
           recordAttempt: (id, e) => mediaRepo.recordMediaAttempt(pool, id, e),
+          sweepExpired: () => mediaRepo.markExpiredMediaUnrecoverable(pool),
           enqueue: async (type, payload) => {
             await bus.enqueue(type, payload);
           },

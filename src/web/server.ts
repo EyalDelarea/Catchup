@@ -3,6 +3,9 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type pg from "pg";
+import { askStream } from "../ask/ask.js";
+import { LexicalRetriever } from "../ask/lexical-retriever.js";
+import type { Retriever } from "../ask/retriever.js";
 import { findGroupByName, listGroups } from "../db/repositories/groups.js";
 import { countReadableByGroup, getOldestSentAt } from "../db/repositories/messages.js";
 import { upsertWatermark } from "../db/repositories/read-watermarks.js";
@@ -42,6 +45,8 @@ export type ServerDeps = {
   backfillTargetWindow?: number;
   /** Optional structured logger (pino). Used to record backfill outcomes for the trace/dashboard. */
   logger?: { info: (obj: Record<string, unknown>, msg?: string) => void };
+  /** Retrievers for the ask flow. Defaults to [LexicalRetriever(pool)] when absent. */
+  askRetrievers?: Retriever[];
 };
 
 export function createServer(deps: ServerDeps): http.Server {
@@ -73,6 +78,10 @@ export function createServer(deps: ServerDeps): http.Server {
     }
     if (req.method === "GET" && url.pathname === "/api/total-summary") {
       void handleTotalSummary(url, req, res, deps);
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/ask") {
+      void handleAsk(url, req, res, deps);
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/status") {
@@ -499,6 +508,57 @@ async function handleTotalSummary(
     res.end();
   } catch (err) {
     send("error", { message: err instanceof Error ? err.message : String(err) });
+    res.end();
+  }
+}
+
+async function handleAsk(
+  url: URL,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: ServerDeps,
+): Promise<void> {
+  const ac = new AbortController();
+  const abortOnClose = () => ac.abort();
+  req.on("close", abortOnClose);
+  res.on("close", abortOnClose);
+
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+  });
+  const send = (event: string, data: unknown) => res.write(sseFrame(event, data));
+
+  try {
+    const question = (url.searchParams.get("q") ?? "").trim();
+    if (question.length === 0) {
+      send("error", { message: "missing q parameter" });
+      res.end();
+      return;
+    }
+    const chat = url.searchParams.get("chat") ?? undefined;
+    const retrievers = deps.askRetrievers ?? [new LexicalRetriever(deps.pool)];
+
+    for await (const ev of askStream(
+      { summarizer: deps.summarizer, retrievers, tokenBudget: deps.tokenBudget },
+      question,
+      new Date(),
+      { chat, signal: ac.signal },
+    )) {
+      if (ac.signal.aborted) return;
+      if (ev.type === "token") send("token", { delta: ev.delta });
+      else if (ev.type === "citations") send("citations", { citations: ev.citations });
+      else send("done", { candidateCount: ev.candidateCount });
+    }
+    res.end();
+  } catch (err) {
+    process.stderr.write(
+      `Error handling /api/ask: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+    );
+    // SSE headers are already sent (200) before the try; errors are signaled
+    // in-band via an `error` event rather than an HTTP status.
+    send("error", { message: "Internal server error." });
     res.end();
   }
 }

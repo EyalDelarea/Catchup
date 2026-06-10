@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { appPool, createTestDatabase } from "../test/db.js";
 import { createAdminPool } from "./client.js";
 import { DEFAULT_TENANT_ID } from "./tenant-context.js";
