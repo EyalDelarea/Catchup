@@ -15,6 +15,16 @@ describe("cookies", () => {
     expect(parseCookies("bad=%zz; good=ok")).toEqual({ bad: "%zz", good: "ok" });
   });
 
+  it("is immune to prototype pollution via hostile cookie names", () => {
+    const out = parseCookies("__proto__=evil; constructor=evil; a=1");
+    expect(out["a"]).toBe("1");
+    expect(out["__proto__"]).toBeUndefined();
+    expect(out["constructor"]).toBeUndefined();
+    expect(({}) as Record<string, unknown>).not.toHaveProperty("polluted");
+    // The returned map must not expose Object.prototype members as cookie values.
+    expect(out["toString"]).toBeUndefined();
+  });
+
   it("serializes a secure, httpOnly session cookie", () => {
     const c = serializeSessionCookie("tok123", { secure: true, maxAgeSeconds: 3600 });
     expect(c).toContain(`${SESSION_COOKIE}=tok123`);
