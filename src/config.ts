@@ -100,6 +100,29 @@ export type OpsSweepConfig = {
   redriveCap: number;
 };
 
+export type AuthConfig = {
+  /**
+   * Master switch for multi-tenant mode (MULTI_TENANT=true): the web UI requires a
+   * session, registration is open, and requests are scoped to the session's tenant.
+   * Default false — single-user local mode, everything runs as the default tenant
+   * with no login (the backward-compat guarantee).
+   */
+  enabled: boolean;
+  /**
+   * Secure attribute on the session cookie. Defaults to `enabled` (multi-tenant is
+   * internet-facing behind HTTPS; local single-user dev is plain http).
+   */
+  cookieSecure: boolean;
+  /** Session lifetime in seconds (SESSION_TTL_DAYS, default 30 days). */
+  sessionTtlSeconds: number;
+  /** Verify/reset email-token lifetime in seconds (EMAIL_TOKEN_TTL_MINUTES, default 60). */
+  emailTokenTtlSeconds: number;
+  /** ToS version stamped on the user row at registration (consent gate). */
+  tosVersion: string;
+  /** Base URL used to build verify/reset links in emails. */
+  publicBaseUrl: string;
+};
+
 export type AppConfig = {
   databaseUrl: string;
   dataDir: string;
@@ -113,6 +136,7 @@ export type AppConfig = {
   whatsapp: WhatsAppConfig;
   digest: DigestConfig;
   opsSweep: OpsSweepConfig;
+  auth: AuthConfig;
   /**
    * When true, keep media files on disk even after a successful
    * analysis/transcription. Default false (prune after caption).
@@ -179,5 +203,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       times: env.OPS_SWEEP_TIMES ?? "08:00,18:00",
       redriveCap: Number(env.OPS_REDRIVE_CAP ?? 2),
     },
+    auth: loadAuthConfig(env),
+  };
+}
+
+function loadAuthConfig(env: NodeJS.ProcessEnv): AuthConfig {
+  // Exactly "true", same strict convention as WHATSAPP_ALLOW_SEND.
+  const enabled = env.MULTI_TENANT === "true";
+  return {
+    enabled,
+    // Secure-by-default exactly when internet-facing; SESSION_COOKIE_SECURE overrides both ways.
+    cookieSecure:
+      env.SESSION_COOKIE_SECURE !== undefined ? env.SESSION_COOKIE_SECURE === "true" : enabled,
+    sessionTtlSeconds: Number(env.SESSION_TTL_DAYS ?? 30) * 24 * 3600,
+    emailTokenTtlSeconds: Number(env.EMAIL_TOKEN_TTL_MINUTES ?? 60) * 60,
+    tosVersion: env.TOS_VERSION ?? "1",
+    publicBaseUrl: env.PUBLIC_BASE_URL ?? "http://localhost:8787",
   };
 }

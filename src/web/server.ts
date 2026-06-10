@@ -6,11 +6,13 @@ import type pg from "pg";
 import { askStream } from "../ask/ask.js";
 import { LexicalRetriever } from "../ask/lexical-retriever.js";
 import type { Retriever } from "../ask/retriever.js";
+import type { AuthDeps } from "../auth/service.js";
 import { findGroupByName, listGroups } from "../db/repositories/groups.js";
 import { countReadableByGroup, getOldestSentAt } from "../db/repositories/messages.js";
 import { upsertWatermark } from "../db/repositories/read-watermarks.js";
 import { insertSummary, listSummariesByGroup } from "../db/repositories/summaries.js";
 import { insertTotalSummary } from "../db/repositories/total-summaries.js";
+import { DEFAULT_TENANT_ID, scopedPool } from "../db/tenant-context.js";
 import type { JobType } from "../jobs/job-types.js";
 import { buildStatusReport, DEFAULT_STALENESS_MS } from "../service/status.js";
 import { prepareSummary } from "../summarization/prepare.js";
@@ -19,6 +21,7 @@ import { persistCatchupResult } from "../summarization/run-summary.js";
 import type { Selection } from "../summarization/select.js";
 import type { StreamingSummarizer } from "../summarization/summarizer.js";
 import { generateTotalSummary } from "../summarization/total-summary.js";
+import { makeAuthRoutes } from "./auth-routes.js";
 import { sseFrame } from "./sse.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -47,51 +50,61 @@ export type ServerDeps = {
   logger?: { info: (obj: Record<string, unknown>, msg?: string) => void };
   /** Retrievers for the ask flow. Defaults to [LexicalRetriever(pool)] when absent. */
   askRetrievers?: Retriever[];
+  /**
+   * T2 auth wiring. When absent, the server runs exactly as before (single-user, no
+   * login) except every /api request is tenant-scoped to the default tenant. When
+   * `required` is true (multi-tenant mode), /api/* outside /api/auth/* demands a valid
+   * session and runs scoped to THAT session's tenant.
+   */
+  auth?: {
+    deps: AuthDeps;
+    cookieSecure: boolean;
+    required: boolean;
+  };
 };
 
+/** SPA entry pages: / plus the landing paths used in verify/reset emails. */
+const SPA_PATHS = new Set(["/", "/verify", "/reset"]);
+
 export function createServer(deps: ServerDeps): http.Server {
-  return http.createServer((req, res) => {
+  const authRoutes = deps.auth
+    ? makeAuthRoutes({ deps: deps.auth.deps, cookieSecure: deps.auth.cookieSecure })
+    : null;
+
+  const handleRequest = async (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    if (req.method === "GET" && url.pathname === "/") {
+    if (req.method === "GET" && SPA_PATHS.has(url.pathname)) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(fs.readFileSync(INDEX_HTML, "utf8"));
       return;
     }
-    if (req.method === "GET" && url.pathname === "/api/groups") {
-      listGroups(deps.pool)
-        .then((groups) => {
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify(groups));
-        })
-        .catch((err) => {
-          process.stderr.write(
-            `Error handling /api/groups: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
-          );
-          res.writeHead(500, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: "Internal server error." }));
-        });
+
+    // Auth endpoints answer for themselves (they are exactly the routes that must
+    // work without a session) and short-circuit the gate below.
+    if (authRoutes && (await authRoutes.handle(req, res, url))) return;
+
+    if (url.pathname.startsWith("/api/")) {
+      // Establish the request's tenant, then scope ALL data access to it. In
+      // single-user mode that's the default tenant — identical behavior to before,
+      // now explicitly attributed.
+      let tenantId = DEFAULT_TENANT_ID;
+      if (deps.auth?.required) {
+        const session = authRoutes ? await authRoutes.session(req) : null;
+        if (!session) {
+          res.writeHead(401, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "Not authenticated." }));
+          return;
+        }
+        tenantId = session.tenantId;
+      }
+      const scoped: ServerDeps = { ...deps, pool: scopedPool(deps.pool, () => tenantId) };
+      dispatchApi(url, req, res, scoped);
       return;
     }
-    if (req.method === "GET" && url.pathname === "/api/summarize") {
-      void handleSummarize(url, req, res, deps);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/api/total-summary") {
-      void handleTotalSummary(url, req, res, deps);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/api/ask") {
-      void handleAsk(url, req, res, deps);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/api/status") {
-      void handleStatus(res, deps);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/api/summaries") {
-      void handleSummaries(url, res, deps);
-      return;
-    }
+
     // Generic static asset handler — must come after all /api/* routes
     if (req.method === "GET") {
       void handleStatic(url.pathname, res);
@@ -99,7 +112,64 @@ export function createServer(deps: ServerDeps): http.Server {
     }
     res.writeHead(404, { "content-type": "text/plain" });
     res.end("Not found");
+  };
+
+  return http.createServer((req, res) => {
+    handleRequest(req, res).catch((err) => {
+      process.stderr.write(
+        `Error handling ${req.url}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+      );
+      if (!res.headersSent) {
+        res.writeHead(500, { "content-type": "application/json" });
+      }
+      res.end(JSON.stringify({ error: "Internal server error." }));
+    });
   });
+}
+
+function dispatchApi(
+  url: URL,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: ServerDeps,
+): void {
+  if (req.method === "GET" && url.pathname === "/api/groups") {
+    listGroups(deps.pool)
+      .then((groups) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(groups));
+      })
+      .catch((err) => {
+        process.stderr.write(
+          `Error handling /api/groups: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+        );
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal server error." }));
+      });
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/summarize") {
+    void handleSummarize(url, req, res, deps);
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/total-summary") {
+    void handleTotalSummary(url, req, res, deps);
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/ask") {
+    void handleAsk(url, req, res, deps);
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/status") {
+    void handleStatus(res, deps);
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/summaries") {
+    void handleSummaries(url, res, deps);
+    return;
+  }
+  res.writeHead(404, { "content-type": "text/plain" });
+  res.end("Not found");
 }
 
 const CONTENT_TYPES: Record<string, string> = {

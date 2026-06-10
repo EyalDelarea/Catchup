@@ -169,6 +169,31 @@ describe("buildWorker", () => {
     expect(handledJobs).toContain("/test/chat.txt");
   });
 
+  it("runs each handler inside the payload's tenant context (T2 cutover)", async () => {
+    const { currentTenantId, DEFAULT_TENANT_ID } = await import("../db/tenant-context.js");
+    const bus = makeBus();
+    const seenTenants: string[] = [];
+
+    // Enqueue BEFORE buildWorker: the in-memory bus drains queued jobs at consume()
+    // time, which is exactly when buildWorker registers its wrapped handler.
+    const TENANT_B = "11111111-1111-1111-1111-111111111111";
+    await bus.enqueue("import.file", { filePath: "/a.txt", tenantId: TENANT_B });
+    // Pre-T2 in-flight job without tenantId → must fall back to the default tenant.
+    await bus.enqueue("import.file", { filePath: "/b.txt" });
+
+    await buildWorker({
+      bus,
+      handlers: {
+        "import.file": async (_job: Job<"import.file">) => {
+          seenTenants.push(currentTenantId());
+        },
+      },
+      concurrency: 1,
+    });
+
+    expect(seenTenants).toEqual([TENANT_B, DEFAULT_TENANT_ID]);
+  });
+
   it("Fix 5: rejects if bus.consume throws (startup error surfaces loudly)", async () => {
     const bus = makeBus();
     vi.spyOn(bus, "consume").mockRejectedValueOnce(new Error("broker down"));
