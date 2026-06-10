@@ -101,6 +101,9 @@ describe("askStream", () => {
       NOW,
     ))
       events.push(ev);
+    // Phases announced before tokens: searching, then synthesizing.
+    const phases = events.filter((e) => e.type === "phase").map((e) => e.phase);
+    expect(phases).toEqual(["searching", "synthesizing"]);
     expect(events.some((e) => e.type === "token")).toBe(true);
     const citationsEv = events.find((e) => e.type === "citations");
     expect(citationsEv?.citations?.map((c) => c.messageId)).toEqual([101]);
@@ -126,6 +129,9 @@ describe("askStream", () => {
     ))
       events.push(ev);
     expect(called).toBe(false);
+    // "searching" is announced, but never "synthesizing" — the model never ran.
+    const phases = events.filter((e) => e.type === "phase").map((e) => e.phase);
+    expect(phases).toEqual(["searching"]);
     expect(events.find((e) => e.type === "token")?.delta).toContain("אין מידע");
     expect(events.find((e) => e.type === "citations")?.citations).toEqual([]);
     expect(events.at(-1)).toMatchObject({ type: "done", candidateCount: 0 });

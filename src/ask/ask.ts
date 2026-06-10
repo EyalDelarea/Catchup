@@ -85,17 +85,24 @@ export async function ask(
 }
 
 export type AskEvent =
+  | { type: "phase"; phase: "searching" | "synthesizing" }
   | { type: "token"; delta: string }
   | { type: "citations"; citations: Citation[] }
   | { type: "done"; candidateCount: number };
 
-/** Streaming ask for SSE: yields answer tokens, then citations, then done. */
+/**
+ * Streaming ask for SSE: announces each phase ("searching" before retrieval,
+ * "synthesizing" before the model runs), then yields answer tokens, citations,
+ * and done. The phase events give the UI feedback during the two slow steps so
+ * a long retrieval or a slow first token reads as progress, not a hang.
+ */
 export async function* askStream(
   deps: AskDeps,
   question: string,
   now: Date,
   opts: AskOpts = {},
 ): AsyncGenerator<AskEvent> {
+  yield { type: "phase", phase: "searching" };
   const candidates = fitBudget(
     question,
     await gather(deps, question, now, opts),
@@ -109,6 +116,7 @@ export async function* askStream(
     return;
   }
   const prompt = buildAskPrompt(question, candidates, now);
+  yield { type: "phase", phase: "synthesizing" };
   let answer = "";
   for await (const delta of deps.summarizer.summarizeStream(prompt, { signal: opts.signal })) {
     answer += delta;
