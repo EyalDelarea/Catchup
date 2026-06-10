@@ -68,11 +68,10 @@ code** — run `npm run check --write` before committing.
 
 ## Migrations
 
-- `node-pg-migrate`, files in `src/db/migrations/`, timestamp-prefixed, **one concern
-  each**, with both `up` and `down`.
-- ⚠️ Parallel branches have collided on the same number (two `…026_` files → a manual
-  "renumber migration" commit). Before adding one, check the highest existing number
-  **and** any sibling branches, and renumber on sync if needed.
+- `node-pg-migrate`, files in `src/db/migrations/`, **one concern each**, with both
+  `up` and `down`. Create with `npm run migrate:create -- <name>` — it timestamp-prefixes
+  the filename so parallel branches can't collide; never hand-number. (`migrations.test.ts`
+  fails CI on any duplicate number as a backstop.)
 - Tenancy is enforced via `tenant_id` columns + Postgres RLS — new tenant-scoped tables
   must carry `tenant_id` and respect the RLS pattern (see migrations 021–025).
 

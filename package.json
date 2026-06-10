@@ -14,6 +14,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate": "tsx src/db/migrate.ts up",
     "migrate:down": "tsx src/db/migrate.ts down",
+    "migrate:create": "node-pg-migrate create -m src/db/migrations -j ts --migration-filename-format timestamp",
     "worker": "tsx src/workers/worker.ts",
     "lint": "biome lint src",
     "format": "biome format --write src",
