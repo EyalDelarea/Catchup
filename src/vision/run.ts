@@ -4,19 +4,23 @@
  * Analog of transcription/run.ts#transcribeOneNote.
  *
  * Flow for kind='image':
- *   1. Resolve media path via getVisualMediaPath (throws if not found).
+ *   1. Resolve media path via getVisualMediaPath (null → skip, see below).
  *   2. Normalize image orientation via injected normalizeImage (default: real ffmpeg impl).
  *   3. Call visionAnalyzer.describeImage.
  *   4. insertMediaAnalysis(status='completed').
  *
  * Flow for kind='video':
- *   1. Resolve media path via getVisualMediaPath (null → failed row, rethrow).
+ *   1. Resolve media path via getVisualMediaPath (null → skip, see below).
  *   2. Resolve thumbnail path via getThumbnailPath (may be null).
  *   3. Call analyzeVideo({ mediaPath, thumbnailPath }).
  *   4. insertMediaAnalysis(status='completed').
  *
- * On any error:
- *   - insertMediaAnalysis(status='failed', errorMessage) then rethrow.
+ * If no analyzable media is present (null path — pruned, absent, or a stale
+ * queued job), return early WITHOUT a 'failed' row or a throw: there is nothing
+ * to retry, so the bus should ack rather than redeliver.
+ *
+ * On an actual analysis error:
+ *   - insertMediaAnalysis(status='failed', errorMessage) then rethrow (bus retries).
  */
 import fsp from "node:fs/promises";
 import type pg from "pg";
@@ -78,13 +82,11 @@ export async function analyzeMediaOne(
     // ── Video branch (T019) ────────────────────────────────────────────────
     let videoMediaPath: string | null = null;
     try {
-      // 1. Resolve media path (may be null if not present)
+      // 1. Resolve media path. null → no analyzable media present (pruned,
+      //    absent, or a stale queued job). Terminal non-error: skip without a
+      //    'failed' row or a throw, so the bus acks instead of retry-storming.
       const resolved = await deps.getVisualMediaPath(messageId);
-      if (!resolved) {
-        throw new Error(
-          `analyzeMediaOne: message ${messageId} not found or not a present visual media file`,
-        );
-      }
+      if (!resolved) return;
       videoMediaPath = resolved.path;
 
       // 2. Resolve thumbnail path (may be null)
@@ -128,13 +130,11 @@ export async function analyzeMediaOne(
   let mediaPath: string | null = null;
 
   try {
-    // 1. Resolve path
+    // 1. Resolve path. null → no analyzable media present (pruned, absent, or a
+    //    stale queued job). Terminal non-error: skip without a 'failed' row or a
+    //    throw, so the bus acks instead of retry-storming.
     const resolved = await deps.getVisualMediaPath(messageId);
-    if (!resolved) {
-      throw new Error(
-        `analyzeMediaOne: message ${messageId} not found or not a present visual media file`,
-      );
-    }
+    if (!resolved) return;
     mediaPath = resolved.path;
 
     // 2. Orientation normalize; clean up temp file afterwards if it differs from input.
