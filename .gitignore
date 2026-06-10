@@ -38,9 +38,13 @@ assets/.fonts/
 assets/build-banner.mjs
 assets/_*
 
-# Internal AI-assisted build process & planning — kept locally, excluded from the public repo
-CLAUDE.md
-.claude/
+# Shared, version-controlled agent tooling (committed by convention):
+#   CLAUDE.md            — project conventions / grounding
+#   .claude/skills/      — reusable project skills
+# Private AI planning & personal overrides stay local:
+.claude/*
+!.claude/skills/
+.claude/settings*.local.json
 .specify/
 specs/
 docs/

@@ -10,7 +10,7 @@
  *      compose: "וידאו: <visual>" + (speech?.trim() ? " · דיבור: <speech>" : "")
  *  - Else (oversized or no mediaPath):
  *      if thumbnailPath: describeImage(thumbnailPath); speech = "" (no audio)
- *      else: throw (nothing describable)
+ *      else: return a sentinel description (nothing describable — see NO_PREVIEW_RESULT)
  *
  * Engine label: `<visionEngine>+<transcriberEngine|none>`
  */
@@ -23,6 +23,18 @@ import { promisify } from "node:util";
 import type { VisionAnalyzer } from "./analyzer.js";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Result recorded when a video has nothing describable — no usable frames AND
+ * no thumbnail (e.g. oversized video with no embedded thumbnail, or a video
+ * whose frame extraction yielded nothing). Returned (a `completed` analysis with
+ * a clear Hebrew sentinel) rather than thrown, so the job is acked instead of
+ * dead-lettering and retry-storming on a permanently-undescribable item.
+ */
+const NO_PREVIEW_RESULT = {
+  description: "וידאו ללא תצוגה מקדימה זמינה",
+  engine: "none+none",
+} as const;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,7 +88,9 @@ export type AnalyzeVideoInput = {
  * transcribe the audio stream. Returns a composed Hebrew description and an
  * engine label.
  *
- * Throws if there is nothing describable (no mediaPath, no thumbnailPath).
+ * When nothing is describable (no usable frames/mediaPath AND no thumbnail),
+ * returns the NO_PREVIEW_RESULT sentinel rather than throwing — a permanently
+ * undescribable video should be recorded, not retried.
  */
 export async function analyzeVideo(
   deps: AnalyzeVideoDeps,
@@ -100,13 +114,10 @@ export async function analyzeVideo(
       if (frames.length === 0) {
         // Extraction produced nothing usable — fall back to the thumbnail if we have one.
         if (thumbnailPath === null) {
-          // Fix 3: no frames AND no thumbnail → record sentinel instead of dead-lettering.
+          // No frames AND no thumbnail → record sentinel instead of dead-lettering.
           // TODO: a real thumbnail_path column (future enhancement) would let us use the
-          //       embedded JPEG here. For now, return a clear Hebrew sentinel description.
-          return {
-            description: "וידאו ללא תצוגה מקדימה זמינה",
-            engine: "none+none",
-          };
+          //       embedded JPEG here.
+          return NO_PREVIEW_RESULT;
         }
         const described = await visionAnalyzer.describeImages([thumbnailPath]);
         visual = described.description;
@@ -140,7 +151,11 @@ export async function analyzeVideo(
     visionEngine = described.engine;
     speech = null;
   } else {
-    throw new Error("analyzeVideo: no mediaPath and no thumbnailPath — nothing describable");
+    // Oversized (or undownloaded) video AND no thumbnail → nothing describable.
+    // Record the sentinel instead of throwing, mirroring the no-frames case
+    // above, so the bus acks rather than retry-storming a permanently
+    // undescribable item.
+    return NO_PREVIEW_RESULT;
   }
 
   // Compose description
