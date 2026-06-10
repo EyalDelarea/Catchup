@@ -20,7 +20,7 @@ describe("cookies", () => {
     expect(out["a"]).toBe("1");
     expect(out["__proto__"]).toBeUndefined();
     expect(out["constructor"]).toBeUndefined();
-    expect(({}) as Record<string, unknown>).not.toHaveProperty("polluted");
+    expect({} as Record<string, unknown>).not.toHaveProperty("polluted");
     // The returned map must not expose Object.prototype members as cookie values.
     expect(out["toString"]).toBeUndefined();
   });
