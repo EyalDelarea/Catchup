@@ -42,6 +42,8 @@ export type SessionEvents = {
   qr: [qr: string];
   connected: [];
   disconnected: [];
+  /** Terminal: WhatsApp invalidated the link — auth state must be deleted and re-linked. */
+  "logged-out": [];
   /** WhatsApp contacts directory (saved names + push names) for name resolution. */
   contacts: [contacts: Contact[]];
   /** Chat/group directory entries (with subjects) delivered on history sync. */
@@ -345,6 +347,8 @@ export class CollectorSession extends EventEmitter {
         const loggedOut = statusCode === DisconnectReason.loggedOut;
 
         if (loggedOut) {
+          // T3: let the registry mark this tenant terminal (re-link required).
+          this.emit("logged-out");
           collectorLog.error("WhatsApp session logged out. Delete data/baileys-auth/ and re-link.");
         } else {
           // Reconnect after a brief delay
