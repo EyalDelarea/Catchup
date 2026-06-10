@@ -156,10 +156,21 @@ describe("analyzeVideo", () => {
     expect(vision.describeImages).toHaveBeenCalledWith(["/media/thumb.jpg"]);
   });
 
-  it("neither mediaPath nor thumbnailPath: throws", async () => {
+  it("neither mediaPath nor thumbnailPath: returns sentinel (does NOT throw)", async () => {
+    // Nothing describable → record the sentinel so the bus acks instead of
+    // dead-lettering / retry-storming.
     await expect(
       analyzeVideo(makeDeps(), makeInput({ mediaPath: null, thumbnailPath: null })),
-    ).rejects.toThrow();
+    ).resolves.toMatchObject({ description: "וידאו ללא תצוגה מקדימה זמינה", engine: "none+none" });
+  });
+
+  it("oversized video with no thumbnail: returns sentinel (does NOT throw)", async () => {
+    // The reported bug: 68MB video > maxVideoMb, no thumbnail → previously threw
+    // "nothing describable" and retry-stormed. Now mirrors the no-frames case.
+    const deps = makeDeps({ fileSizeMb: () => 999, maxVideoMb: 25 });
+    await expect(
+      analyzeVideo(deps, makeInput({ mediaPath: "/media/huge.mp4", thumbnailPath: null })),
+    ).resolves.toMatchObject({ description: "וידאו ללא תצוגה מקדימה זמינה", engine: "none+none" });
   });
 
   it("frame extraction yields nothing but a thumbnail exists: falls back to the thumbnail", async () => {
