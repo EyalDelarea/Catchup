@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type pg from "pg";
 import { askStream } from "../ask/ask.js";
+import type { Embedder } from "../ask/embedder.js";
+import { EmbeddingRetriever } from "../ask/embedding-retriever.js";
 import { LexicalRetriever } from "../ask/lexical-retriever.js";
 import { RecencyRetriever } from "../ask/recency-retriever.js";
 import type { Retriever } from "../ask/retriever.js";
@@ -49,8 +51,14 @@ export type ServerDeps = {
   backfillTargetWindow?: number;
   /** Optional structured logger (pino). Used to record backfill outcomes for the trace/dashboard. */
   logger?: { info: (obj: Record<string, unknown>, msg?: string) => void };
-  /** Retrievers for the ask flow. Defaults to [LexicalRetriever(pool)] when absent. */
+  /** Retrievers for the ask flow. Defaults to the lexical/recency/embedding set when absent. */
   askRetrievers?: Retriever[];
+  /**
+   * Embedder for semantic retrieval. When present, an EmbeddingRetriever is fused
+   * into the default set. When absent (e.g. Ollama not configured), the ask flow
+   * gracefully falls back to lexical (+ recency) only.
+   */
+  embedder?: Embedder;
   /**
    * T2 auth wiring. When absent, the server runs exactly as before (single-user, no
    * login) except every /api request is tenant-scoped to the default tenant. When
@@ -584,15 +592,18 @@ async function handleTotalSummary(
 }
 
 /**
- * Production retriever set for the ask flow. Lexical always runs. For a
- * chat-scoped question we also fuse in recency: NL questions like
- * "מה גיא שאל אותי היום" rarely share content words with the replies, so lexical
- * alone returns none of the relevant messages — recency supplies the actual
- * recent context. We skip recency for all-chats questions, where "most recent
- * across every chat" would just be noise.
+ * Production retriever set for the ask flow. Lexical always runs. When an embedder
+ * is configured we also fuse in semantic (embedding) retrieval — the general fix
+ * for poor Hebrew lexical recall: a question can match a reply by MEANING even with
+ * zero shared words. For a chat-scoped question we also fuse in recency: NL
+ * questions like "מה גיא שאל אותי היום" rarely share content words with the replies,
+ * so lexical alone returns none of the relevant messages — recency supplies the
+ * actual recent context. We skip recency for all-chats questions, where "most
+ * recent across every chat" would just be noise.
  */
-function defaultAskRetrievers(pool: pg.Pool, chat?: string): Retriever[] {
+function defaultAskRetrievers(pool: pg.Pool, chat?: string, embedder?: Embedder): Retriever[] {
   const retrievers: Retriever[] = [new LexicalRetriever(pool)];
+  if (embedder) retrievers.push(new EmbeddingRetriever(pool, embedder));
   if (chat) retrievers.push(new RecencyRetriever(pool));
   return retrievers;
 }
@@ -623,7 +634,7 @@ async function handleAsk(
       return;
     }
     const chat = url.searchParams.get("chat") ?? undefined;
-    const retrievers = deps.askRetrievers ?? defaultAskRetrievers(deps.pool, chat);
+    const retrievers = deps.askRetrievers ?? defaultAskRetrievers(deps.pool, chat, deps.embedder);
 
     // Observability: log on arrival (so a hung/slow ask is still visible in
     // Loki) and again on completion with timings. component:"ask" is promoted
