@@ -1,4 +1,6 @@
 import "dotenv/config";
+import { startReconcileLoop } from "../collector/identity-reconcile-loop.js";
+import { DEFAULT_TENANT_ID } from "../db/tenant-context.js";
 import type { JobBus } from "../jobs/job-bus.js";
 import type { Job, JobType } from "../jobs/job-types.js";
 import { installConsoleGuard } from "../logging/install-console.js";
@@ -391,11 +393,21 @@ async function main(): Promise<void> {
 
   const worker = await buildWorker({ bus, handlers, concurrency, logger });
 
+  // Periodically reconcile lid/phone duplicate chats from the durable identity
+  // map (session-independent; runs once now, then hourly).
+  const reconcile = startReconcileLoop({
+    pool,
+    tenantId: DEFAULT_TENANT_ID,
+    intervalMs: 60 * 60 * 1000,
+    onError: (err) => logger.warn({ err }, "identity reconcile tick failed"),
+  });
+
   // Graceful shutdown (both SIGINT and SIGTERM)
   let shuttingDown = false;
   const gracefulShutdown = (signal: NodeJS.Signals) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    reconcile.stop();
     logLifecycle("shutdown", { proc: "worker", signal });
     void worker.close().then(() => {
       void pool.end();
