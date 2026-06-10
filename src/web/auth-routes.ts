@@ -56,7 +56,7 @@ export function makeAuthRoutes(opts: AuthRoutesOptions) {
 
   /** Cookie → live session, or null. Shared with the server's session gate. */
   const session = async (req: http.IncomingMessage): Promise<ResolvedSession | null> => {
-    const raw = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+    const raw = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
     if (!raw) return null;
     return resolveSession(deps, raw);
   };
@@ -163,7 +163,7 @@ export function makeAuthRoutes(opts: AuthRoutesOptions) {
       }
 
       case "/api/auth/logout": {
-        const raw = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+        const raw = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
         if (raw) await logout(deps, raw);
         clearSession(res);
         res.writeHead(204);

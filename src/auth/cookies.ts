@@ -6,27 +6,26 @@
 
 export const SESSION_COOKIE = "catchup_session";
 
-// Property names that would hit Object machinery instead of plain data
-// (prototype-pollution sink) — a hostile cookie may not use them.
-const FORBIDDEN_NAMES = new Set(["__proto__", "constructor", "prototype"]);
-
-/** Parse a `Cookie:` header value into a name→value map. */
-export function parseCookies(header: string | undefined): Record<string, string> {
-  // Null prototype: cookie names become pure data keys, never Object internals.
-  const out: Record<string, string> = Object.create(null);
+/**
+ * Parse a `Cookie:` header value into a name→value Map. A Map (not an object) so
+ * hostile cookie names like __proto__ are inert data keys, never a prototype-pollution
+ * sink.
+ */
+export function parseCookies(header: string | undefined): Map<string, string> {
+  const out = new Map<string, string>();
   if (!header) return out;
   for (const part of header.split(";")) {
     const eq = part.indexOf("=");
     if (eq === -1) continue;
     const name = part.slice(0, eq).trim();
-    if (!name || FORBIDDEN_NAMES.has(name)) continue;
+    if (!name) continue;
     const raw = part.slice(eq + 1).trim();
     // A malformed %-sequence from a buggy/hostile client must not throw (and 500 the
     // request) — fall back to the raw value; token lookups on garbage simply miss.
     try {
-      out[name] = decodeURIComponent(raw);
+      out.set(name, decodeURIComponent(raw));
     } catch {
-      out[name] = raw;
+      out.set(name, raw);
     }
   }
   return out;

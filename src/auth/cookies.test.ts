@@ -2,27 +2,33 @@ import { describe, expect, it } from "vitest";
 import { parseCookies, SESSION_COOKIE, serializeSessionCookie } from "./cookies.js";
 
 describe("cookies", () => {
-  it("parses a cookie header into a map", () => {
-    expect(parseCookies("a=1; b=two; c=")).toEqual({ a: "1", b: "two", c: "" });
+  it("parses a cookie header into a Map", () => {
+    expect(parseCookies("a=1; b=two; c=")).toEqual(
+      new Map([
+        ["a", "1"],
+        ["b", "two"],
+        ["c", ""],
+      ]),
+    );
   });
 
-  it("returns an empty map for a missing/blank header", () => {
-    expect(parseCookies(undefined)).toEqual({});
-    expect(parseCookies("")).toEqual({});
+  it("returns an empty Map for a missing/blank header", () => {
+    expect(parseCookies(undefined).size).toBe(0);
+    expect(parseCookies("").size).toBe(0);
   });
 
   it("does not throw on malformed percent-encoding — keeps the raw value (garbage cookie must not 500 a request)", () => {
-    expect(parseCookies("bad=%zz; good=ok")).toEqual({ bad: "%zz", good: "ok" });
+    const out = parseCookies("bad=%zz; good=ok");
+    expect(out.get("bad")).toBe("%zz");
+    expect(out.get("good")).toBe("ok");
   });
 
-  it("is immune to prototype pollution via hostile cookie names", () => {
+  it("is immune to prototype pollution via hostile cookie names (Map, not object)", () => {
     const out = parseCookies("__proto__=evil; constructor=evil; a=1");
-    expect(out["a"]).toBe("1");
-    expect(out["__proto__"]).toBeUndefined();
-    expect(out["constructor"]).toBeUndefined();
+    expect(out.get("a")).toBe("1");
+    expect(out.get("__proto__")).toBe("evil"); // inert data, not Object machinery
     expect({} as Record<string, unknown>).not.toHaveProperty("polluted");
-    // The returned map must not expose Object.prototype members as cookie values.
-    expect(out["toString"]).toBeUndefined();
+    expect(Object.prototype.toString).toBeTypeOf("function"); // untouched
   });
 
   it("serializes a secure, httpOnly session cookie", () => {
