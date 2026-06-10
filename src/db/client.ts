@@ -27,3 +27,14 @@ export function createAppPool(connectionString?: string): pg.Pool {
   const url = connectionString ?? process.env.APP_DATABASE_URL ?? loadConfig().databaseUrl;
   return new pg.Pool({ connectionString: url });
 }
+
+/**
+ * Operator pool — the few legitimate cross-tenant reads that PRECEDE tenant context
+ * (login lookup, cookie→session, email-token redemption). Multi-tenant deployments set
+ * OPERATOR_DATABASE_URL to the BYPASSRLS `catchup_operator` role; local single-user
+ * falls back to DATABASE_URL (the owner/superuser, which bypasses RLS anyway).
+ */
+export function createOperatorPool(connectionString?: string): pg.Pool {
+  const url = connectionString ?? process.env.OPERATOR_DATABASE_URL ?? loadConfig().databaseUrl;
+  return new pg.Pool({ connectionString: url });
+}
