@@ -47,6 +47,34 @@ In addition to per-chat summaries, Catchup can produce a single digest across **
 
 ---
 
+## 🏢 Multi-tenant (self-hosted) — additive capability
+
+Catchup is growing an **optional, self-hosted multi-tenant mode** so one operator-run instance can
+serve several WhatsApp accounts (your own businesses + trusted friends) — each fully isolated. This
+is **additive**: the single-user local mode above stays the default and behaves exactly as today.
+
+**Still "local + private", redefined for an operator:** data never leaves the operator's own
+hardware, there is **no third-party cloud**, and **all inference (Whisper/Ollama) stays local** —
+nothing is sent to anyone. The new hard guarantee is **tenant isolation**: one tenant can never read
+or modify another's data, enforced in **two independent layers** (PostgreSQL row-level security +
+an application-layer active-tenant context). The operator is the data custodian and can hard-delete
+any tenant's data on request.
+
+| Capability | Approach |
+|---|---|
+| Isolation | Postgres RLS **and** app-layer `withTenant()` (defense in depth) |
+| Auth | Email + password (argon2), email verification + reset |
+| Registration | Open self-registration behind a consent + ToS gate |
+| Internet access | Cloudflare Tunnel (no open ports, auto-HTTPS, hides home IP) |
+| Onboarding | Web: register → scan QR → connected; media/history backfilled in the background |
+| Observability | `tenant_id` on every log line + a dedicated audit log |
+
+**Status:** delivered in stacked slices — **T1 (tenancy data substrate) is merged**; auth +
+registration, per-tenant WhatsApp orchestration, onboarding, dashboards, and observability are
+landing as a stack of gated PRs on top of it. Single-user local users need to do nothing.
+
+---
+
 ## ⚠️ Disclaimer
 
 Catchup uses [Baileys](https://github.com/WhiskeySockets/Baileys), an **unofficial**, reverse-engineered WhatsApp library. This project is **not affiliated with, endorsed by, or approved by WhatsApp or Meta**. Using unofficial clients may violate WhatsApp's Terms of Service. You are solely responsible for ensuring your use complies with applicable terms and laws. Use at your own risk, for personal use only.
