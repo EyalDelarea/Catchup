@@ -1047,4 +1047,24 @@ describe("DB-first identity canonicalization (cold live bridge)", () => {
     );
     expect(rows[0].n).toBe(1);
   });
+
+  it("persists a freshly bridge-resolved pairing into identity_links", async () => {
+    const lid = "999@lid";
+    const pn = "972599998888@s.whatsapp.net";
+    // No pre-existing link; a WARM bridge maps pn -> lid (a newly learned fact).
+    const waMsg = makeFakeWATextMessage({ id: "IDLINK_003", remoteJid: pn, pushName: "Gil" });
+    await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      lidForPn: async (j) => (j === pn ? lid : null),
+      pnForLid: async () => null,
+    });
+
+    const { rows } = await pool.query(
+      "SELECT lid_jid, pn_jid, source FROM identity_links WHERE pn_jid = $1",
+      [pn],
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].lid_jid).toBe(lid);
+    expect(rows[0].source).toBe("message_alt");
+  });
 });
