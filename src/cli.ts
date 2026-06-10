@@ -138,16 +138,20 @@ program
     const nameResolverLog = getLogger("name-resolver");
     const config = loadConfig();
     const authDir = path.join(config.dataDir, "baileys-auth");
-    const dbUrl = config.databaseUrl;
 
     // Import lazily to avoid loading Baileys at startup for non-collect commands
-    const [{ startSession }, { handleIncomingMessage }, pg] = await Promise.all([
-      import("./collector/session.js"),
-      import("./collector/collector.js"),
-      import("pg"),
-    ]);
+    const [{ startSession }, { handleIncomingMessage }, { createAppPool }, tenantCtx] =
+      await Promise.all([
+        import("./collector/session.js"),
+        import("./collector/collector.js"),
+        import("./db/client.js"),
+        import("./db/tenant-context.js"),
+      ]);
 
-    const pool = new pg.default.Pool({ connectionString: dbUrl });
+    // T2 cutover: ingest runs on the RLS-enforced app pool, attributed to the default
+    // tenant (single-user mode; T3 makes this per-tenant via the session registry).
+    const appPool = createAppPool();
+    const pool = tenantCtx.scopedPool(appPool, () => tenantCtx.DEFAULT_TENANT_ID);
     let storedCount = 0;
 
     // SAFETY BANNER — make the outbound posture unmistakable before linking.
@@ -213,7 +217,7 @@ program
       collectorLog.info({ stored: storedCount }, "stopping collector");
       logLifecycle("shutdown", { proc: "collect", signal: "SIGINT" });
       session.stop();
-      pool
+      appPool
         .end()
         .catch(() => {})
         .finally(() => {
@@ -412,8 +416,9 @@ program
       { OllamaSummarizer },
       { RabbitMqJobBus },
       { PostgresJobRunRecorder },
-      { createDbClient },
-      pg,
+      { createDbClient, createAppPool, createOperatorPool },
+      { scopedPool, DEFAULT_TENANT_ID },
+      { createLogMailer },
       { backfillGroup },
       { isHealthy, getLastHeartbeatAt },
       { startScheduler },
@@ -430,7 +435,8 @@ program
       import("./jobs/rabbitmq-bus.js"),
       import("./jobs/job-run-recorder.js"),
       import("./db/client.js"),
-      import("pg"),
+      import("./db/tenant-context.js"),
+      import("./auth/mailer.js"),
       import("./collector/backfill.js"),
       import("./service/liveness.js"),
       import("./scheduler/runner.js"),
@@ -450,7 +456,13 @@ program
       reconnect: getLogger("reconnect-sync"),
       cli: getLogger("cli"),
     };
-    const pool = new pg.default.Pool({ connectionString: config.databaseUrl });
+    // T2 cutover: this process talks to Postgres as the RLS-enforced catchup_app role.
+    // The web server scopes each request to its session's tenant; everything else here
+    // (schedulers, collector, backfill, reconnect recovery) is default-tenant work and
+    // runs through a default-scoped adapter — identical local behavior, now attributed.
+    const appPool = createAppPool();
+    const pool = scopedPool(appPool, () => DEFAULT_TENANT_ID);
+    const operatorPool = createOperatorPool();
     const summarizer = new OllamaSummarizer({
       host: config.summarization.ollamaHost,
       model: config.summarization.model,
@@ -533,12 +545,26 @@ program
       : {};
 
     const server = createServer({
-      pool,
+      pool: appPool, // raw app pool — createServer scopes it per request
       summarizer,
       tokenBudget: config.summarization.tokenBudget,
       model: config.summarization.model,
       getQueueDepths,
       logger: webLogger,
+      auth: {
+        deps: {
+          appPool,
+          operatorPool,
+          mailer: createLogMailer(getLogger("auth")),
+          now: () => new Date(),
+          sessionTtlSeconds: config.auth.sessionTtlSeconds,
+          emailTokenTtlSeconds: config.auth.emailTokenTtlSeconds,
+          tosVersion: config.auth.tosVersion,
+          publicBaseUrl: config.auth.publicBaseUrl,
+        },
+        cookieSecure: config.auth.cookieSecure,
+        required: config.auth.enabled,
+      },
       ...collectDeps,
     });
     server.on("error", (err: Error) => {
@@ -849,7 +875,8 @@ program
       server.close();
       brokerBus.close().catch(() => {});
       dbClient.end().catch(() => {});
-      pool
+      operatorPool.end().catch(() => {});
+      appPool
         .end()
         .catch(() => {})
         // Flush the shutdown event + any batched lines before exiting, with a
@@ -913,7 +940,8 @@ program
       for (const { messageId, kind } of rows) {
         const jobType = kind === "video" ? "analyze.video" : "analyze.image";
         if (!allowedTypes.has(jobType)) continue;
-        await bus.enqueue(jobType, { messageId: String(messageId) });
+        const { currentTenantId } = await import("./db/tenant-context.js");
+        await bus.enqueue(jobType, { messageId: String(messageId), tenantId: currentTenantId() });
         enqueued++;
       }
 

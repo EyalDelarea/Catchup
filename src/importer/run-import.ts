@@ -28,6 +28,7 @@ import {
 } from "../db/repositories/imports.js";
 import { insertMessages } from "../db/repositories/messages.js";
 import { upsertParticipants } from "../db/repositories/participants.js";
+import { currentTenantId } from "../db/tenant-context.js";
 import type { JobBus } from "../jobs/job-bus.js";
 import { extractWhatsAppZip } from "./extract-whatsapp-zip.js";
 import { normalize } from "./normalize.js";
@@ -215,7 +216,10 @@ async function _runImport(
         [groupId, importId],
       );
       for (const imgRow of imageRows) {
-        await bus.enqueue("analyze.image", { messageId: String(imgRow.id) });
+        await bus.enqueue("analyze.image", {
+          messageId: String(imgRow.id),
+          tenantId: currentTenantId(),
+        });
       }
 
       // --- 10b. Enqueue analyze.video for present non-sticker videos (newest-first) ---
@@ -239,7 +243,10 @@ async function _runImport(
         [groupId, importId],
       );
       for (const vidRow of videoRows) {
-        await bus.enqueue("analyze.video", { messageId: String(vidRow.id) });
+        await bus.enqueue("analyze.video", {
+          messageId: String(vidRow.id),
+          tenantId: currentTenantId(),
+        });
       }
     }
 

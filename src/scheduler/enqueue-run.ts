@@ -8,6 +8,7 @@
  */
 
 import type pg from "pg";
+import { currentTenantId } from "../db/tenant-context.js";
 import type { JobBus } from "../jobs/job-bus.js";
 
 export type EnqueueScheduledRunOpts = {
@@ -89,7 +90,10 @@ export async function enqueueScheduledRun(
           continue;
         }
 
-        await bus.enqueue("summarize.group", { groupId: String(groupId) });
+        await bus.enqueue("summarize.group", {
+          groupId: String(groupId),
+          tenantId: currentTenantId(),
+        });
         enqueued++;
       } catch (err) {
         // Per-group error: log and continue the batch
@@ -107,7 +111,10 @@ export async function enqueueScheduledRun(
 
   if (opts?.sinceForTotal) {
     try {
-      await bus.enqueue("summarize.total", { since: opts.sinceForTotal.toISOString() });
+      await bus.enqueue("summarize.total", {
+        since: opts.sinceForTotal.toISOString(),
+        tenantId: currentTenantId(),
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[enqueueScheduledRun] summarize.total enqueue failed: ${msg}\n`);

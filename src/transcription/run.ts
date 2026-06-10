@@ -11,6 +11,12 @@ import { convertToWav, IvritWhisperTranscriber } from "./ivrit-whisper.js";
 import type { Transcriber } from "./transcriber.js";
 
 export type TranscribeOneNoteDeps = {
+  /**
+   * Injected pool (T2: the worker passes its tenant-scoped app pool so transcript
+   * reads/writes are RLS-attributed). When absent, a private pool is opened from
+   * databaseUrl and closed on completion — the original CLI behavior.
+   */
+  pool?: pg.Pool;
   databaseUrl: string;
   transcriber: Transcriber;
   engine: string;
@@ -44,7 +50,8 @@ export async function transcribeOneNote(
   messageId: string,
   deps: TranscribeOneNoteDeps,
 ): Promise<void> {
-  const pool = new pg.Pool({ connectionString: deps.databaseUrl });
+  const ownsPool = deps.pool === undefined;
+  const pool = deps.pool ?? new pg.Pool({ connectionString: deps.databaseUrl });
   try {
     const mediaPath = await getVoiceNoteMediaPath(pool, messageId);
     if (!mediaPath) {
@@ -91,7 +98,7 @@ export async function transcribeOneNote(
       await deps.transcriber.close();
     }
   } finally {
-    await pool.end();
+    if (ownsPool) await pool.end();
   }
 }
 
