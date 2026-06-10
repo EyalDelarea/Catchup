@@ -2319,3 +2319,112 @@ body::after {
   color: var(--accent);
   min-height: 1.2em;
 }
+
+/* ── T5 operator dashboard (/admin) ───────────────────────────────────────── */
+
+.admin-pane {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 24px 18px 48px;
+}
+
+.admin-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.admin-title {
+  margin: 0;
+  font-size: 1.3rem;
+  color: var(--accent);
+}
+
+.admin-health {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.admin-stat {
+  flex: 1 1 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-bd);
+  border-radius: 12px;
+}
+
+.admin-stat__n {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.admin-stat__l {
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 11px 12px;
+  text-align: right;
+  border-bottom: 1px solid var(--glass-bd);
+}
+
+.admin-table th {
+  font-weight: 500;
+  opacity: 0.7;
+  font-size: 0.8rem;
+}
+
+.admin-table td.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.adm-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.adm-badge--ok {
+  background: rgba(45, 164, 78, 0.18);
+  color: #6ee7a0;
+}
+
+.adm-badge--warn {
+  background: rgba(191, 135, 0, 0.18);
+  color: #f5c451;
+}
+
+.adm-badge--bad {
+  background: rgba(226, 75, 74, 0.18);
+  color: #f29595;
+}
+
+.adm-badge--off {
+  background: rgba(180, 180, 180, 0.15);
+  color: #b4b2a9;
+}
+
+.admin-loading,
+.admin-denied {
+  text-align: center;
+  opacity: 0.8;
+  padding: 32px 0;
+}

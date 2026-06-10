@@ -1250,6 +1250,87 @@ function setOnboardingStatus(text) {
   if (el) el.textContent = text;
 }
 
+/* ── T5 operator dashboard (/admin) ──────────────────────────────────────── */
+
+/** Coarse session-status → Hebrew label + CSS modifier. */
+function sessionBadge(status) {
+  const map = {
+    connected: ["מחובר", "ok"],
+    connecting: ["מתחבר…", "warn"],
+    disconnected: ["מנותק", "warn"],
+    "logged-out": ["נותק — דרוש קישור", "bad"],
+    failed: ["נכשל", "bad"],
+    offline: ["לא פעיל", "off"],
+    stopped: ["הופסק", "off"],
+  };
+  const [label, kind] = map[status] || [status, "off"];
+  return `<span class="adm-badge adm-badge--${kind}">${label}</span>`;
+}
+
+async function renderAdminDashboard() {
+  const layout = document.getElementById("layout");
+  const escape = (s) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  const fmtAgo = (iso) => (iso ? formatAgo(new Date(iso)) : "—");
+
+  layout.innerHTML = `
+    <div class="admin-pane">
+      <header class="admin-head">
+        <h1 class="admin-title">לוח בקרה — מנהל מערכת</h1>
+        <a class="auth-link" href="/">← חזרה לאפליקציה</a>
+      </header>
+      <div id="admin-health" class="admin-health"></div>
+      <div id="admin-body"><p class="admin-loading">טוען נתוני דיירים…</p></div>
+    </div>
+  `;
+
+  const [healthRes, tenantsRes] = await Promise.all([
+    fetch("/api/admin/health").catch(() => null),
+    fetch("/api/admin/tenants").catch(() => null),
+  ]);
+
+  if (!tenantsRes || tenantsRes.status === 401) {
+    location.href = "/"; // not logged in → bounce to login
+    return;
+  }
+  if (tenantsRes.status === 403) {
+    document.getElementById("admin-body").innerHTML =
+      `<p class="admin-denied">אין לך הרשאת מנהל מערכת.</p>`;
+    return;
+  }
+
+  const health = healthRes && healthRes.ok ? await healthRes.json() : null;
+  if (health) {
+    document.getElementById("admin-health").innerHTML = `
+      <div class="admin-stat"><span class="admin-stat__n">${health.tenantCount}</span><span class="admin-stat__l">דיירים</span></div>
+      <div class="admin-stat"><span class="admin-stat__n">${health.activeTenants}</span><span class="admin-stat__l">פעילים</span></div>
+      <div class="admin-stat"><span class="admin-stat__n">${health.connectedSessions}</span><span class="admin-stat__l">חיבורים פעילים</span></div>
+      <div class="admin-stat"><span class="admin-stat__n">${health.failedSessions}</span><span class="admin-stat__l">חיבורים תקולים</span></div>
+      <div class="admin-stat"><span class="admin-stat__n">${health.totalMessages.toLocaleString("he")}</span><span class="admin-stat__l">הודעות סה״כ</span></div>
+    `;
+  }
+
+  const tenants = await tenantsRes.json();
+  const rows = tenants
+    .map(
+      (t) => `
+      <tr>
+        <td>${escape(t.name)} ${t.status !== "active" ? `<span class="adm-badge adm-badge--off">${escape(t.status)}</span>` : ""}</td>
+        <td>${sessionBadge(t.sessionStatus)}</td>
+        <td class="num">${t.groupCount}</td>
+        <td class="num">${Number(t.messageCount).toLocaleString("he")}</td>
+        <td>${fmtAgo(t.lastSummaryAt)}</td>
+      </tr>`,
+    )
+    .join("");
+
+  document.getElementById("admin-body").innerHTML = `
+    <table class="admin-table">
+      <thead><tr><th>דייר</th><th>חיבור וואטסאפ</th><th>קבוצות</th><th>הודעות</th><th>סיכום אחרון</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
 function authShell(innerHtml) {
   document.getElementById("layout").innerHTML = `
     <div class="auth-pane">
@@ -1378,6 +1459,11 @@ function renderResetForm(token) {
 }
 
 async function boot() {
+  // T5 operator dashboard lives at /admin — a separate top-level view, gated server-side.
+  if (location.pathname === "/admin") {
+    await renderAdminDashboard();
+    return;
+  }
   if (!(await authGate())) return;
   renderShell();
   if (DEMO) applyHealth(true);
