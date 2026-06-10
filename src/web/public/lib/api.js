@@ -118,6 +118,7 @@ export function summarizeStream(params, handlers = {}) {
  *   { q, chat: "<group name>" }    — optional: restrict retrieval to one chat
  *
  * handlers (all optional):
+ *   phase(data)     — {phase: "searching"|"synthesizing"}  — progress before tokens
  *   token(data)     — {delta}                              — incremental answer token
  *   citations(data) — {citations: [{n, messageId, chat, sender, sentAt}]}
  *   done(data)      — {candidateCount}                     — stream ends here
@@ -137,7 +138,7 @@ export function askStream(params, handlers = {}) {
 
   const es = new EventSource(`/api/ask?${qs}`);
 
-  for (const event of ["token", "citations", "done", "error"]) {
+  for (const event of ["phase", "token", "citations", "done", "error"]) {
     es.addEventListener(event, (e) => {
       handlers[event]?.(JSON.parse(e.data));
     });

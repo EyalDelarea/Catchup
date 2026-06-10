@@ -24,24 +24,43 @@ export function beginQuestion(conv, question) {
   const q = (question || "").trim();
   if (!q) return null;
   conv.messages.push({ role: "user", text: q });
-  const reply = { role: "assistant", text: "", pending: true, citations: [], error: null };
+  const reply = {
+    role: "assistant",
+    text: "",
+    pending: true,
+    phase: null,
+    citations: [],
+    error: null,
+  };
   conv.messages.push(reply);
   return reply;
+}
+
+/**
+ * Record the current progress phase ("searching" | "synthesizing") on a still-
+ * pending reply, so the UI can show what the answer is waiting on. Ignored once
+ * the reply has streamed any text or settled.
+ */
+export function setPhase(reply, phase) {
+  if (reply.pending && !reply.text) reply.phase = phase;
 }
 
 /** Append a streamed answer token to the pending reply. */
 export function appendToken(reply, delta) {
   reply.text += delta;
+  reply.phase = null;
 }
 
 /** Mark the reply complete and attach its resolved citations. */
 export function finishAnswer(reply, citations) {
   reply.pending = false;
+  reply.phase = null;
   reply.citations = Array.isArray(citations) ? citations : [];
 }
 
 /** Mark the reply failed, keeping any partial text already streamed. */
 export function failAnswer(reply, message) {
   reply.pending = false;
+  reply.phase = null;
   reply.error = message || GENERIC_ERROR;
 }

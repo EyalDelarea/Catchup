@@ -574,7 +574,8 @@ async function handleAsk(
       { chat, signal: ac.signal },
     )) {
       if (ac.signal.aborted) break;
-      if (ev.type === "token") {
+      if (ev.type === "phase") send("phase", { phase: ev.phase });
+      else if (ev.type === "token") {
         if (firstTokenAt === null) firstTokenAt = Date.now();
         send("token", { delta: ev.delta });
       } else if (ev.type === "citations") send("citations", { citations: ev.citations });

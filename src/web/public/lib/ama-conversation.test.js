@@ -5,6 +5,7 @@ import {
   createConversation,
   failAnswer,
   finishAnswer,
+  setPhase,
 } from "./ama-conversation.js";
 
 describe("ama-conversation", () => {
@@ -27,9 +28,24 @@ describe("ama-conversation", () => {
       role: "assistant",
       text: "",
       pending: true,
+      phase: null,
       citations: [],
       error: null,
     });
+  });
+
+  it("setPhase records progress while pending and untouched, then clears on first token", () => {
+    const c = createConversation();
+    const reply = beginQuestion(c, "שאלה");
+    setPhase(reply, "searching");
+    expect(reply.phase).toBe("searching");
+    setPhase(reply, "synthesizing");
+    expect(reply.phase).toBe("synthesizing");
+    appendToken(reply, "תשובה");
+    expect(reply.phase).toBeNull();
+    // Once text has streamed, late phase events are ignored.
+    setPhase(reply, "searching");
+    expect(reply.phase).toBeNull();
   });
 
   it("accumulates streamed tokens onto the reply", () => {
