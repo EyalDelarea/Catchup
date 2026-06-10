@@ -6,6 +6,7 @@ import { createTestDatabase } from "../../test/db.js";
 import { upsertGroup } from "./groups.js";
 import {
   descriptorToUpsertInput,
+  markExpiredMediaUnrecoverable,
   markMediaPresent,
   markMediaUnrecoverable,
   pruneMediaSecrets,
@@ -114,6 +115,109 @@ describe("message-media", () => {
       expect(rows[0].wa_message).toBeNull();
       // State must remain pruned — not reset to pending
       expect(rows[0].download_state).toBe("pruned");
+    });
+
+    it("unrecoverable row is not modified by a subsequent upsert (no secret resurrection)", async () => {
+      const groupId = await upsertGroup(pool, { name: "MM-unrecov-resurrect", source: "import" });
+      const messageId = await seedMessage(groupId, {
+        dedupeKey: `mm-unrecov-resurrect-${Math.random()}`,
+      });
+
+      // Insert pending with secrets, then retire as unrecoverable (which prunes).
+      await upsertMessageMedia(pool, {
+        messageId,
+        mediaKind: "image",
+        mimeType: "image/jpeg",
+        mediaKey: Buffer.from("orig-key"),
+        directPath: "/orig",
+        url: "https://mmg/orig",
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: Buffer.from("orig-blob"),
+        downloadState: "pending",
+      });
+      await markMediaUnrecoverable(pool, messageId, "gone [HTTP 410]");
+
+      // Re-pull (e.g. fresh-link full sync) with fresh secrets — must be ignored.
+      await upsertMessageMedia(pool, {
+        messageId,
+        mediaKind: "image",
+        mimeType: "image/jpeg",
+        mediaKey: Buffer.from("new-key"),
+        directPath: "/new",
+        url: "https://mmg/new",
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: Buffer.from("new-blob"),
+        downloadState: "pending",
+      });
+
+      const { rows } = await pool.query<{
+        media_key: Buffer | null;
+        wa_message: Buffer | null;
+        url: string | null;
+        download_state: string;
+      }>(
+        `SELECT media_key, wa_message, url, download_state FROM message_media WHERE message_id = $1`,
+        [messageId],
+      );
+      expect(rows[0].media_key).toBeNull();
+      expect(rows[0].wa_message).toBeNull();
+      expect(rows[0].url).toBeNull();
+      expect(rows[0].download_state).toBe("unrecoverable");
+    });
+
+    it("url_expires_at tracks the url: a refreshed url adopts its (possibly null) expiry, not a stale one", async () => {
+      const groupId = await upsertGroup(pool, { name: "MM-expiry-tracks-url", source: "import" });
+      const messageId = await seedMessage(groupId, {
+        dedupeKey: `mm-expiry-tracks-url-${Math.random()}`,
+      });
+
+      // First: url with an expiry far in the past.
+      await upsertMessageMedia(pool, {
+        messageId,
+        mediaKind: "image",
+        mimeType: null,
+        mediaKey: null,
+        directPath: "/p1",
+        url: "https://mmg/p1?oe=old",
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: null,
+        downloadState: "pending",
+        urlExpiresAt: Math.floor(new Date("2000-01-01").getTime() / 1000),
+      });
+
+      // Re-pull with a fresh url that carries NO oe (urlExpiresAt null). The stale
+      // past expiry must NOT survive onto the new url (else the sweep would kill it).
+      await upsertMessageMedia(pool, {
+        messageId,
+        mediaKind: "image",
+        mimeType: null,
+        mediaKey: null,
+        directPath: "/p2",
+        url: "https://mmg/p2",
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: null,
+        downloadState: "pending",
+        urlExpiresAt: null,
+      });
+
+      const { rows } = await pool.query<{ url: string | null; url_expires_at: Date | null }>(
+        `SELECT url, url_expires_at FROM message_media WHERE message_id = $1`,
+        [messageId],
+      );
+      expect(rows[0].url).toBe("https://mmg/p2");
+      expect(rows[0].url_expires_at).toBeNull();
     });
 
     it("volatile fields use COALESCE: null incoming does not overwrite existing, but non-null refreshes (Fix 7)", async () => {
@@ -529,6 +633,112 @@ describe("message-media", () => {
       expect(rows[0].download_state).toBe("unrecoverable");
       expect(rows[0].last_error).toBe("gone");
     });
+
+    it("prunes secrets (media_key/wa_message/direct_path/url) when marking unrecoverable", async () => {
+      const groupId = await upsertGroup(pool, { name: "MM-unrecov-prune", source: "import" });
+      const messageId = await seedMessage(groupId, {
+        dedupeKey: `mm-unrecov-prune-${Math.random()}`,
+      });
+      await upsertMessageMedia(pool, {
+        messageId,
+        mediaKind: "image",
+        mimeType: "image/jpeg",
+        mediaKey: Buffer.from("secret-key"),
+        directPath: "/p?oe=696CBBBE",
+        url: "https://mmg/x?oe=696CBBBE",
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: Buffer.from("proto-blob"),
+        downloadState: "pending",
+      });
+
+      await markMediaUnrecoverable(pool, messageId, "Failed to fetch stream [HTTP 403]");
+
+      const { rows } = await pool.query<{
+        download_state: string;
+        media_key: Buffer | null;
+        wa_message: Buffer | null;
+        direct_path: string | null;
+        url: string | null;
+      }>(
+        `SELECT download_state, media_key, wa_message, direct_path, url
+           FROM message_media WHERE message_id = $1`,
+        [messageId],
+      );
+      expect(rows[0].download_state).toBe("unrecoverable");
+      expect(rows[0].media_key).toBeNull();
+      expect(rows[0].wa_message).toBeNull();
+      expect(rows[0].direct_path).toBeNull();
+      expect(rows[0].url).toBeNull();
+    });
+  });
+
+  describe("CDN-lifetime ordering + expiry retirement", () => {
+    it("orders pending by soonest expiry first and excludes already-expired rows", async () => {
+      // urlExpiresAt is supplied as unix SECONDS (parsed from oe).
+      const sec = (d: string) => Math.floor(new Date(d).getTime() / 1000);
+      const mk = async (name: string, expSeconds: number) => {
+        const groupId = await upsertGroup(pool, { name, source: "import" });
+        const id = await seedMessage(groupId, { dedupeKey: `${name}-${Math.random()}` });
+        await upsertMessageMedia(pool, {
+          messageId: id,
+          mediaKind: "image",
+          mimeType: null,
+          mediaKey: Buffer.from("k"),
+          directPath: "/p",
+          url: "https://mmg/x",
+          fileEncSha256: null,
+          fileSha256: null,
+          mediaKeyTs: null,
+          fileLength: null,
+          waMessage: Buffer.from("b"),
+          downloadState: "pending",
+          urlExpiresAt: expSeconds,
+        });
+        return id;
+      };
+      const soon = await mk("MM-exp-soon", sec("2999-01-02"));
+      const later = await mk("MM-exp-later", sec("2999-06-01"));
+      const expired = await mk("MM-exp-past", sec("2000-01-01"));
+
+      const picked = await selectPendingMedia(pool, 50);
+      const ids = picked.map((p) => p.messageId);
+      expect(ids).not.toContain(expired); // already expired → excluded
+      // soon must come before later
+      expect(ids.indexOf(soon)).toBeLessThan(ids.indexOf(later));
+    });
+
+    it("markExpiredMediaUnrecoverable retires expired pending rows and prunes them", async () => {
+      const sec = (d: string) => Math.floor(new Date(d).getTime() / 1000);
+      const groupId = await upsertGroup(pool, { name: "MM-sweep", source: "import" });
+      const id = await seedMessage(groupId, { dedupeKey: `mm-sweep-${Math.random()}` });
+      await upsertMessageMedia(pool, {
+        messageId: id,
+        mediaKind: "image",
+        mimeType: null,
+        mediaKey: Buffer.from("k"),
+        directPath: "/p",
+        url: "https://mmg/x",
+        fileEncSha256: null,
+        fileSha256: null,
+        mediaKeyTs: null,
+        fileLength: null,
+        waMessage: Buffer.from("b"),
+        downloadState: "pending",
+        urlExpiresAt: sec("2000-01-01"),
+      });
+
+      const n = await markExpiredMediaUnrecoverable(pool);
+      expect(n).toBeGreaterThanOrEqual(1);
+      const { rows } = await pool.query<{ download_state: string; media_key: Buffer | null }>(
+        `SELECT download_state, media_key FROM message_media WHERE message_id = $1`,
+        [id],
+      );
+      expect(rows[0].download_state).toBe("unrecoverable");
+      expect(rows[0].media_key).toBeNull();
+    });
   });
 
   describe("markMediaPresent", () => {
@@ -687,10 +897,12 @@ describe("message-media", () => {
         fileSha256: new Uint8Array([7, 8, 9]),
         mediaKeyTs: 1700000000,
         fileLength: 12345,
+        urlExpiresAt: 1768733630,
         waMessage: new Uint8Array([10, 11, 12]),
       };
 
       const result = descriptorToUpsertInput(42, descriptor, "pending");
+      expect(result.urlExpiresAt).toBe(1768733630);
 
       expect(result.messageId).toBe(42);
       expect(result.mediaKind).toBe("image");
@@ -721,6 +933,7 @@ describe("message-media", () => {
         fileSha256: null,
         mediaKeyTs: null,
         fileLength: null,
+        urlExpiresAt: null,
         waMessage: new Uint8Array([1]),
       };
 

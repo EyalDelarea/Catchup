@@ -1,71 +1,80 @@
 /**
- * app.js — Glacier UI · WhatsApp Sum
+ * app.js — Elevated Glacier UI · Catchup
  *
- * View state machine: feed ↔ detail{group}
+ * Persistent two-pane shell:
+ *   #top-bar   — brand + core-features row (AMA + total) + health pill
+ *   #pane-list — search + group list (the right sidebar on desktop)
+ *   #pane-main — detail | total | ama content
+ *
+ * Visible pane is CSS-driven by #layout[data-view]. On mobile one pane shows at
+ * a time (feed ↔ detail/total/ama); on desktop both panes show together.
+ *
+ * View state machine: feed ↔ detail{group} ↔ total ↔ ama{scope?}
  * Routing: history.pushState + popstate (phone Back works)
- * Teardown: EventSource is closed when leaving detail view
- *
- * Pass 1 scope: US1 (feed + catch-up stream + copy) + US4 (health + stale banner)
- * Pass 2 scope: US2 (mode chips + time-range sheet) + US3 (per-group history)
- *
- * Structure:
- *   1. Imports & globals
- *   2. Routing (pushState / popstate)
- *   3. Health polling (US4)
- *   4. Feed view (US1 — group list, search)
- *   5. Detail view (US1 — catch-up stream; US2 — mode chips + range sheet; US3 — history)
- *   6. Helper utilities
- *   7. Bootstrap
+ * Teardown: EventSource is closed when leaving a streaming view
  */
 
 import { getGroups, getStatus, getSummaries, summarizeStream } from "./lib/api.js";
 import { formatAgo, presetToSince, validateRangeInput } from "./lib/time.js";
 import { renderMarkdown } from "./lib/markdown.js";
 import { deriveHealth } from "./lib/health.js";
-import { loaderProgress } from "./lib/progress.js";
-import { shouldShowUpdatingChip, shouldShowStreamError, shouldStartBackgroundRefresh } from "./lib/open-state.js";
+import { shouldStartBackgroundRefresh } from "./lib/open-state.js";
+import { PHASE_LABELS, PHASES, phaseFill, activeZoneIndex, phaseCaption, scanFill } from "./lib/phase-loader.js";
+import { createConversation, ask } from "./lib/ama-stub.js";
+import { DEMO_GROUPS, DEMO_SUMMARY, DEMO_SUMMARIES, DEMO_TOTAL_HIGHLIGHTS, DEMO_TOTAL_PERCHAT } from "./lib/demo-data.js";
+
+/** Off by default. `?demo=1` previews dummy data; `?demo=tube` shows the loader. */
+const DEMO = new URLSearchParams(location.search).get("demo");
 
 /* ── 1. Globals ──────────────────────────────────────────── */
 
-/** The #app mount point. */
-const app = document.getElementById("app");
-
-/** The global stale banner element. */
+const layout = document.getElementById("layout");
+const topBar = document.getElementById("top-bar");
+const paneList = document.getElementById("pane-list");
+const paneMain = document.getElementById("pane-main");
 const staleBanner = document.getElementById("stale-banner");
 
 /** Currently open EventSource (cleaned up on view change). */
 let activeEventSource = null;
-
-/** Total-view loader elapsed-timer handle (cleaned up on teardown). */
+/** Total-view loader elapsed-timer handle. */
 let totalLoaderTimer = null;
-
 /** Health poll interval id. */
 let healthInterval = null;
-
-/** Cached groups list (populated once; refreshed on feed render). */
+/** Cached groups list. */
 let cachedGroups = [];
+/** Active AMA conversation (recreated each time the panel opens). */
+let amaConversation = createConversation();
 
 /* ── 2. Routing ──────────────────────────────────────────── */
 
+/** Set the visible-pane hint for CSS. */
+function setView(view) {
+  if (layout) layout.dataset.view = view;
+}
+
 /**
  * Navigate to a view, pushing a history entry.
- * @param {"feed"|"detail"|"total"} view
- * @param {string} [group] — required for "detail"
+ * @param {"feed"|"detail"|"total"|"ama"} view
+ * @param {string} [arg] — group name (detail) or AMA scope (ama)
  */
-function navigate(view, group) {
-  if (view === "detail" && group) {
-    history.pushState({ view: "detail", group }, "", `#group=${encodeURIComponent(group)}`);
-    renderDetail(group, true);
+function navigate(view, arg) {
+  if (view === "detail" && arg) {
+    history.pushState({ view: "detail", group: arg }, "", `#group=${encodeURIComponent(arg)}`);
+    renderDetail(arg, true);
   } else if (view === "total") {
     history.pushState({ view: "total" }, "", "#total");
     renderTotal(true);
+  } else if (view === "ama") {
+    const hash = arg ? `#ama=${encodeURIComponent(arg)}` : "#ama";
+    history.pushState({ view: "ama", scope: arg ?? null }, "", hash);
+    renderAma(arg ?? null);
   } else {
     history.pushState({ view: "feed" }, "", location.pathname);
-    renderFeed();
+    setView("feed");
+    markActiveRow(null);
   }
 }
 
-/** Handle browser Back / Forward. */
 window.addEventListener("popstate", (e) => {
   teardownStream();
   const state = e.state;
@@ -73,283 +82,201 @@ window.addEventListener("popstate", (e) => {
     renderDetail(state.group, false);
   } else if (state?.view === "total") {
     renderTotal(false);
+  } else if (state?.view === "ama") {
+    renderAma(state.scope ?? null);
   } else {
-    renderFeed();
+    setView("feed");
+    markActiveRow(null);
   }
 });
 
-/* ── 3. Health polling (US4) ─────────────────────────────── */
+/* ── 3. Health polling ───────────────────────────────────── */
 
-/**
- * Update the health pill (wherever it lives in the current DOM)
- * and the global stale banner.
- */
 function applyHealth(healthy) {
-  // Update stale banner
-  if (healthy) {
-    staleBanner.hidden = true;
-  } else {
-    staleBanner.hidden = false;
-  }
-
-  // Update all health pills in the DOM
+  staleBanner.hidden = !!healthy;
   document.querySelectorAll(".health-pill").forEach((pill) => {
     const dot = pill.querySelector(".health-pill__dot");
+    pill.textContent = "";
+    const d = dot || document.createElement("span");
+    d.className = "health-pill__dot";
+    pill.appendChild(d);
     if (healthy) {
       pill.classList.remove("health-pill--bad");
-      pill.textContent = "";
-      if (dot) pill.appendChild(dot);
-      else {
-        const d = document.createElement("span");
-        d.className = "health-pill__dot";
-        pill.appendChild(d);
-      }
       pill.appendChild(document.createTextNode("המערכת תקינה"));
     } else {
       pill.classList.add("health-pill--bad");
-      pill.textContent = "";
-      const d = document.createElement("span");
-      d.className = "health-pill__dot";
-      pill.appendChild(d);
       pill.appendChild(document.createTextNode("לא מגיב"));
     }
   });
 }
 
-/**
- * Poll /api/status once and update UI.
- * On fetch failure, treats as unhealthy.
- */
 async function pollHealth() {
   try {
-    const status = await getStatus();
-    applyHealth(deriveHealth(status));
+    applyHealth(deriveHealth(await getStatus()));
   } catch {
     applyHealth(false);
   }
 }
 
-/** Start health polling (5 s interval + immediate first call). */
 function startHealthPolling() {
-  if (healthInterval) return; // already running
+  if (healthInterval) return;
   pollHealth();
   healthInterval = setInterval(pollHealth, 5_000);
 }
 
-/* ── 4. Feed view ────────────────────────────────────────── */
+/* ── 4. Shell (top-bar + list pane) ──────────────────────── */
 
-/**
- * Render the feed (group list) into #app.
- * Re-fetches groups from the API each time.
- */
-async function renderFeed() {
-  teardownStream();
-
-  // Skeleton placeholder while loading
-  app.innerHTML = buildFeedShell("", true);
-
-  let groups;
-  try {
-    groups = await getGroups();
-    cachedGroups = groups;
-  } catch {
-    app.innerHTML = buildFeedShell("");
-    app.querySelector(".feed-list").innerHTML =
-      `<p class="error-state">שגיאה בטעינת הקבוצות. אנא רעננו את הדף.</p>`;
-    return;
-  }
-
-  app.innerHTML = buildFeedShell("");
-  renderGroupList(groups, "");
-  wireSearchInput();
-
-  // Persistent header entry → total summary (reachable as a "menu" item, not just
-  // the inline pinned card).
-  const navTotalBtn = document.getElementById("nav-total-btn");
-  if (navTotalBtn) {
-    navTotalBtn.addEventListener("click", () => navigate("total"));
-  }
-}
-
-/** Build the static feed shell HTML (header, search, empty list). */
-function buildFeedShell(searchValue, loading = false) {
-  return `
-    <div class="feed-header">
-      <div class="feed-top">
-        <div>
-          <div class="feed-kicker">on the go</div>
-          <h1 class="feed-title">הקבוצות שלי</h1>
-        </div>
-        <div class="health-pill" role="status" aria-live="polite">
-          <span class="health-pill__dot"></span>
-          <span>טוען…</span>
-        </div>
-      </div>
-      <button id="nav-total-btn" class="nav-total" type="button"
-        aria-label="פתח סיכום כללי לכל הצ׳אטים">
-        📊 סיכום כללי · מה קרה בכל הצ׳אטים
+/** Render the persistent shell once at boot. */
+function renderShell() {
+  topBar.innerHTML = `
+    <div class="brand">
+      <div class="feed-kicker">on the go</div>
+      <h1 class="feed-title">הקבוצות שלי</h1>
+    </div>
+    <div class="core" role="group" aria-label="פעולות ראשיות">
+      <button class="feat feat--ama" id="ama-card" type="button" aria-label="שאל אותי הכל">
+        <span class="feat__ico" aria-hidden="true">✨</span>
+        <span class="feat__title">שאל אותי הכל</span>
+        <span class="feat__sub">על כל השיחות שלך</span>
+        <span class="feat__hint">הקש כדי לשאול ›</span>
+      </button>
+      <button class="feat feat--total" id="total-card" type="button" aria-label="סיכום כללי לכל הצ׳אטים">
+        <span class="feat__ico" aria-hidden="true">📊</span>
+        <span class="feat__title">סיכום כללי</span>
+        <span class="feat__sub">מה קרה בכל הצ׳אטים</span>
+        <span class="feat__hint">הקש לסיכום ›</span>
       </button>
     </div>
-    <div class="search-wrap">
-      <input
-        id="search-input"
-        class="search-input"
-        type="search"
-        placeholder="🔍  חיפוש קבוצה…"
-        value="${escHtml(searchValue)}"
-        aria-label="חיפוש קבוצה"
-        autocomplete="off"
-        autocorrect="off"
-        spellcheck="false"
-      />
-    </div>
-    <div class="feed-list" id="feed-list" role="list" aria-live="polite">
-      ${loading ? buildSkeletonCards(3) : ""}
+    <div class="health-pill" role="status" aria-live="polite">
+      <span class="health-pill__dot"></span><span>טוען…</span>
     </div>
   `;
+
+  paneList.innerHTML = `
+    <div class="search-wrap">
+      <input id="search-input" class="search-input" type="search"
+        placeholder="🔍  חיפוש קבוצה…" aria-label="חיפוש קבוצה"
+        autocomplete="off" autocorrect="off" spellcheck="false" />
+    </div>
+    <div class="seclabel">הקבוצות שלי</div>
+    <div class="feed-list" id="feed-list" role="list" aria-live="polite">
+      ${buildSkeletonCards(3)}
+    </div>
+  `;
+
+  document.getElementById("ama-card").addEventListener("click", () => navigate("ama"));
+  document.getElementById("total-card").addEventListener("click", () => navigate("total"));
+  const input = document.getElementById("search-input");
+  if (input) input.addEventListener("input", () => renderGroupList(cachedGroups, input.value));
 }
 
-/** Re-render just the card list based on a filter string. */
+/** Fetch groups and populate the list. */
+async function loadGroupsIntoList() {
+  if (DEMO) { cachedGroups = DEMO_GROUPS; renderGroupList(cachedGroups, ""); return; }
+  try {
+    cachedGroups = await getGroups();
+  } catch {
+    const list = document.getElementById("feed-list");
+    if (list) list.innerHTML = `<p class="error-state">שגיאה בטעינת הקבוצות. אנא רעננו את הדף.</p>`;
+    return;
+  }
+  renderGroupList(cachedGroups, "");
+}
+
+/** Re-render the card list based on a filter string. */
 function renderGroupList(groups, filter) {
   const list = document.getElementById("feed-list");
   if (!list) return;
-
-  const q = filter.trim().toLowerCase();
-  const filtered = q
-    ? groups.filter((g) => g.name.toLowerCase().includes(q))
-    : groups;
-
-  // Always prepend the pinned total card (not affected by search filter)
-  const totalCard = buildTotalCard();
+  const q = (filter || "").trim().toLowerCase();
+  const filtered = q ? groups.filter((g) => g.name.toLowerCase().includes(q)) : groups;
 
   if (filtered.length === 0) {
-    list.innerHTML = totalCard + `<p class="empty-state">${
-      q ? "לא נמצאו קבוצות תואמות." : "אין שיחות שמורות."
-    }</p>`;
-  } else {
-    list.innerHTML = totalCard + filtered
-      .map((g, i) => buildGroupCard(g, i))
-      .join("");
+    list.innerHTML = `<p class="empty-state">${q ? "לא נמצאו קבוצות תואמות." : "אין שיחות שמורות."}</p>`;
+    return;
   }
-
-  // Wire the total card button
-  const totalBtn = list.querySelector(".group-card__cta--total");
-  if (totalBtn) {
-    totalBtn.addEventListener("click", () => navigate("total"));
-  }
-
-  // Wire group CTA buttons
-  list.querySelectorAll(".group-card__cta").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const group = btn.dataset.group;
+  list.innerHTML = filtered.map((g) => buildGroupCard(g)).join("");
+  list.querySelectorAll(".gcard").forEach((card) => {
+    card.addEventListener("click", () => {
+      const group = card.dataset.group;
       if (group) navigate("detail", group);
     });
   });
 }
 
-/** Build a single group card's HTML. */
-function buildGroupCard(group, index) {
-  const ago = formatAgo(group.lastMessageAt);
-  const isFresh = ago && group.lastMessageAt
-    ? (Date.now() - new Date(group.lastMessageAt).getTime()) < 24 * 60 * 60 * 1000
+/** True if the group had activity within the last 24h. */
+function isFreshGroup(group) {
+  return group.lastMessageAt
+    ? Date.now() - new Date(group.lastMessageAt).getTime() < 24 * 60 * 60 * 1000
     : false;
-  const muted = !isFresh;
+}
 
-  const dotClass = muted ? "group-card__dot group-card__dot--muted" : "group-card__dot";
-  const cardClass = muted ? "glass-card group-card group-card--muted" : "glass-card group-card";
-  const delay = `animation-delay:${index * 55}ms`;
+/** Deterministic avatar emoji from the group name (no real data needed). */
+const AVATARS = ["💬", "🗨️", "📨", "🌀", "✦", "🪐", "🔆", "🎐"];
+function groupEmoji(name) {
+  let h = 0;
+  for (let i = 0; i < (name || "").length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATARS[h % AVATARS.length];
+}
 
-  const metaParts = [];
-  if (ago) metaParts.push(ago);
-  if (group.messageCount != null) metaParts.push(`${Number(group.messageCount).toLocaleString("he-IL")} הודעות`);
-  const metaText = metaParts.join(" · ");
-
+/** Build a single group card (freshness only — no message counts). */
+function buildGroupCard(group) {
+  const ago = formatAgo(group.lastMessageAt);
+  const fresh = isFreshGroup(group);
+  const cls = fresh ? "gcard gcard--fresh" : "gcard gcard--dim";
+  const ringCls = fresh ? "ring ring--fresh" : "ring ring--muted";
+  const meta = fresh
+    ? `<span class="gcard__live">● פעיל</span>${ago ? ` · ${escHtml(ago)}` : ""}`
+    : ago ? escHtml(ago) : "—";
+  const cta = fresh
+    ? `<div class="gcard__cta" aria-hidden="true">סכם מה שפספסתי ›</div>`
+    : "";
   return `
-    <div class="${cardClass}" style="${delay}" role="listitem">
-      <div class="group-card__name">${escHtml(formatGroupName(group.name))}</div>
-      <div class="group-card__meta">
-        ${ago ? `<span class="${dotClass}"></span>` : ""}
-        <span>${escHtml(metaText)}</span>
-      </div>
-      <button
-        class="group-card__cta"
-        data-group="${escHtml(group.name)}"
-        aria-label="סכם מה שפספסתי בקבוצה ${escHtml(formatGroupName(group.name))}"
-      >סכם מה שפספסתי ›</button>
+    <div class="${cls}" role="listitem" data-group="${escHtml(group.name)}"
+      tabindex="0" aria-label="סכם מה שפספסתי בקבוצה ${escHtml(formatGroupName(group.name))}">
+      <span class="${ringCls}" aria-hidden="true">${groupEmoji(group.name)}</span>
+      <div class="gcard__name">${escHtml(formatGroupName(group.name))}</div>
+      <div class="gcard__meta">${meta}</div>
+      ${cta}
     </div>
   `;
 }
 
-/** Wire the search input to filter the cached group list. */
-function wireSearchInput() {
-  const input = document.getElementById("search-input");
-  if (!input) return;
-  input.addEventListener("input", () => {
-    // renderGroupList re-wires all buttons (including the pinned total card)
-    renderGroupList(cachedGroups, input.value);
-  });
-}
-
-/** Build the pinned "total summary" card HTML (always shown at top of feed). */
-function buildTotalCard() {
-  return `
-    <div class="glass-card group-card group-card--total" role="listitem">
-      <div class="group-card__name">📊 סיכום כללי</div>
-      <div class="group-card__meta">
-        <span class="group-card__dot"></span>
-        <span>מה קרה בכל הצ׳אטים</span>
-      </div>
-      <button
-        class="group-card__cta group-card__cta--total"
-        aria-label="פתח סיכום כללי לכל הצ׳אטים"
-      >סכם את כל הצ׳אטים ›</button>
-    </div>
-  `;
-}
-
-/** Build placeholder skeleton cards for loading state. */
 function buildSkeletonCards(count) {
   return Array.from({ length: count }, () => `
-    <div class="glass-card group-card group-card--loading" aria-hidden="true">
+    <div class="gcard gcard--loading" aria-hidden="true">
       <div class="skeleton" style="width:55%;height:16px;margin-bottom:10px"></div>
       <div class="skeleton" style="width:75%"></div>
     </div>
   `).join("");
 }
 
+/** Highlight the active group row in the sidebar (or clear with null). */
+function markActiveRow(group) {
+  document.querySelectorAll(".gcard").forEach((c) => {
+    c.classList.toggle("gcard--active", !!group && c.dataset.group === group);
+  });
+}
+
 /* ── 5. Detail view ──────────────────────────────────────── */
 
-/**
- * State for the current detail view.
- * Allows sharing between event handlers without closures leaking.
- */
 const detailState = {
   group: null,
   started: 0,
   syncingTimer: null,
   syncingStart: 0,
   summaryText: "",
-  phase: "idle", // idle | syncing | streaming | done | cached | empty | error
-  activeChip: "catchup", // "catchup" | "24h" | "3d" | "week" | "month" | "range"
-  /** The pre-cached summary text displayed instantly on open (null = cold open). */
+  phase: "idle",
+  activeChip: "catchup",
   cachedSummaryText: null,
-  /** Whether the instant-cache card is currently visible (controls chip + error suppression). */
   showingCachedCard: false,
-  /** Whether a background refresh has already been started for the current open (prevents duplicates). */
   backgroundRefreshStarted: false,
 };
 
-/**
- * Render the detail view for a group.
- * @param {string} group — display name
- * @param {boolean} autoStart — if true, start the catch-up stream immediately
- */
 function renderDetail(group, autoStart) {
   teardownStream();
-
-  // Find group metadata from cache
   const meta = cachedGroups.find((g) => g.name === group) || { name: group };
   const ago = formatAgo(meta.lastMessageAt);
+  const fresh = isFreshGroup(meta);
 
   detailState.group = group;
   detailState.summaryText = "";
@@ -359,48 +286,40 @@ function renderDetail(group, autoStart) {
   detailState.showingCachedCard = false;
   detailState.backgroundRefreshStarted = false;
 
-  app.innerHTML = buildDetailShell(group, ago, meta);
+  paneMain.innerHTML = buildDetailShell(group, ago, fresh);
+  setView("detail");
+  markActiveRow(group);
   wireDetailButtons(group);
-
-  // Load history (async, non-blocking)
-  loadHistory(group);
+  if (!DEMO) loadHistory(group);
 
   if (autoStart) {
-    // autoStart always runs catch-up (the primary CTA from the feed)
     setActiveChip("catchup");
-    // US1/US2: fetch the latest cached summary first; render it instantly if present.
-    // Then start the catch-up stream in background.
+    if (DEMO) {
+      if (DEMO === "tube") {
+        setSummaryRegion(buildPhaseTube({ phase: "read", messages: 247, elapsed: 12 }));
+      } else {
+        setSummaryRegion(buildSummaryCardDone(DEMO_SUMMARIES[group] || DEMO_SUMMARY, "נשמר • 8.4 שניות • 247 הודעות", false));
+      }
+      return;
+    }
     void runDetailWithCacheFirst(group);
   }
 }
 
-/**
- * US1/US2: Open-time instant-cache orchestration.
- * 1. Fetch the most-recent cached summary via the existing /api/summaries endpoint (limit=1).
- * 2. If present, render it immediately (no loader) and start the SSE stream in background.
- * 3. If absent (cold open), behave exactly as today — show Reader loader + stream.
- * @param {string} group
- */
 async function runDetailWithCacheFirst(group) {
   let cached = null;
   try {
     const history = await getSummaries(group, 1);
-    if (history && history.length > 0 && history[0].output?.overview) {
-      cached = history[0];
-    }
+    if (history && history.length > 0 && history[0].output?.overview) cached = history[0];
   } catch {
-    // History fetch failed — fall through to cold open
+    /* fall through to cold open */
   }
 
   if (cached) {
-    // US1: render cached summary instantly (no loader)
     detailState.cachedSummaryText = cached.output.overview;
     detailState.showingCachedCard = true;
-    const timeStr = fmtTime(cached.createdAt);
-    const statusText = `מהמטמון • נוצר ב־${timeStr}`;
+    const statusText = `מהמטמון • נוצר ב־${fmtTime(cached.createdAt)}`;
     setSummaryRegion(buildSummaryCardDone(cached.output.overview, statusText, false));
-    // Debounce: wait 400ms before starting the background refresh.
-    // If the user navigates away within that window, skip the 70s Ollama call.
     const openedGroup = group;
     setTimeout(() => {
       if (shouldStartBackgroundRefresh({
@@ -410,45 +329,31 @@ async function runDetailWithCacheFirst(group) {
         backgroundRefreshStarted: detailState.backgroundRefreshStarted,
       })) {
         detailState.backgroundRefreshStarted = true;
-        runSummary({ mode: "catchup", group: openedGroup }, /* background= */ true);
+        runSummary({ mode: "catchup", group: openedGroup }, true);
       }
     }, 400);
   } else {
-    // Cold open: behave exactly as before (Reader loader + stream)
-    runSummary({ mode: "catchup", group }, /* background= */ false);
+    runSummary({ mode: "catchup", group }, false);
   }
 }
 
-/** Build the static detail shell HTML. */
-function buildDetailShell(group, ago, meta) {
-  const metaParts = [];
-  if (ago) metaParts.push(ago);
-  if (meta.messageCount != null) metaParts.push(`${Number(meta.messageCount).toLocaleString("he-IL")} הודעות`);
-
+function buildDetailShell(group, ago, fresh) {
+  const freshLine = ago
+    ? `<div class="detail-gfresh">${fresh ? '<span class="gcard__live">● פעיל</span> · ' : ""}${escHtml(ago)}</div>`
+    : "";
   return `
     <div class="detail-view">
       <nav class="detail-nav" aria-label="ניווט">
         <button class="back-btn" id="back-btn" aria-label="חזרה לרשימת הקבוצות">
-          <span class="back-btn__arrow" aria-hidden="true">‹</span>
-          חזרה
+          <span class="back-btn__arrow" aria-hidden="true">›</span> חזרה
         </button>
-        <div class="health-pill" role="status" aria-live="polite">
-          <span class="health-pill__dot"></span>
-          <span>טוען…</span>
-        </div>
       </nav>
 
       <div class="detail-ghead">
         <h2 class="detail-gtitle">${escHtml(formatGroupName(group))}</h2>
-        ${ago ? `
-          <div class="detail-gfresh">
-            <span class="group-card__dot" aria-hidden="true"></span>
-            <span>${escHtml(metaParts.join(" · "))}</span>
-          </div>
-        ` : ""}
+        ${freshLine}
       </div>
 
-      <!-- Mode chips row (US2) -->
       <div class="chips mode-chips" role="group" aria-label="בחירת טווח זמן" id="mode-chips">
         <button class="chip chip--active" data-chip="catchup" aria-pressed="true">מה שפספסתי</button>
         <button class="chip" data-chip="24h" aria-pressed="false">24 שעות</button>
@@ -458,22 +363,14 @@ function buildDetailShell(group, ago, meta) {
         <button class="chip" data-chip="range" aria-pressed="false">טווח…</button>
       </div>
 
-      <!-- summary region — aria-live so screen readers announce updates -->
-      <div id="summary-region" aria-live="polite" aria-atomic="false">
-      </div>
+      <div id="summary-region" aria-live="polite" aria-atomic="false"></div>
 
-      <!-- Range sheet (US2) — hidden by default -->
       <div id="range-sheet" class="range-sheet" aria-modal="true" role="dialog" aria-label="בחירת טווח זמן" hidden>
         <div class="range-sheet__handle" aria-hidden="true"></div>
         <h4 class="range-sheet__title">בחירת טווח</h4>
         <div class="range-sheet__field">
           <label class="range-sheet__label" for="range-datetime">📅 מתאריך ושעה</label>
-          <input
-            id="range-datetime"
-            class="range-sheet__input"
-            type="datetime-local"
-            aria-label="תאריך ושעה התחלה"
-          />
+          <input id="range-datetime" class="range-sheet__input" type="datetime-local" aria-label="תאריך ושעה התחלה" />
         </div>
         <div class="range-sheet__until">
           <span class="range-sheet__until-label">עד:</span>
@@ -482,90 +379,53 @@ function buildDetailShell(group, ago, meta) {
         <div class="range-sheet__divider" aria-hidden="true">— או —</div>
         <div class="range-sheet__field">
           <label class="range-sheet__label" for="range-lastn">📩 הודעות אחרונות</label>
-          <input
-            id="range-lastn"
-            class="range-sheet__input"
-            type="number"
-            min="1"
-            step="1"
-            placeholder="לדוגמה: 100"
-            aria-label="מספר הודעות אחרונות"
-          />
+          <input id="range-lastn" class="range-sheet__input" type="number" min="1" step="1"
+            placeholder="לדוגמה: 100" aria-label="מספר הודעות אחרונות" />
         </div>
         <p id="range-error" class="range-sheet__error" aria-live="polite" hidden></p>
         <button class="range-sheet__go" id="range-go">סכם את הטווח הזה</button>
         <button class="range-sheet__cancel" id="range-cancel">ביטול</button>
       </div>
 
-      <!-- History section (US3) — collapsed by default, toggle reveals list -->
       <section class="history-section" id="history-section" aria-label="סיכומים קודמים">
-        <!-- toggle button injected by loadHistory when count > 0 -->
-        <div id="history-list" class="history-list" aria-live="polite" hidden>
-        </div>
+        <div id="history-list" class="history-list" aria-live="polite" hidden></div>
       </section>
+
+      <button class="ama-bar" id="ama-bar-group" type="button" aria-label="שאל על הצ׳אט הזה">
+        <span class="ama-bar__spark" aria-hidden="true">✨</span>
+        <span class="ama-bar__text">שאל על הצ׳אט הזה…</span>
+        <span class="ama-bar__send" aria-hidden="true">➤</span>
+      </button>
     </div>
   `;
 }
 
-/** Wire back button and chip buttons in the detail view. */
 function wireDetailButtons(group) {
-  const backBtn = document.getElementById("back-btn");
-  if (backBtn) {
-    backBtn.addEventListener("click", () => {
-      navigate("feed");
-    });
-  }
-
-  // Wire mode chips
-  const chipsContainer = document.getElementById("mode-chips");
-  if (chipsContainer) {
-    chipsContainer.addEventListener("click", (e) => {
-      const btn = e.target.closest(".chip[data-chip]");
-      if (!btn) return;
-      const chip = btn.dataset.chip;
-      onChipClick(chip);
-    });
-  }
-
-  // Wire range sheet buttons
-  const rangeGo = document.getElementById("range-go");
-  if (rangeGo) {
-    rangeGo.addEventListener("click", () => onRangeSubmit());
-  }
-
-  const rangeCancel = document.getElementById("range-cancel");
-  if (rangeCancel) {
-    rangeCancel.addEventListener("click", () => closeRangeSheet());
-  }
+  document.getElementById("back-btn")?.addEventListener("click", () => navigate("feed"));
+  document.getElementById("mode-chips")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".chip[data-chip]");
+    if (btn) onChipClick(btn.dataset.chip);
+  });
+  document.getElementById("range-go")?.addEventListener("click", () => onRangeSubmit());
+  document.getElementById("range-cancel")?.addEventListener("click", () => closeRangeSheet());
+  document.getElementById("ama-bar-group")?.addEventListener("click", () => navigate("ama", group));
 }
 
-/**
- * Handle a chip click (US2).
- * @param {string} chip — "catchup" | "24h" | "3d" | "week" | "month" | "range"
- */
 function onChipClick(chip) {
   if (chip === "range") {
     setActiveChip("range");
     openRangeSheet();
     return;
   }
-
   closeRangeSheet();
   setActiveChip(chip);
-
   if (chip === "catchup") {
     runSummary({ mode: "catchup", group: detailState.group });
   } else {
-    // preset: 24h | 3d | week | month
-    const since = presetToSince(chip);
-    runSummary({ since, group: detailState.group });
+    runSummary({ since: presetToSince(chip), group: detailState.group });
   }
 }
 
-/**
- * Mark the active chip visually and update state.
- * @param {string} chip
- */
 function setActiveChip(chip) {
   detailState.activeChip = chip;
   const container = document.getElementById("mode-chips");
@@ -577,19 +437,15 @@ function setActiveChip(chip) {
   });
 }
 
-/* ── 5a. Range sheet (US2) ───────────────────────────────── */
+/* ── 5a. Range sheet ─────────────────────────────────────── */
 
 function openRangeSheet() {
   const sheet = document.getElementById("range-sheet");
-  if (sheet) {
-    sheet.hidden = false;
-    // Clear any previous error
-    const err = document.getElementById("range-error");
-    if (err) { err.hidden = true; err.textContent = ""; }
-    // Focus the first input for accessibility
-    const dtInput = document.getElementById("range-datetime");
-    if (dtInput) dtInput.focus();
-  }
+  if (!sheet) return;
+  sheet.hidden = false;
+  const err = document.getElementById("range-error");
+  if (err) { err.hidden = true; err.textContent = ""; }
+  document.getElementById("range-datetime")?.focus();
 }
 
 function closeRangeSheet() {
@@ -598,32 +454,22 @@ function closeRangeSheet() {
 }
 
 function onRangeSubmit() {
-  const dtInput = document.getElementById("range-datetime");
-  const lastNInput = document.getElementById("range-lastn");
+  const datetime = document.getElementById("range-datetime")?.value || "";
+  const lastNRaw = (document.getElementById("range-lastn")?.value || "").trim();
   const errEl = document.getElementById("range-error");
-
-  const datetime = dtInput ? dtInput.value : "";
-  const lastNRaw = lastNInput ? lastNInput.value.trim() : "";
 
   let result;
   if (lastNRaw !== "") {
-    // last-N mode takes priority when filled
     const n = parseInt(lastNRaw, 10);
     result = validateRangeInput({ mode: "last", n: isNaN(n) ? null : n });
   } else {
-    // since mode
     result = validateRangeInput({ mode: "since", datetime });
   }
 
   if (!result.ok) {
-    if (errEl) {
-      errEl.textContent = result.error;
-      errEl.hidden = false;
-    }
+    if (errEl) { errEl.textContent = result.error; errEl.hidden = false; }
     return;
   }
-
-  // Validation passed — close sheet, start stream
   closeRangeSheet();
   if (result.last !== undefined) {
     runSummary({ last: result.last, group: detailState.group });
@@ -632,19 +478,8 @@ function onRangeSubmit() {
   }
 }
 
-/* ── 5b. runSummary — generic streaming runner (US1+US2) ──── */
+/* ── 5b. runSummary — generic streaming runner ───────────── */
 
-/**
- * Start a summary stream for the current detail group.
- * Replaces the old startCatchup(); all modes share this path.
- *
- * @param {Object} params — one of:
- *   { mode: "catchup", group: string }
- *   { since: string, group: string }
- *   { last: number, group: string }
- * @param {boolean} [background=false] — when true, a cached card is already visible;
- *   skip the Reader loader skeleton and suppress loader/error UI changes until needed.
- */
 function runSummary(params, background = false) {
   teardownStream();
   if (!detailState.group) return;
@@ -656,153 +491,82 @@ function runSummary(params, background = false) {
   detailState.phase = "streaming";
 
   if (!background) {
-    // Cold open or user-triggered re-run: clear cached-card state and show Reader loader
     detailState.cachedSummaryText = null;
     detailState.showingCachedCard = false;
-    showUpdatingChip(false); // ensure any lingering chip is cleared
-    setSummaryRegion(buildSkeleton());
+    showUpdatingChip(false);
+    setSummaryRegion(buildPhaseTube({ phase: "sync", elapsed: 0 }));
   }
-  // When background=true, the cached card is already rendered — leave it in place
-  // and show the מתעדכן… chip to indicate background refresh is in flight.
-  if (background && detailState.showingCachedCard) {
-    showUpdatingChip(true);
-  }
+  if (background && detailState.showingCachedCard) showUpdatingChip(true);
 
-  activeEventSource = summarizeStream(
-    params,
-    {
-      syncing: onSyncing,
-      status: onStatus,
-      token: onToken,
-      cached: onCached,
-      empty: onEmpty,
-      done: onDone,
-      error: onError,
-    }
-  );
+  activeEventSource = summarizeStream(params, {
+    syncing: onSyncing,
+    status: onStatus,
+    token: onToken,
+    cached: onCached,
+    empty: onEmpty,
+    done: onDone,
+    error: onError,
+  });
 }
 
-/**
- * @deprecated Use runSummary({ mode: "catchup", group }) instead.
- * Kept as alias so existing call-sites are harmless.
- */
-function startCatchup() {
-  setActiveChip("catchup");
-  runSummary({ mode: "catchup", group: detailState.group });
-}
-
-/** Close & discard any active EventSource. Also clears the syncing timer. */
 function teardownStream() {
-  if (detailState.syncingTimer) {
-    clearInterval(detailState.syncingTimer);
-    detailState.syncingTimer = null;
-  }
-  if (totalLoaderTimer) {
-    clearInterval(totalLoaderTimer);
-    totalLoaderTimer = null;
-  }
-  if (activeEventSource) {
-    activeEventSource.close();
-    activeEventSource = null;
-  }
+  if (detailState.syncingTimer) { clearInterval(detailState.syncingTimer); detailState.syncingTimer = null; }
+  if (totalLoaderTimer) { clearInterval(totalLoaderTimer); totalLoaderTimer = null; }
+  if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
 }
 
 /* ── 5c. SSE event handlers ──────────────────────────────── */
 
-/**
- * Advance the determinate loader progress bar to match elapsed time.
- * The fill width comes from loaderProgress() — monotonic, eases toward a
- * ceiling — so it always feels like it's making headway (the CSS transition
- * animates each step smoothly).
- */
-function updateLoaderProgress(elapsedSec) {
-  const fill = document.querySelector(".glacier-loader__bar-fill");
-  if (fill) fill.style.width = `${loaderProgress(elapsedSec)}%`;
-}
-
 function onSyncing(data) {
-  // If a cached card is visible, skip loader UI changes — the cached card stays.
   if (detailState.showingCachedCard) return;
-
   if (data.phase === "start") {
     detailState.syncingStart = Date.now();
-    setSummaryRegion(buildGlacierLoader({ statusLine: "מסנכרן הודעות חדשות…", elapsed: 0, phase: "syncing" }));
+    setSummaryRegion(buildPhaseTube({ phase: "sync", elapsed: 0 }));
     detailState.syncingTimer = setInterval(() => {
       const elapsed = Math.round((Date.now() - detailState.syncingStart) / 1000);
-      const elEl = document.getElementById("gl-elapsed");
-      if (elEl) elEl.textContent = `${elapsed}ש׳`;
-      updateLoaderProgress(elapsed);
+      setTubeElapsed(elapsed);
     }, 500);
   } else if (data.phase === "done") {
     clearSyncingTimer();
-    const fetchSec = (data.fetchMs / 1000).toFixed(1);
-    const statusLine = `סנכרון הושלם · ${data.fetched} הודעות · ${fetchSec}ש׳`;
-    setSummaryRegion(buildGlacierLoader({ statusLine, elapsed: Math.round(data.fetchMs / 1000), phase: "syncing" }));
+    setSummaryRegion(buildPhaseTube({ phase: "read", elapsed: Math.round(data.fetchMs / 1000), messages: data.fetched }));
   }
 }
 
 function onStatus(data) {
-  // If a cached card is visible, skip loader UI changes — the cached card stays.
-  if (detailState.showingCachedCard) {
-    clearSyncingTimer();
-    return;
-  }
-
+  if (detailState.showingCachedCard) { clearSyncingTimer(); return; }
   clearSyncingTimer();
-  const staleNote = data.stale ? " ⚠️ האספן לא מגיב" : "";
-  const fallbackNote = data.usedFallback ? " (הצצה ראשונה — ההודעות האחרונות)" : "";
-  const statusText = `מסכם ${data.messages} הודעות${fallbackNote}${staleNote}`;
-  const msgCount = data.messages || 0;
   const elapsed = detailState.started ? Math.round((Date.now() - detailState.started) / 1000) : 0;
-  setSummaryRegion(buildGlacierLoader({ statusLine: statusText, messageCount: msgCount, elapsed, phase: "analyzing" }));
-  // Start a live elapsed tick in the loader
+  setSummaryRegion(buildPhaseTube({ phase: "read", messages: data.messages || 0, elapsed }));
   detailState.syncingTimer = setInterval(() => {
     const secs = detailState.started ? Math.round((Date.now() - detailState.started) / 1000) : 0;
-    const elEl = document.getElementById("gl-elapsed");
-    if (elEl) elEl.textContent = `${secs}ש׳`;
-    updateLoaderProgress(secs);
+    setTubeElapsed(secs);
   }, 1000);
 }
 
 function onToken(data) {
-  // If a cached card is visible, we're in background refresh mode.
-  // Don't replace the cached card with streaming output — wait for `done` to swap.
-  if (detailState.showingCachedCard) {
-    detailState.summaryText += data.delta;
-    return;
-  }
-
+  if (detailState.showingCachedCard) { detailState.summaryText += data.delta; return; }
   detailState.summaryText += data.delta;
-  // Mount the streaming card once; thereafter update ONLY the body so the
-  // "writing" indicator + caret keep animating (it feels alive) and the
-  // formatted markdown visibly builds up token by token.
   let body = document.querySelector(".summary-card--streaming .summary-card__body");
   if (!body) {
     setSummaryRegion(buildSummaryCardStreaming(detailState.summaryText, ""));
     body = document.querySelector(".summary-card--streaming .summary-card__body");
   } else {
     body.innerHTML = `${renderMarkdown(detailState.summaryText)}<span class="caret" aria-hidden="true"></span>`;
-    body.scrollTop = body.scrollHeight; // keep the freshest text in view
+    body.scrollTop = body.scrollHeight;
   }
 }
 
 function onCached(data) {
   clearSyncingTimer();
   detailState.phase = "cached";
-
   if (detailState.showingCachedCard) {
-    // US1: the cached card we showed instantly IS this cache-hit — no new messages.
-    // Just clear the chip and we're done; the card is already rendered correctly.
     showUpdatingChip(false);
     detailState.showingCachedCard = false;
     teardownStream();
     return;
   }
-
-  // Cold open: the stream returned a cached result — render it now.
   detailState.summaryText = data.summary;
-  const timeStr = fmtTime(data.generatedAt);
-  const statusText = `אין חדש — מתוך מטמון • נוצר ב־${timeStr}`;
+  const statusText = `אין חדש — מתוך מטמון • נוצר ב־${fmtTime(data.generatedAt)}`;
   setSummaryRegion(buildSummaryCardDone(detailState.summaryText, statusText, false));
   teardownStream();
 }
@@ -810,16 +574,12 @@ function onCached(data) {
 function onEmpty() {
   clearSyncingTimer();
   detailState.phase = "empty";
-
   if (detailState.showingCachedCard) {
-    // Cached card visible but stream says empty — no new messages.
-    // Keep the cached card; just clear the chip.
     showUpdatingChip(false);
     detailState.showingCachedCard = false;
     teardownStream();
     return;
   }
-
   setSummaryRegion(buildEmptyResult());
   teardownStream();
 }
@@ -831,128 +591,73 @@ function onDone(data) {
   const parts = [`נשמר • ${totalSec} שניות`];
   if (data.fetchMs > 0) parts.push(`טעינה ${(data.fetchMs / 1000).toFixed(1)}ש׳ (${data.fetched} הודעות)`);
   if (data.summarizeMs) parts.push(`סיכום ${(data.summarizeMs / 1000).toFixed(1)}ש׳`);
-  const statusText = parts.join(" • ");
-  const isStale = !!data.stale;
-
-  // US2: clear the chip and swap to the fresh merged summary
   showUpdatingChip(false);
   detailState.showingCachedCard = false;
-
-  setSummaryRegion(buildSummaryCardDone(detailState.summaryText, statusText, isStale));
+  setSummaryRegion(buildSummaryCardDone(detailState.summaryText, parts.join(" • "), !!data.stale));
   teardownStream();
-
-  // Refresh history after a new summary is saved (US3)
-  if (detailState.group) {
-    loadHistory(detailState.group);
-  }
+  if (detailState.group) loadHistory(detailState.group);
 }
 
 function onError(data) {
   clearSyncingTimer();
   detailState.phase = "error";
-
   if (detailState.showingCachedCard) {
-    // US2: background refresh failed — keep the cached summary, clear the chip.
-    // Do NOT replace valid cached content with an error state.
     showUpdatingChip(false);
-    // showingCachedCard remains true so the card stays
     teardownStream();
     return;
   }
-
   const msg = data?.message || "שגיאת חיבור.";
   setSummaryRegion(`<p class="detail-status detail-status--error" role="alert">${escHtml(msg)}</p>`);
   teardownStream();
 }
 
-/* ── 5d. Summary region builders ────────────────────────── */
+/* ── 5d. Phase Tube + summary builders ───────────────────── */
 
 /**
- * Build the Glacier loader card shown before the first token arrives.
- * @param {{ statusLine?: string, messageCount?: number, elapsed?: number, phase?: string }} opts
+ * Liquid Phase Tube — phase-aware loader.
+ * @param {{ phase: string, messages?: number, elapsed?: number }} opts
  */
-function buildGlacierLoader({ statusLine = "מכין סיכום…", messageCount = 0, elapsed = 0, phase = "analyzing" } = {}) {
-  const large = messageCount >= 100;
+function buildPhaseTube({ phase = "sync", messages = 0, elapsed = 0 } = {}) {
+  const fill = phaseFill(phase);
+  const active = activeZoneIndex(phase);
+  const caption = phaseCaption(phase, { messages });
   const elapsedStr = elapsed > 0 ? `${elapsed}ש׳` : "";
-  // Message bubbles that fly in (RTL: from the right) to be "read".
-  const msgs = Array.from({ length: 4 }, (_, i) =>
-    `<span class="gl-msg gl-msg--${i + 1}" aria-hidden="true"></span>`
+  // Labels render in phase order; RTL places the first (סנכרון) on the right.
+  const labels = PHASES.map((p, i) =>
+    `<span class="phase-tube__label${i <= active ? " is-lit" : ""}${i === active ? " is-active" : ""}">${PHASE_LABELS[p]}</span>`
   ).join("");
-
-  const phaseClass = phase === "syncing" ? "glacier-loader--syncing" : "glacier-loader--analyzing";
   return `
-    <div class="glacier-loader glass-card ${phaseClass}" role="status" aria-live="polite" aria-label="${escHtml(statusLine)}">
-      <div class="glacier-loader__aurora" aria-hidden="true"></div>
-      <div class="glacier-loader__inner">
-        <div class="gl-scene" aria-hidden="true">
-          <div class="gl-stage">
-            ${msgs}
-            <div class="gl-reader">
-              <span class="gl-reader__halo"></span>
-              <span class="gl-reader__book"></span>
-              <span class="gl-reader__head">
-                <span class="gl-brow gl-brow--l"></span>
-                <span class="gl-brow gl-brow--r"></span>
-                <span class="gl-eye gl-eye--l"><i></i></span>
-                <span class="gl-eye gl-eye--r"><i></i></span>
-              </span>
-              <span class="gl-spark gl-spark--1"></span>
-              <span class="gl-spark gl-spark--2"></span>
-              <span class="gl-spark gl-spark--3"></span>
-            </div>
-          </div>
-        </div>
-        ${large ? `<div class="glacier-loader__count">${escHtml(String(messageCount))}<span class="glacier-loader__count-label"> הודעות</span></div>` : ""}
-        <div class="glacier-loader__status">${escHtml(statusLine)}</div>
-        <div class="glacier-loader__footer">
-          ${elapsedStr ? `<span class="glacier-loader__elapsed" id="gl-elapsed">${escHtml(elapsedStr)}</span>` : `<span class="glacier-loader__elapsed" id="gl-elapsed"></span>`}
-        </div>
-        <div class="glacier-loader__bar" aria-hidden="true"><div class="glacier-loader__bar-fill" style="width:${loaderProgress(elapsed)}%"></div></div>
+    <div class="phase-tube-wrap glass-card" role="status" aria-live="polite" aria-label="${escHtml(caption)}">
+      <div class="phase-tube__aurora" aria-hidden="true"></div>
+      <div class="phase-tube__cap">
+        <span class="phase-tube__caption">${escHtml(caption)}</span>
+        <span class="phase-tube__elapsed" id="tube-elapsed">${escHtml(elapsedStr)}</span>
       </div>
+      <div class="phase-tube" aria-hidden="true">
+        <div class="phase-tube__liq" style="width:${fill}%"></div>
+        <span class="phase-tube__zone" style="right:25%"></span>
+        <span class="phase-tube__zone" style="right:50%"></span>
+        <span class="phase-tube__zone" style="right:75%"></span>
+      </div>
+      <div class="phase-tube__labels">${labels}</div>
     </div>
   `;
 }
 
-function buildSkeleton() {
-  return buildGlacierLoader();
+/** Update the live elapsed counter inside the tube. */
+function setTubeElapsed(sec) {
+  const el = document.getElementById("tube-elapsed");
+  if (el) el.textContent = `${sec}ש׳`;
 }
 
-function buildSyncingPill(text, sub) {
-  // sub is like "5 שניות…" from the timer — we parse the number out for elapsed display
-  let elapsed = 0;
-  if (sub) {
-    const m = sub.match(/^(\d+)/);
-    if (m) elapsed = parseInt(m[1], 10);
-  }
-  const fetched = (() => {
-    if (!sub) return 0;
-    const m2 = sub.match(/נטענו (\d+)/);
-    return m2 ? parseInt(m2[1], 10) : 0;
-  })();
-  const statusLine = fetched > 0
-    ? `מסנכרן — נטענו ${fetched} הודעות`
-    : escHtml(text);
-  return buildGlacierLoader({ statusLine, elapsed, phase: "syncing" });
+/** Update the liquid fill width (used by the total-view scan). */
+function setTubeFill(pct) {
+  const liq = document.querySelector(".phase-tube__liq");
+  if (liq) liq.style.width = `${pct}%`;
 }
 
-function buildSummaryCardStreaming(text, statusText) {
-  const hasText = text.length > 0;
-
-  if (!hasText) {
-    // Still pre-first-token: show the Glacier loader with updated status
-    // Extract message count from statusText like "מסכם 247 הודעות…"
-    let msgCount = 0;
-    if (statusText) {
-      const m = statusText.match(/(\d+)\s+הודעות/);
-      if (m) msgCount = parseInt(m[1], 10);
-    }
-    const elapsed = detailState.started
-      ? Math.round((Date.now() - detailState.started) / 1000)
-      : 0;
-    return buildGlacierLoader({ statusLine: statusText || "מסכם…", messageCount: msgCount, elapsed, phase: "analyzing" });
-  }
-
-  // First token has arrived — render markdown live, with a "writing" indicator + caret.
+function buildSummaryCardStreaming(text) {
+  if (!text.length) return buildPhaseTube({ phase: "summarize", elapsed: 0 });
   return `
     <div class="glass-card summary-card summary-card--streaming" style="animation: summary-fade-in 0.35s ease both">
       <div class="summary-card__meta">
@@ -970,14 +675,10 @@ function buildSummaryCardDone(text, statusText, stale) {
   return `
     ${stale ? `
       <div class="stale-note" role="alert">
-        <span aria-hidden="true">⚠️</span>
-        <span>נתונים עלולים להיות לא עדכניים</span>
-      </div>
-    ` : ""}
+        <span aria-hidden="true">⚠️</span><span>נתונים עלולים להיות לא עדכניים</span>
+      </div>` : ""}
     <div class="glass-card summary-card">
-      <div class="summary-card__meta">
-        <span>${escHtml(statusText)}</span>
-      </div>
+      <div class="summary-card__meta"><span>${escHtml(statusText)}</span></div>
       <div class="summary-card__body summary-card__body--rendered">${renderMarkdown(text)}</div>
       <div class="summary-actions">
         <button class="copy-btn" id="copy-btn" aria-label="העתק סיכום">📋 העתק סיכום</button>
@@ -989,121 +690,58 @@ function buildSummaryCardDone(text, statusText, stale) {
 function buildEmptyResult() {
   return `
     <div class="glass-card summary-card">
-      <div class="summary-card__meta">
-        <span>אין חדש</span>
-      </div>
+      <div class="summary-card__meta"><span>אין חדש</span></div>
       <p class="detail-status">אין הודעות חדשות לסיכום.</p>
     </div>
   `;
 }
 
-/**
- * Show or hide the "מתעדכן…" (updating) chip overlaid on the cached summary card.
- * The chip is injected into / removed from a dedicated #updating-chip-host element
- * that lives adjacent to the summary-region, so it doesn't disturb the card DOM.
- *
- * @param {boolean} show
- */
 function showUpdatingChip(show) {
   let host = document.getElementById("updating-chip-host");
   if (!host) {
-    // Create the host element once and insert it just before the summary-region
     const region = document.getElementById("summary-region");
     if (!region) return;
     host = document.createElement("div");
     host.id = "updating-chip-host";
     region.parentNode.insertBefore(host, region);
   }
-  if (show) {
-    host.innerHTML = buildUpdatingChip();
-  } else {
-    host.innerHTML = "";
-  }
+  host.innerHTML = show
+    ? `<div class="updating-chip" role="status" aria-live="polite" aria-label="מתעדכן">
+         <span class="updating-chip__dot" aria-hidden="true"></span>
+         <span class="updating-chip__text">מתעדכן…</span>
+       </div>`
+    : "";
 }
 
-/**
- * Build the HTML for the "מתעדכן…" updating chip (US2).
- * Subtle, non-blocking indicator that a background refresh is in progress.
- * @returns {string}
- */
-function buildUpdatingChip() {
-  return `
-    <div class="updating-chip" role="status" aria-live="polite" aria-label="מתעדכן">
-      <span class="updating-chip__dot" aria-hidden="true"></span>
-      <span class="updating-chip__text">מתעדכן…</span>
-    </div>
-  `;
-}
+/* ── 5e. Copy button (delegated) ─────────────────────────── */
 
-function buildSkeletonLines() {
-  return `
-    <div class="skeleton" style="width:92%"></div>
-    <div class="skeleton" style="width:78%"></div>
-    <div class="skeleton" style="width:85%"></div>
-    <div class="skeleton" style="width:60%"></div>
-  `;
-}
-
-/* ── 5e. Copy button logic ───────────────────────────────── */
-
-/**
- * Wire copy button via event delegation on the stable #app container.
- * Called once at boot time — handles dynamically-rendered #copy-btn
- * both in the live summary region AND in expanded history rows.
- */
 function wireCopyButton() {
-  app.addEventListener("click", async (e) => {
+  document.addEventListener("click", async (e) => {
     const btn = e.target.closest(".copy-btn");
     if (!btn) return;
-
-    // Determine what text to copy.
-    // History row copy buttons carry data-text attribute; the main copy-btn uses detailState.
-    let text;
-    if (btn.dataset.text != null) {
-      text = btn.dataset.text;
-    } else {
-      text = detailState.summaryText;
-    }
+    const text = btn.dataset.text != null ? btn.dataset.text : detailState.summaryText;
     if (!text) return;
-
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(text);
       } else {
-        // Fallback: create a temporary textarea and use execCommand
         const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
+        ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        document.execCommand("copy"); document.body.removeChild(ta);
       }
-      // Confirm visually
       btn.textContent = "הועתק!";
       btn.classList.add("copy-btn--confirm");
-      setTimeout(() => {
-        btn.textContent = "📋 העתק סיכום";
-        btn.classList.remove("copy-btn--confirm");
-      }, 2000);
+      setTimeout(() => { btn.textContent = "📋 העתק סיכום"; btn.classList.remove("copy-btn--confirm"); }, 2000);
     } catch {
       btn.textContent = "לא ניתן להעתיק";
-      setTimeout(() => {
-        btn.textContent = "📋 העתק סיכום";
-      }, 2000);
+      setTimeout(() => { btn.textContent = "📋 העתק סיכום"; }, 2000);
     }
   });
 }
 
-/* ── 5f. History (US3) ───────────────────────────────────── */
+/* ── 5f. History ─────────────────────────────────────────── */
 
-/**
- * Map a summaryType value to a Hebrew label.
- * @param {string} type
- * @returns {string}
- */
 function summaryTypeLabel(type) {
   switch (type) {
     case "watermark": return "מה שפספסתי";
@@ -1113,11 +751,6 @@ function summaryTypeLabel(type) {
   }
 }
 
-/**
- * Fetch and render the history list for a group (US3).
- * List is collapsed by default; a toggle button is shown when count > 0.
- * @param {string} group
- */
 async function loadHistory(group) {
   const section = document.getElementById("history-section");
   const listEl = document.getElementById("history-list");
@@ -1127,57 +760,31 @@ async function loadHistory(group) {
   try {
     summaries = await getSummaries(group);
   } catch {
-    // On error show a minimal error toggle so user knows history failed
     _renderHistoryToggle(section, listEl, 0, true);
     return;
   }
 
   if (!summaries || summaries.length === 0) {
-    // No history: remove any existing toggle and hide list entirely
-    const existing = section.querySelector(".history-toggle");
-    if (existing) existing.remove();
+    section.querySelector(".history-toggle")?.remove();
     listEl.hidden = true;
     listEl.innerHTML = "";
     return;
   }
 
-  // Newest-first (API should return newest-first, but sort defensively)
-  const sorted = [...summaries].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
-
-  listEl.innerHTML = sorted
-    .map((s) => buildHistoryRow(s))
-    .join("");
-
-  // Wire expand/collapse on each row
+  const sorted = [...summaries].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  listEl.innerHTML = sorted.map((s) => buildHistoryRow(s)).join("");
   listEl.querySelectorAll(".history-row").forEach((row) => {
     row.addEventListener("click", (e) => {
-      // Don't collapse when clicking inside the expanded body (copy button)
       if (e.target.closest(".history-row__body")) return;
       toggleHistoryRow(row);
     });
   });
-
-  // Render (or update) the toggle button with fresh count
   _renderHistoryToggle(section, listEl, sorted.length, false);
 }
 
-/**
- * Render (or update) the history toggle button.
- * @param {HTMLElement} section
- * @param {HTMLElement} listEl
- * @param {number} count
- * @param {boolean} error
- */
 function _renderHistoryToggle(section, listEl, count, error) {
-  // Preserve current open/closed state across refreshes
   const existingToggle = section.querySelector(".history-toggle");
-  const wasOpen = existingToggle
-    ? existingToggle.getAttribute("aria-expanded") === "true"
-    : false;
-
-  // Remove old toggle if any
+  const wasOpen = existingToggle ? existingToggle.getAttribute("aria-expanded") === "true" : false;
   if (existingToggle) existingToggle.remove();
 
   if (error) {
@@ -1185,23 +792,15 @@ function _renderHistoryToggle(section, listEl, count, error) {
     listEl.innerHTML = `<p class="history-empty">שגיאה בטעינת היסטוריה.</p>`;
     return;
   }
+  if (count === 0) { listEl.hidden = true; return; }
 
-  if (count === 0) {
-    listEl.hidden = true;
-    return;
-  }
-
-  // Build toggle button
   const toggle = document.createElement("button");
   toggle.className = "history-toggle";
   toggle.setAttribute("aria-expanded", wasOpen ? "true" : "false");
   toggle.setAttribute("aria-controls", "history-list");
   toggle.innerHTML = `<span class="history-toggle__label">סיכומים קודמים (${count})</span><span class="history-toggle__chevron" aria-hidden="true">▾</span>`;
-
-  // Insert before listEl in the section
   section.insertBefore(toggle, listEl);
 
-  // Restore state
   if (wasOpen) {
     listEl.hidden = false;
     toggle.querySelector(".history-toggle__chevron").classList.add("history-toggle__chevron--open");
@@ -1213,23 +812,15 @@ function _renderHistoryToggle(section, listEl, count, error) {
     const open = toggle.getAttribute("aria-expanded") === "true";
     toggle.setAttribute("aria-expanded", open ? "false" : "true");
     listEl.hidden = open;
-    const chevron = toggle.querySelector(".history-toggle__chevron");
-    if (chevron) chevron.classList.toggle("history-toggle__chevron--open", !open);
+    toggle.querySelector(".history-toggle__chevron")?.classList.toggle("history-toggle__chevron--open", !open);
   });
 }
 
-/**
- * Build HTML for a single history row.
- * @param {{ id: number, summaryType: string, output: {overview: string}, createdAt: string }} s
- * @returns {string}
- */
 function buildHistoryRow(s) {
   const label = summaryTypeLabel(s.summaryType);
   const ts = fmtTime(s.createdAt);
   const bodyText = s.output?.overview ?? "";
-  // copy-btn delegation reads the RAW markdown from this data attribute
   const dataText = bodyText.replace(/"/g, "&quot;");
-
   return `
     <div class="history-row glass-card" data-id="${s.id}" aria-expanded="false">
       <div class="history-row__head">
@@ -1247,10 +838,6 @@ function buildHistoryRow(s) {
   `;
 }
 
-/**
- * Toggle expand/collapse on a history row.
- * @param {HTMLElement} row
- */
 function toggleHistoryRow(row) {
   const body = row.querySelector(".history-row__body");
   const chevron = row.querySelector(".history-row__chevron");
@@ -1258,177 +845,119 @@ function toggleHistoryRow(row) {
   const expanded = row.getAttribute("aria-expanded") === "true";
   row.setAttribute("aria-expanded", expanded ? "false" : "true");
   body.hidden = expanded;
-  if (chevron) {
-    chevron.classList.toggle("history-row__chevron--open", !expanded);
-  }
+  chevron?.classList.toggle("history-row__chevron--open", !expanded);
 }
 
-/* ── 5g. Total view ──────────────────────────────────────── */
+/* ── 6. Total view ───────────────────────────────────────── */
 
-/**
- * Render the total-summary view.
- * @param {boolean} autoStart — if true, begin streaming immediately with the default 24h range
- */
 function renderTotal(autoStart) {
   teardownStream();
-  app.innerHTML = buildTotalShell();
+  paneMain.innerHTML = buildTotalShell();
+  setView("total");
+  markActiveRow(null);
 
-  const backBtn = document.getElementById("total-back-btn");
-  if (backBtn) {
-    backBtn.addEventListener("click", () => navigate("feed"));
-  }
-
-  // Wire range chips
+  document.getElementById("total-back-btn")?.addEventListener("click", () => navigate("feed"));
   const chipsContainer = document.getElementById("total-chips");
-  if (chipsContainer) {
-    chipsContainer.addEventListener("click", (e) => {
-      const btn = e.target.closest(".chip[data-since]");
-      if (!btn) return;
-      // Mark active
-      chipsContainer.querySelectorAll(".chip").forEach((c) => {
-        c.classList.toggle("chip--active", c === btn);
-        c.setAttribute("aria-pressed", c === btn ? "true" : "false");
-      });
-      runTotal({ since: btn.dataset.since });
+  chipsContainer?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".chip[data-since]");
+    if (!btn) return;
+    chipsContainer.querySelectorAll(".chip").forEach((c) => {
+      c.classList.toggle("chip--active", c === btn);
+      c.setAttribute("aria-pressed", c === btn ? "true" : "false");
     });
-  }
+    runTotal({ since: btn.dataset.since });
+  });
 
   if (autoStart) {
+    if (DEMO) {
+      const card = document.getElementById("total-highlights");
+      const body = document.getElementById("total-highlights-body");
+      if (card) card.hidden = false;
+      if (body) body.innerHTML = renderMarkdown(DEMO_TOTAL_HIGHLIGHTS);
+      renderTotalPerChat(DEMO_TOTAL_PERCHAT);
+      return;
+    }
     runTotal({ since: defaultTotalSince() });
   }
 }
 
-/** Return the ISO timestamp for 24 hours ago (the default range). */
 function defaultTotalSince() {
   return new Date(Date.now() - 24 * 3600 * 1000).toISOString();
 }
 
-/** Build the total-view shell HTML. */
 function buildTotalShell() {
   const since24h = defaultTotalSince();
-  const since3d  = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString();
+  const since3d = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString();
   const sinceWeek = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
-
   return `
-    <div class="detail-view">
+    <div class="detail-view total-view">
       <nav class="detail-nav" aria-label="ניווט">
         <button class="back-btn" id="total-back-btn" aria-label="חזרה לרשימת הקבוצות">
-          <span class="back-btn__arrow" aria-hidden="true">‹</span>
-          חזרה
+          <span class="back-btn__arrow" aria-hidden="true">›</span> חזרה
         </button>
-        <div class="health-pill" role="status" aria-live="polite">
-          <span class="health-pill__dot"></span>
-          <span>טוען…</span>
-        </div>
       </nav>
-
-      <div class="detail-ghead">
+      <div class="detail-ghead detail-ghead--center">
         <h2 class="detail-gtitle">📊 סיכום כללי</h2>
-        <div class="detail-gfresh">
-          <span class="group-card__dot" aria-hidden="true"></span>
-          <span>מה קרה בכל הצ׳אטים</span>
-        </div>
+        <div class="detail-gfresh">מה קרה בכל הצ׳אטים</div>
       </div>
-
-      <!-- Range chips for total view -->
-      <div class="chips mode-chips" role="group" aria-label="בחירת טווח זמן" id="total-chips">
+      <div class="chips mode-chips chips--center" role="group" aria-label="בחירת טווח זמן" id="total-chips">
         <button class="chip chip--active" data-since="${escHtml(since24h)}" aria-pressed="true">24 שעות</button>
         <button class="chip" data-since="${escHtml(since3d)}" aria-pressed="false">3 ימים</button>
         <button class="chip" data-since="${escHtml(sinceWeek)}" aria-pressed="false">שבוע</button>
       </div>
-
-      <!-- Animated loader (map phase) -->
       <div id="total-loader" aria-live="polite"></div>
-
-      <!-- Inline error line -->
       <p id="total-error" class="detail-status detail-status--error" role="alert" hidden></p>
-
-      <!-- Streaming highlights output -->
       <div id="total-highlights" class="glass-card summary-card" hidden>
         <div id="total-highlights-body" class="summary-card__body summary-card__body--rendered"></div>
       </div>
-
-      <!-- Per-chat accordion (all active chats, collapsible) -->
       <div id="total-perchat" class="total-perchat-list"></div>
     </div>
   `;
 }
 
-/** Render the animated Glacier loader in the total view. */
-function showTotalLoader(statusLine) {
+function showTotalLoader(phase, opts = {}) {
   const region = document.getElementById("total-loader");
-  if (region) {
-    region.innerHTML = buildGlacierLoader({ statusLine, elapsed: 0, phase: "analyzing" });
-  }
+  if (region) region.innerHTML = buildPhaseTube({ phase, elapsed: 0, ...opts });
 }
 
-/** Remove the total-view loader and stop its elapsed timer. */
 function clearTotalLoader() {
   const region = document.getElementById("total-loader");
   if (region) region.innerHTML = "";
-  if (totalLoaderTimer) {
-    clearInterval(totalLoaderTimer);
-    totalLoaderTimer = null;
-  }
+  if (totalLoaderTimer) { clearInterval(totalLoaderTimer); totalLoaderTimer = null; }
 }
 
-/**
- * Render the per-chat breakdown: ALL active chats, busiest first, each a
- * collapsed <details> so the less-important ones stay tucked away by default.
- * @param {Array<{name:string, messageCount:number, summary:string}>} perChat
- */
 function renderTotalPerChat(perChat) {
   const perChatEl = document.getElementById("total-perchat");
   if (!perChatEl) return;
-  if (perChat.length === 0) {
-    perChatEl.innerHTML = "";
-    return;
-  }
-  const chats = perChat
-    .slice()
-    .sort((a, b) => Number(b.messageCount) - Number(a.messageCount));
+  if (perChat.length === 0) { perChatEl.innerHTML = ""; return; }
+  const chats = perChat.slice().sort((a, b) => Number(b.messageCount) - Number(a.messageCount));
   const heading = `<h3 class="total-section-heading">לפי צ׳אט · ${chats.length} צ׳אטים</h3>`;
-  const items = chats
-    .map(
-      (c) => `
-        <details class="perchat glass-card">
-          <summary class="perchat__summary">
-            <span class="perchat__name">${escHtml(c.name)}</span>
-            <span class="perchat__count">${Number(c.messageCount).toLocaleString("he-IL")} הודעות</span>
-          </summary>
-          <div class="perchat__body summary-card__body--rendered">${renderMarkdown(c.summary)}</div>
-        </details>
-      `,
-    )
-    .join("");
+  const items = chats.map((c) => `
+    <details class="perchat glass-card">
+      <summary class="perchat__summary">
+        <span class="perchat__name">${escHtml(c.name)}</span>
+      </summary>
+      <div class="perchat__body summary-card__body--rendered">${renderMarkdown(c.summary)}</div>
+    </details>
+  `).join("");
   perChatEl.innerHTML = heading + items;
 }
 
-/**
- * Start a total-summary SSE stream.
- * @param {{ since: string }} params
- */
 function runTotal({ since }) {
   teardownStream();
-
   const highlightsCard = document.getElementById("total-highlights");
   const highlightsBody = document.getElementById("total-highlights-body");
   const perChatEl = document.getElementById("total-perchat");
   const errorEl = document.getElementById("total-error");
-
   if (highlightsCard) highlightsCard.hidden = true;
   if (highlightsBody) highlightsBody.innerHTML = "";
   if (perChatEl) perChatEl.innerHTML = "";
   if (errorEl) errorEl.hidden = true;
 
-  // Show the animated loader during the (slow) per-chat map phase, with a
-  // live elapsed counter.
   const startedAt = Date.now();
-  showTotalLoader("סורק את הצ׳אטים…");
+  showTotalLoader("read");
   totalLoaderTimer = setInterval(() => {
-    const sec = Math.round((Date.now() - startedAt) / 1000);
-    const el = document.getElementById("gl-elapsed");
-    if (el) el.textContent = `${sec}ש׳`;
+    setTubeElapsed(Math.round((Date.now() - startedAt) / 1000));
   }, 1000);
 
   let raw = "";
@@ -1439,28 +968,17 @@ function runTotal({ since }) {
   es.addEventListener("status", (e) => {
     const d = JSON.parse(e.data);
     if (d.phase === "chat" && loaderActive) {
-      const status = document.querySelector("#total-loader .glacier-loader__status");
-      if (status) status.textContent = `מסכם את "${d.name}" · צ׳אט ${d.index} מתוך ${d.total}`;
-      // Determinate progress from real chat counts; reserve the tail (88→100%)
-      // for the cross-chat reduce step that follows the per-chat map phase.
-      const fill = document.querySelector("#total-loader .glacier-loader__bar-fill");
-      if (fill && d.total > 0) {
-        fill.style.width = `${Math.round(((d.index - 1) / d.total) * 88)}%`;
-      }
+      const cap = document.querySelector("#total-loader .phase-tube__caption");
+      if (cap) cap.textContent = `📖 מסכם את "${d.name}" · צ׳אט ${d.index} מתוך ${d.total}`;
+      if (d.total > 0) setTubeFill(scanFill(d.index - 1, d.total));
     }
   });
 
   es.addEventListener("token", (e) => {
-    // First token = the reduce phase started: drop the loader, reveal the card.
-    if (loaderActive) {
-      loaderActive = false;
-      clearTotalLoader();
-    }
+    if (loaderActive) { loaderActive = false; clearTotalLoader(); }
     raw += JSON.parse(e.data).delta;
     if (highlightsCard) highlightsCard.hidden = false;
-    if (highlightsBody) {
-      highlightsBody.innerHTML = `${renderMarkdown(raw)}<span class="caret" aria-hidden="true"></span>`;
-    }
+    if (highlightsBody) highlightsBody.innerHTML = `${renderMarkdown(raw)}<span class="caret" aria-hidden="true"></span>`;
   });
 
   es.addEventListener("done", (e) => {
@@ -1475,118 +993,161 @@ function runTotal({ since }) {
 
   es.addEventListener("error", (e) => {
     let msg = "שגיאה בהפקת הסיכום.";
-    try {
-      const data = JSON.parse(e.data);
-      if (data?.message) msg = data.message;
-    } catch (_) {
-      // native EventSource connection error — no parseable data, keep default
-    }
+    try { const data = JSON.parse(e.data); if (data?.message) msg = data.message; } catch { /* native error */ }
     loaderActive = false;
     clearTotalLoader();
-    if (errorEl) {
-      errorEl.textContent = msg;
-      errorEl.hidden = false;
-    }
+    if (errorEl) { errorEl.textContent = msg; errorEl.hidden = false; }
     teardownStream();
   });
 }
 
-/* ── 6. Helpers ──────────────────────────────────────────── */
+/* ── 7. AMA view (stub) ──────────────────────────────────── */
 
 /**
- * Format a raw WhatsApp JID / lid into a friendly display name.
- * Does NOT modify the raw value — only used for displayed text.
- * @param {string} name
- * @returns {string}
+ * Render the Ask-Me-Anything chat panel.
+ * @param {string|null} scope — null for global, group name for per-group
  */
+function renderAma(scope) {
+  teardownStream();
+  amaConversation = createConversation();
+  const sub = scope ? `על "${escHtml(formatGroupName(scope))}"` : "מחפש בכל השיחות שלך";
+  paneMain.innerHTML = `
+    <div class="ama-panel">
+      <div class="ama-head">
+        <button class="back-btn" id="ama-back-btn" aria-label="חזרה">
+          <span class="back-btn__arrow" aria-hidden="true">›</span> חזרה
+        </button>
+        <span class="ama-head__orb" aria-hidden="true"></span>
+        <div class="ama-head__txt">
+          <div class="ama-head__title">שאל אותי הכל</div>
+          <div class="ama-head__sub">${sub}</div>
+        </div>
+      </div>
+      <div class="ama-messages" id="ama-messages" aria-live="polite">
+        <div class="ama-empty">${scope ? "שאל כל שאלה על הצ׳אט הזה ✨" : "שאל כל שאלה על השיחות שלך ✨"}</div>
+      </div>
+      <form class="ama-input" id="ama-form">
+        <input id="ama-q" class="ama-input__field" type="text" placeholder="שאל שאלה…"
+          aria-label="שאלה" autocomplete="off" />
+        <button class="ama-input__send" type="submit" aria-label="שלח">➤</button>
+      </form>
+    </div>
+  `;
+  setView("ama");
+  markActiveRow(scope);
+
+  document.getElementById("ama-back-btn")?.addEventListener("click", () => history.back());
+  document.getElementById("ama-form")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const input = document.getElementById("ama-q");
+    const val = input?.value || "";
+    if (!val.trim()) return;
+    ask(amaConversation, val);
+    if (input) input.value = "";
+    renderAmaMessages();
+  });
+}
+
+function renderAmaMessages() {
+  const el = document.getElementById("ama-messages");
+  if (!el) return;
+  el.innerHTML = amaConversation.messages.map((m) => {
+    if (m.role === "user") {
+      return `<div class="ama-bubble ama-bubble--user">${escHtml(m.text)}</div>`;
+    }
+    return `<div class="ama-bubble ama-bubble--ai">${escHtml(m.text)}
+      <span class="ama-bubble__src">↳ מקורות יחוברו בהמשך</span></div>`;
+  }).join("");
+  el.scrollTop = el.scrollHeight;
+}
+
+/* ── 8. Helpers ──────────────────────────────────────────── */
+
 function formatGroupName(name) {
   if (!name) return name;
-  if (name.endsWith("@s.whatsapp.net")) {
-    const part = name.slice(0, name.lastIndexOf("@"));
-    return "+" + part;
-  }
-  if (name.endsWith("@lid")) {
-    const part = name.slice(0, name.lastIndexOf("@"));
-    const last4 = part.slice(-4);
-    return "איש קשר · …" + last4;
-  }
-  if (name.endsWith("@g.us")) {
-    const part = name.slice(0, name.lastIndexOf("@"));
-    const last4 = part.slice(-4);
-    return "קבוצה · …" + last4;
-  }
+  if (name.endsWith("@s.whatsapp.net")) return "+" + name.slice(0, name.lastIndexOf("@"));
+  if (name.endsWith("@lid")) return "איש קשר · …" + name.slice(0, name.lastIndexOf("@")).slice(-4);
+  if (name.endsWith("@g.us")) return "קבוצה · …" + name.slice(0, name.lastIndexOf("@")).slice(-4);
   return name;
 }
 
-/** Replace the contents of the #summary-region element. */
 function setSummaryRegion(html) {
   const region = document.getElementById("summary-region");
   if (region) region.innerHTML = html;
 }
 
-/** Clear the syncing interval timer. */
 function clearSyncingTimer() {
-  if (detailState.syncingTimer) {
-    clearInterval(detailState.syncingTimer);
-    detailState.syncingTimer = null;
-  }
+  if (detailState.syncingTimer) { clearInterval(detailState.syncingTimer); detailState.syncingTimer = null; }
 }
 
-/** Format an ISO timestamp to a locale string (Hebrew). */
 function fmtTime(iso) {
-  try {
-    return new Date(iso).toLocaleString("he-IL");
-  } catch {
-    return iso;
-  }
+  try { return new Date(iso).toLocaleString("he-IL"); } catch { return iso; }
 }
 
-/** Escape HTML special chars for text interpolation. */
 function escHtml(str) {
   if (str == null) return "";
   return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
-/* ── 7. Bootstrap ────────────────────────────────────────── */
+/* ── 9. Bootstrap ────────────────────────────────────────── */
 
-/** Parse the URL hash to determine the initial view. */
 function resolveInitialRoute() {
   const hash = location.hash;
-  const match = hash.match(/^#group=(.+)$/);
-  if (match) {
-    const group = decodeURIComponent(match[1]);
+  let m = hash.match(/^#group=(.+)$/);
+  if (m) {
+    const group = decodeURIComponent(m[1]);
     history.replaceState({ view: "detail", group }, "", hash);
     return { view: "detail", group };
+  }
+  if (hash === "#total") {
+    history.replaceState({ view: "total" }, "", hash);
+    return { view: "total" };
+  }
+  m = hash.match(/^#ama=(.+)$/);
+  if (m) {
+    const scope = decodeURIComponent(m[1]);
+    history.replaceState({ view: "ama", scope }, "", hash);
+    return { view: "ama", scope };
+  }
+  if (hash === "#ama") {
+    history.replaceState({ view: "ama", scope: null }, "", hash);
+    return { view: "ama", scope: null };
   }
   history.replaceState({ view: "feed" }, "", location.pathname);
   return { view: "feed" };
 }
 
 async function boot() {
-  // Start health polling immediately (runs independently of views)
-  startHealthPolling();
-
-  // Wire copy button via delegation (once, on the app container)
+  renderShell();
+  if (DEMO) applyHealth(true);
+  else startHealthPolling();
   wireCopyButton();
 
-  // Resolve route and render initial view
   const route = resolveInitialRoute();
+  await loadGroupsIntoList();
+
   if (route.view === "detail") {
-    // Pre-load groups so detail has metadata
-    try {
-      cachedGroups = await getGroups();
-    } catch {
-      cachedGroups = [];
-    }
-    renderDetail(route.group, false);
+    renderDetail(route.group, true);
+  } else if (route.view === "total") {
+    renderTotal(true);
+  } else if (route.view === "ama") {
+    renderAma(route.scope ?? null);
   } else {
-    renderFeed();
+    setView("feed");
+    renderMainWelcome();
   }
+}
+
+/** Desktop default for the main pane while on the feed (hidden on mobile). */
+function renderMainWelcome() {
+  paneMain.innerHTML = `
+    <div class="main-welcome">
+      <span class="main-welcome__orb" aria-hidden="true"></span>
+      <p class="main-welcome__txt">בחר צ׳אט מהרשימה<br>או השתמש בפעולות שלמעלה ✨</p>
+    </div>
+  `;
 }
 
 boot();

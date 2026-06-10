@@ -14,6 +14,8 @@ export type UpsertMessageMediaInput = {
   fileLength: number | null;
   waMessage: Buffer | null;
   downloadState: "pending" | "present" | "unrecoverable" | "pruned";
+  /** Signed-URL expiry in unix SECONDS (from `oe=`); null when absent. */
+  urlExpiresAt?: number | null;
 };
 
 /**
@@ -44,8 +46,9 @@ export async function upsertMessageMedia(
     INSERT INTO message_media
       (message_id, media_kind, mime_type, media_key, direct_path, url,
        file_enc_sha256, file_sha256, media_key_ts, file_length, wa_message,
-       download_state, updated_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+       download_state, url_expires_at, updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+            CASE WHEN $13::bigint IS NULL THEN NULL ELSE to_timestamp($13::bigint) END, now())
     ON CONFLICT (message_id) DO UPDATE SET
       media_kind      = EXCLUDED.media_kind,
       mime_type       = COALESCE(EXCLUDED.mime_type, message_media.mime_type),
@@ -56,6 +59,12 @@ export async function upsertMessageMedia(
       media_key_ts    = COALESCE(message_media.media_key_ts, EXCLUDED.media_key_ts),
       direct_path     = COALESCE(EXCLUDED.direct_path, message_media.direct_path),
       url             = COALESCE(EXCLUDED.url, message_media.url),
+      -- Expiry tracks the url: when a fresh url is supplied, adopt its expiry
+      -- (even if NULL) so a refreshed url can never keep a stale/expired oe.
+      url_expires_at  = CASE
+                          WHEN EXCLUDED.url IS NOT NULL THEN EXCLUDED.url_expires_at
+                          ELSE message_media.url_expires_at
+                        END,
       file_length     = COALESCE(EXCLUDED.file_length, message_media.file_length),
       download_state  = CASE
                           WHEN message_media.download_state = 'pending'
@@ -63,7 +72,11 @@ export async function upsertMessageMedia(
                           ELSE message_media.download_state
                         END,
       updated_at      = now()
-    WHERE message_media.download_state <> 'pruned'
+    -- Terminal states are immutable: a re-pull must not resurrect the secrets
+    -- that pruneMediaSecrets ('pruned') or markMediaUnrecoverable ('unrecoverable')
+    -- deliberately dropped, nor reset their state (it can never advance back to
+    -- 'pending', so refreshed bytes would be stranded anyway).
+    WHERE message_media.download_state NOT IN ('pruned', 'unrecoverable')
     `,
     [
       input.messageId,
@@ -78,6 +91,7 @@ export async function upsertMessageMedia(
       input.fileLength,
       input.waMessage,
       input.downloadState,
+      input.urlExpiresAt ?? null,
     ],
   );
 }
@@ -89,9 +103,15 @@ export type PendingMedia = {
 };
 
 /**
- * Returns up to `limit` rows whose `download_state` is `'pending'`,
- * ordered oldest-first by `sent_at` (via a JOIN to `messages`) so the
- * downloader processes historical media in chronological order.
+ * Returns up to `limit` rows whose `download_state` is `'pending'`, ordered by
+ * **CDN lifetime** — soonest-to-expire (`url_expires_at ASC`) first — so the
+ * throttled downloader spends its budget on the media most at risk of expiring
+ * before we reach it. Rows with no known expiry sort last (then oldest-first).
+ *
+ * Rows whose signed URL has **already expired** (`url_expires_at <= now()`) are
+ * excluded: they return 403 and, with the reuploadRequest refresh path broken,
+ * are unrecoverable — retrying them only burns the queue. `markExpiredMediaUnrecoverable`
+ * is responsible for retiring them.
  *
  * Rows that have reached `maxAttempts` are excluded so persistently-failing
  * downloads cannot starve newer items in the queue.
@@ -100,8 +120,8 @@ export type PendingMedia = {
  * returned — `sticker` and `document` rows are skipped because
  * `analysisJobFor` returns null for them.
  *
- * The JOIN to `messages` is solely for ordering — no message fields are
- * returned in the result set.
+ * The JOIN to `messages` is solely for the tie-break ordering — no message
+ * fields are returned in the result set.
  */
 export async function selectPendingMedia(
   client: pg.Pool | pg.PoolClient,
@@ -120,7 +140,8 @@ export async function selectPendingMedia(
     WHERE mm.download_state = 'pending'
       AND mm.attempts < $1
       AND mm.media_kind IN ('image', 'video', 'audio')
-    ORDER BY m.sent_at ASC, mm.message_id ASC
+      AND (mm.url_expires_at IS NULL OR mm.url_expires_at > now())
+    ORDER BY mm.url_expires_at ASC NULLS LAST, m.sent_at ASC, mm.message_id ASC
     LIMIT $2
     `,
     [maxAttempts, limit],
@@ -146,6 +167,13 @@ export async function markMediaPresent(
   );
 }
 
+/**
+ * Marks a row `unrecoverable` AND drops its cryptographic material
+ * (`media_key`, `wa_message`, `direct_path`, `url`). Once we've given up, the
+ * key + proto blob can never produce bytes, so retaining them only adds privacy
+ * exposure (data-minimization — see deep-history-via-full-sync). Distinct from
+ * `pruneMediaSecrets`, which is the post-analysis cleanup for `present` rows.
+ */
 export async function markMediaUnrecoverable(
   client: pg.Pool | pg.PoolClient,
   messageId: number,
@@ -153,10 +181,33 @@ export async function markMediaUnrecoverable(
 ): Promise<void> {
   await client.query(
     `UPDATE message_media
-       SET download_state='unrecoverable', last_error=$2, updated_at=now()
+       SET download_state='unrecoverable', last_error=$2,
+           media_key=NULL, wa_message=NULL, direct_path=NULL, url=NULL,
+           updated_at=now()
      WHERE message_id=$1`,
     [messageId, error],
   );
+}
+
+/**
+ * Retires every `pending` row whose signed URL has already expired
+ * (`url_expires_at <= now()`): flips it to `unrecoverable` and prunes secrets.
+ * These would 403 on download and cannot be refreshed (reuploadRequest broken),
+ * so this both saves the queue from doomed attempts and minimizes retained data.
+ * Returns the number of rows retired. Cheap enough to run each backfill sweep.
+ */
+export async function markExpiredMediaUnrecoverable(
+  client: pg.Pool | pg.PoolClient,
+): Promise<number> {
+  const { rowCount } = await client.query(
+    `UPDATE message_media
+       SET download_state='unrecoverable',
+           last_error='signed URL expired before download (oe passed; reupload unavailable)',
+           media_key=NULL, wa_message=NULL, direct_path=NULL, url=NULL,
+           updated_at=now()
+     WHERE download_state='pending' AND url_expires_at IS NOT NULL AND url_expires_at <= now()`,
+  );
+  return rowCount ?? 0;
 }
 
 export async function recordMediaAttempt(
@@ -207,6 +258,7 @@ export function descriptorToUpsertInput(
     fileLength: descriptor.fileLength,
     waMessage: Buffer.from(descriptor.waMessage),
     downloadState: state,
+    urlExpiresAt: descriptor.urlExpiresAt,
   };
 }
 

@@ -133,17 +133,20 @@ describe("analyzeMediaOne", () => {
     expect(insertCalls[0]!.errorMessage).toBeTruthy();
   });
 
-  it("inserts a 'failed' row when getVisualMediaPath returns null, then rethrows", async () => {
+  it("image — skips gracefully (no failed row, no throw) when getVisualMediaPath returns null", async () => {
     const insertCalls: CallRecord[] = [];
+    const describeImage = vi.fn();
     const deps = makeMinimalDeps({
       getVisualMediaPath: vi.fn().mockResolvedValue(null),
+      visionAnalyzer: { describeImage } as never,
       insertMediaAnalysis: vi.fn().mockImplementation(async (input: CallRecord) => {
         insertCalls.push(input);
       }),
     });
-    await expect(analyzeMediaOne(42, "image", deps)).rejects.toThrow();
-    expect(insertCalls).toHaveLength(1);
-    expect(insertCalls[0]).toMatchObject({ status: "failed" });
+    // null path = nothing analyzable (pruned/absent/stale job) → terminal skip.
+    await expect(analyzeMediaOne(42, "image", deps)).resolves.toBeUndefined();
+    expect(insertCalls).toHaveLength(0); // no 'failed' row
+    expect(describeImage).not.toHaveBeenCalled();
   });
 
   // ---------------------------------------------------------------------------
@@ -237,17 +240,19 @@ describe("analyzeMediaOne", () => {
     );
   });
 
-  it("T019: video — passes null mediaPath when getVisualMediaPath returns null, then fails", async () => {
+  it("T019: video — skips gracefully (no failed row, no throw) when getVisualMediaPath returns null", async () => {
     const insertCalls: CallRecord[] = [];
+    const analyzeVideo = vi.fn();
     const deps = makeMinimalDeps({
       getVisualMediaPath: vi.fn().mockResolvedValue(null),
+      analyzeVideo,
       insertMediaAnalysis: vi.fn().mockImplementation(async (input: CallRecord) => {
         insertCalls.push(input);
       }),
     });
-    await expect(analyzeMediaOne(42, "video", deps)).rejects.toThrow();
-    expect(insertCalls).toHaveLength(1);
-    expect(insertCalls[0]).toMatchObject({ status: "failed" });
+    await expect(analyzeMediaOne(42, "video", deps)).resolves.toBeUndefined();
+    expect(insertCalls).toHaveLength(0);
+    expect(analyzeVideo).not.toHaveBeenCalled();
   });
 
   // ---------------------------------------------------------------------------

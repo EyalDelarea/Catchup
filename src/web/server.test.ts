@@ -75,7 +75,7 @@ describe("web server", () => {
     expect(html).toContain('rel="manifest"'); // add-to-home-screen
     expect(html).toContain('href="/styles.css"'); // Glacier styles
     expect(html).toContain('id="stale-banner"'); // unhealthy banner region
-    expect(html).toContain('id="app"'); // view mount point
+    expect(html).toContain('id="pane-main"'); // two-pane shell main mount point
   });
 
   it("serves the JS modules that wire catch-up and the status/groups endpoints", async () => {

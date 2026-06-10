@@ -17,10 +17,10 @@
 A **local-first** personal WhatsApp summarizer. Messages are collected passively via a read-only linked device (using [Baileys](https://github.com/WhiskeySockets/Baileys)), stored in your own Postgres, transcribed locally (faster-whisper), captioned locally (Ollama vision), and summarized locally (Ollama) — then displayed in a mobile-first, RTL Hebrew web UI. **Nothing leaves your machine.** No cloud API keys, no hosted service, no data sharing.
 
 <p align="center">
-  <img src="assets/screenshot.png" alt="Catchup web UI — a structured Hebrew catch-up summary of a group" width="380" />
+  <img src="assets/screens/desktop.png" alt="Catchup web UI — desktop two-pane: group sidebar + a structured Hebrew catch-up summary" width="820" />
 </p>
 
-<p align="center"><sub>📱 The mobile web UI showing a structured "what I missed" summary (demo data).</sub></p>
+<p align="center"><sub>📊 The web UI — responsive (mobile single-column ↔ desktop two-pane). Demo data shown.</sub></p>
 
 ---
 
@@ -44,6 +44,34 @@ In addition to per-chat summaries, Catchup can produce a single digest across **
 
 - **On demand in the web UI:** a pinned "📊 סיכום כללי" card sits at the top of the chat list; pick a range (24 h / 3 days / week) and the summary streams in live.
 - **Automatically:** the twice-daily scheduler produces a total summary alongside the per-chat digests, so it's ready when you wake up.
+
+---
+
+## 🏢 Multi-tenant (self-hosted) — additive capability
+
+Catchup is growing an **optional, self-hosted multi-tenant mode** so one operator-run instance can
+serve several WhatsApp accounts (your own businesses + trusted friends) — each fully isolated. This
+is **additive**: the single-user local mode above stays the default and behaves exactly as today.
+
+**Still "local + private", redefined for an operator:** data never leaves the operator's own
+hardware, there is **no third-party cloud**, and **all inference (Whisper/Ollama) stays local** —
+nothing is sent to anyone. The new hard guarantee is **tenant isolation**: one tenant can never read
+or modify another's data, enforced in **two independent layers** (PostgreSQL row-level security +
+an application-layer active-tenant context). The operator is the data custodian and can hard-delete
+any tenant's data on request.
+
+| Capability | Approach |
+|---|---|
+| Isolation | Postgres RLS **and** app-layer `withTenant()` (defense in depth) |
+| Auth | Email + password (argon2), email verification + reset |
+| Registration | Open self-registration behind a consent + ToS gate |
+| Internet access | Cloudflare Tunnel (no open ports, auto-HTTPS, hides home IP) |
+| Onboarding | Web: register → scan QR → connected; media/history backfilled in the background |
+| Observability | `tenant_id` on every log line + a dedicated audit log |
+
+**Status:** delivered in stacked slices — **T1 (tenancy data substrate) is merged**; auth +
+registration, per-tenant WhatsApp orchestration, onboarding, dashboards, and observability are
+landing as a stack of gated PRs on top of it. Single-user local users need to do nothing.
 
 ---
 

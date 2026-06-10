@@ -43,6 +43,25 @@ describe("extractMediaDescriptor", () => {
     expect(extractMediaDescriptor(text)).toBeNull();
   });
 
+  it("parses the signed-URL expiry (oe, hex unix) into urlExpiresAt", () => {
+    const msg = {
+      key: { remoteJid: "1@s.whatsapp.net", id: "E", fromMe: false },
+      message: {
+        imageMessage: {
+          mediaKey: new Uint8Array([1]),
+          directPath: "/v/t62/x.enc?ccb=11-4&oh=01_abc&oe=696CBBBE&_nc_sid=5e03e0",
+          url: "https://mmg.whatsapp.net/v/t62/x.enc?ccb=11-4&oh=01_abc&oe=696CBBBE&_nc_sid=5e03e0",
+        },
+      },
+    } as unknown as WAMessage;
+    // 0x696CBBBE = 1768733630 (2026-01-18T10:53:50Z)
+    expect(extractMediaDescriptor(msg)!.urlExpiresAt).toBe(0x696cbbbe);
+  });
+
+  it("urlExpiresAt is null when no oe param is present", () => {
+    expect(extractMediaDescriptor(imageMsg())!.urlExpiresAt).toBeNull();
+  });
+
   it("classifies a voice note as audio", () => {
     const audio = {
       key: { remoteJid: "1@s.whatsapp.net", id: "V", fromMe: false },

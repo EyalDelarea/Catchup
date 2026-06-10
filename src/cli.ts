@@ -815,6 +815,7 @@ program
             markPresentMedia: (id, dp) => mediaRepo.markMediaPresent(pool, id, dp),
             markUnrecoverable: (id, e) => mediaRepo.markMediaUnrecoverable(pool, id, e),
             recordAttempt: (id, e) => mediaRepo.recordMediaAttempt(pool, id, e),
+            sweepExpired: () => mediaRepo.markExpiredMediaUnrecoverable(pool),
             enqueue: async (type, payload) => {
               await brokerBus.enqueue(type, payload);
             },
@@ -1015,6 +1016,7 @@ program
           markPresentMedia: (id, dp) => mediaRepo.markMediaPresent(pool, id, dp),
           markUnrecoverable: (id, e) => mediaRepo.markMediaUnrecoverable(pool, id, e),
           recordAttempt: (id, e) => mediaRepo.recordMediaAttempt(pool, id, e),
+          sweepExpired: () => mediaRepo.markExpiredMediaUnrecoverable(pool),
           enqueue: async (type, payload) => {
             await bus.enqueue(type, payload);
           },
