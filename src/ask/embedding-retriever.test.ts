@@ -168,4 +168,17 @@ describe("EmbeddingRetriever (integration, pgvector)", () => {
     const pending = await selectMessagesNeedingEmbedding(pool, { limit: 100 });
     expect(pending).toEqual([]); // all already embedded
   });
+
+  it("degrades to [] when the embedder fails (so RRF falls back to other retrievers)", async () => {
+    const throwingEmbedder: Embedder = {
+      model: "boom",
+      embed: () => Promise.reject(new Error("ollama down")),
+    };
+    const r = new EmbeddingRetriever(pool, throwingEmbedder);
+    // A failing embedding model must NOT reject the whole ask — it yields no
+    // candidates, leaving lexical/recency to answer.
+    await expect(r.retrieve({ question: "מה גיא שאל אותי", window, limit: 10 })).resolves.toEqual(
+      [],
+    );
+  });
 });

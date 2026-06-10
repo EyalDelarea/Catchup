@@ -31,60 +31,72 @@ export class EmbeddingRetriever implements Retriever {
     const question = q.question.trim();
     if (question.length === 0) return [];
 
-    const [vector] = await this.embedder.embed([question]);
-    if (!vector) return [];
-    const queryVec = toVectorLiteral(vector);
+    // Semantic retrieval depends on a live embedding model (Ollama) plus the
+    // pgvector query. If either fails, degrade to no candidates here so RRF falls
+    // back to lexical (+ recency) rather than failing the whole ask — the other
+    // retrievers (pure DB) don't share this network dependency. The failure is
+    // logged (routed through pino by the serve console guard) for observability.
+    try {
+      const [vector] = await this.embedder.embed([question]);
+      if (!vector) return [];
+      const queryVec = toVectorLiteral(vector);
 
-    // $1 query vector, $2 since, $3 until, $4 limit, [$5 chat]
-    const params: unknown[] = [queryVec, q.window.since, q.window.until, q.limit];
-    let chatFilter = "";
-    if (q.chat) {
-      params.push(q.chat);
-      chatFilter = `AND g.name = $${params.length}`;
+      // $1 query vector, $2 since, $3 until, $4 limit, [$5 chat]
+      const params: unknown[] = [queryVec, q.window.since, q.window.until, q.limit];
+      let chatFilter = "";
+      if (q.chat) {
+        params.push(q.chat);
+        chatFilter = `AND g.name = $${params.length}`;
+      }
+
+      const { rows } = await this.pool.query<{
+        id: string;
+        chat: string;
+        sender: string;
+        sent_at: Date;
+        content: string;
+        score: number;
+      }>(
+        `
+        SELECT m.id,
+               g.name AS chat,
+               COALESCE(p.display_name, 'Unknown') AS sender,
+               m.sent_at,
+               concat_ws(' — ',
+                 NULLIF(trim(m.text_content), ''),
+                 NULLIF(trim(a.description), ''),
+                 NULLIF(trim(t.transcript), '')
+               ) AS content,
+               -- cosine distance (<=>) is in [0,2]; similarity = 1 - distance.
+               1 - (e.embedding <=> $1::vector) AS score
+        FROM message_embeddings e
+        JOIN messages m ON m.id = e.message_id
+        JOIN groups g ON g.id = m.group_id
+        LEFT JOIN participants p ON p.id = m.participant_id
+        LEFT JOIN transcripts t ON t.message_id = m.id AND t.status = 'completed'
+        LEFT JOIN media_analyses a ON a.message_id = m.id AND a.status = 'completed'
+        WHERE m.message_type <> 'system'
+          AND m.sent_at >= $2 AND m.sent_at <= $3
+          ${chatFilter}
+        ORDER BY e.embedding <=> $1::vector
+        LIMIT $4
+        `,
+        params,
+      );
+
+      return rows.map((r) => ({
+        messageId: Number(r.id),
+        chat: r.chat,
+        sender: r.sender,
+        sentAt: r.sent_at,
+        content: r.content,
+        score: r.score,
+      }));
+    } catch (err) {
+      console.warn(
+        `[ask] embedding retrieval failed; falling back to other retrievers: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return [];
     }
-
-    const { rows } = await this.pool.query<{
-      id: string;
-      chat: string;
-      sender: string;
-      sent_at: Date;
-      content: string;
-      score: number;
-    }>(
-      `
-      SELECT m.id,
-             g.name AS chat,
-             COALESCE(p.display_name, 'Unknown') AS sender,
-             m.sent_at,
-             concat_ws(' — ',
-               NULLIF(trim(m.text_content), ''),
-               NULLIF(trim(a.description), ''),
-               NULLIF(trim(t.transcript), '')
-             ) AS content,
-             -- cosine distance (<=>) is in [0,2]; similarity = 1 - distance.
-             1 - (e.embedding <=> $1::vector) AS score
-      FROM message_embeddings e
-      JOIN messages m ON m.id = e.message_id
-      JOIN groups g ON g.id = m.group_id
-      LEFT JOIN participants p ON p.id = m.participant_id
-      LEFT JOIN transcripts t ON t.message_id = m.id AND t.status = 'completed'
-      LEFT JOIN media_analyses a ON a.message_id = m.id AND a.status = 'completed'
-      WHERE m.message_type <> 'system'
-        AND m.sent_at >= $2 AND m.sent_at <= $3
-        ${chatFilter}
-      ORDER BY e.embedding <=> $1::vector
-      LIMIT $4
-      `,
-      params,
-    );
-
-    return rows.map((r) => ({
-      messageId: Number(r.id),
-      chat: r.chat,
-      sender: r.sender,
-      sentAt: r.sent_at,
-      content: r.content,
-      score: r.score,
-    }));
   }
 }
