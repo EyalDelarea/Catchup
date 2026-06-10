@@ -101,6 +101,13 @@ describe("loadConfig auth block (T2 multi-tenant)", () => {
     expect(loadConfig({ SESSION_COOKIE_SECURE: "true" }).auth.cookieSecure).toBe(true);
   });
 
+  it("parses OPERATOR_EMAILS into a normalized lowercase list (empty by default)", () => {
+    expect(loadConfig({}).auth.operatorEmails).toEqual([]);
+    expect(
+      loadConfig({ OPERATOR_EMAILS: "Boss@acme.test, ops@acme.test ,, " }).auth.operatorEmails,
+    ).toEqual(["boss@acme.test", "ops@acme.test"]);
+  });
+
   it("honors TTL, ToS version and public base URL overrides", () => {
     const cfg = loadConfig({
       SESSION_TTL_DAYS: "7",

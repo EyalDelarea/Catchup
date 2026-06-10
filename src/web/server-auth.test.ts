@@ -48,6 +48,9 @@ const fakeRegistry = {
   off: () => {},
 };
 
+// Operators are configured by email; "boss@live.test" is the operator in these tests.
+const OPERATOR_EMAIL = "boss@live.test";
+
 function startServer(authRequired: boolean): Promise<{ base: string; server: http.Server }> {
   const server = createServer({
     pool: app,
@@ -55,6 +58,7 @@ function startServer(authRequired: boolean): Promise<{ base: string; server: htt
     tokenBudget: 24000,
     model: "fake",
     onboarding: fakeRegistry,
+    admin: { operatorPool: op, registry: { snapshot: () => [] }, operatorEmails: [OPERATOR_EMAIL] },
     auth: {
       deps: {
         appPool: app,
@@ -126,6 +130,20 @@ describe("multi-tenant mode (auth required)", () => {
     });
     expect(r.status).toBe(202);
     expect(onboardingStarts).toEqual([me.tenantId]);
+  });
+
+  it("admin dashboard: 403 for a normal tenant, 200 for the operator (T5)", async () => {
+    const tenantCookie = await registerAndGetCookie(base, "normaluser@live.test");
+    expect(
+      (await fetch(`${base}/api/admin/tenants`, { headers: { cookie: tenantCookie } })).status,
+    ).toBe(403);
+
+    const opCookie = await registerAndGetCookie(base, OPERATOR_EMAIL);
+    const r = await fetch(`${base}/api/admin/tenants`, { headers: { cookie: opCookie } });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as Array<{ name: string }>;
+    // The operator sees every tenant (including the normal user's) — the cross-tenant view.
+    expect(body.length).toBeGreaterThanOrEqual(2);
   });
 
   it("isolates tenants end-to-end through the live request path", async () => {

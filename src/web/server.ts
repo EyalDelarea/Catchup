@@ -6,7 +6,7 @@ import type pg from "pg";
 import { askStream } from "../ask/ask.js";
 import { LexicalRetriever } from "../ask/lexical-retriever.js";
 import type { Retriever } from "../ask/retriever.js";
-import type { AuthDeps } from "../auth/service.js";
+import { type AuthDeps, currentUser } from "../auth/service.js";
 import { findGroupByName, listGroups } from "../db/repositories/groups.js";
 import { countReadableByGroup, getOldestSentAt } from "../db/repositories/messages.js";
 import { upsertWatermark } from "../db/repositories/read-watermarks.js";
@@ -21,6 +21,7 @@ import { persistCatchupResult } from "../summarization/run-summary.js";
 import type { Selection } from "../summarization/select.js";
 import type { StreamingSummarizer } from "../summarization/summarizer.js";
 import { generateTotalSummary } from "../summarization/total-summary.js";
+import { type AdminRegistry, makeAdminRoutes } from "./admin-routes.js";
 import { makeAuthRoutes } from "./auth-routes.js";
 import { makeOnboardingRoutes, type OnboardingRegistry } from "./onboarding-routes.js";
 import { sseFrame } from "./sse.js";
@@ -68,10 +69,20 @@ export type ServerDeps = {
    * authenticated tenant. Absent → onboarding endpoints 404 (single-user CLI linking).
    */
   onboarding?: OnboardingRegistry;
+  /**
+   * T5 operator dashboard: cross-tenant admin view. `/api/admin/*` is reachable only by
+   * a logged-in user whose email is in `operatorEmails`; the data comes from the
+   * BYPASSRLS `operatorPool` joined with live session health (`registry`).
+   */
+  admin?: {
+    operatorPool: pg.Pool;
+    registry: AdminRegistry;
+    operatorEmails: string[];
+  };
 };
 
-/** SPA entry pages: / plus the landing paths used in verify/reset emails. */
-const SPA_PATHS = new Set(["/", "/verify", "/reset"]);
+/** SPA entry pages: / plus the landing paths used in verify/reset emails + /admin. */
+const SPA_PATHS = new Set(["/", "/verify", "/reset", "/admin"]);
 
 export function createServer(deps: ServerDeps): http.Server {
   const authRoutes = deps.auth
@@ -79,6 +90,9 @@ export function createServer(deps: ServerDeps): http.Server {
     : null;
   const onboardingRoutes = deps.onboarding
     ? makeOnboardingRoutes({ registry: deps.onboarding })
+    : null;
+  const adminRoutes = deps.admin
+    ? makeAdminRoutes({ operatorPool: deps.admin.operatorPool, registry: deps.admin.registry })
     : null;
 
   const handleRequest = async (
@@ -101,14 +115,25 @@ export function createServer(deps: ServerDeps): http.Server {
       // single-user mode that's the default tenant — identical behavior to before,
       // now explicitly attributed.
       let tenantId = DEFAULT_TENANT_ID;
+      let session = null;
       if (deps.auth?.required) {
-        const session = authRoutes ? await authRoutes.session(req) : null;
+        session = authRoutes ? await authRoutes.session(req) : null;
         if (!session) {
           res.writeHead(401, { "content-type": "application/json" });
           res.end(JSON.stringify({ error: "Not authenticated." }));
           return;
         }
         tenantId = session.tenantId;
+      }
+      // Admin (cross-tenant) — gated on the session user's email being an operator.
+      // Computed here so a tenant session can never reach the admin pool.
+      if (adminRoutes && url.pathname.startsWith("/api/admin/")) {
+        let isOperator = false;
+        if (session && deps.auth && deps.admin) {
+          const user = await currentUser(deps.auth.deps, session);
+          isOperator = user != null && deps.admin.operatorEmails.includes(user.email.toLowerCase());
+        }
+        if (await adminRoutes.handle(req, res, url, { isOperator })) return;
       }
       // Onboarding talks to the registry, not the DB pool — route it with the raw
       // tenantId before the pool-scoped dispatch.
