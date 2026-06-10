@@ -1202,6 +1202,22 @@ program
             `  "${c.name}"  keep ${c.survivorJid} (${c.survivorMsgs} msgs)  ⟵ merge ${c.dupJid} (${c.dupMsgs} msgs)`,
           );
         }
+        // Persist every discovered pairing into the durable identity map so future
+        // reconciles (and ingest canonicalization) work without a live session.
+        const { recordLink } = await import("./db/repositories/identity-links.js");
+        for (const c of candidates) {
+          const lid = c.survivorJid.endsWith("@lid") ? c.survivorJid : c.dupJid;
+          const pn = c.survivorJid.endsWith("@lid") ? c.dupJid : c.survivorJid;
+          if (lid.endsWith("@lid") && pn.endsWith("@s.whatsapp.net")) {
+            try {
+              await recordLink(pool, { lidJid: lid, pnJid: pn, source: "bridge" });
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              console.error(`  ! could not persist identity link for "${c.name}": ${msg}`);
+            }
+          }
+        }
+
         if (options.apply) {
           let ok = 0;
           let moved = 0;
