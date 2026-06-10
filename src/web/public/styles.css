@@ -2127,3 +2127,125 @@ body::after {
   .gcard, .feat { transform: none !important; }
   .phase-tube__liq { transition: none !important; }
 }
+
+/* ── T2 auth pane (multi-tenant login/register + verify/reset landing) ────── */
+
+.auth-pane {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.auth-card {
+  width: min(420px, 100%);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-bd);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-radius: 18px;
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.auth-card__title {
+  margin: 0;
+  font-size: 1.4rem;
+  text-align: center;
+  color: var(--accent);
+}
+
+.auth-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.auth-tab {
+  flex: 1;
+  padding: 9px 0;
+  background: transparent;
+  border: 1px solid var(--glass-bd);
+  border-radius: 10px;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.auth-tab--active {
+  border-color: var(--accent2);
+  color: var(--accent);
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.auth-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+}
+
+.auth-input {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--glass-bd);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  font: inherit;
+}
+
+.auth-input:focus {
+  outline: none;
+  border-color: var(--accent2);
+}
+
+.auth-consent {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  opacity: 0.85;
+}
+
+.auth-error {
+  margin: 0;
+  color: #fca5a5;
+  font-size: 0.85rem;
+}
+
+.auth-submit {
+  padding: 11px 0;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent2);
+  color: #04121f;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+}
+
+.auth-submit--link {
+  display: block;
+  text-decoration: none;
+}
+
+.auth-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+  align-self: flex-start;
+}

@@ -11,6 +11,10 @@ describe("cookies", () => {
     expect(parseCookies("")).toEqual({});
   });
 
+  it("does not throw on malformed percent-encoding — keeps the raw value (garbage cookie must not 500 a request)", () => {
+    expect(parseCookies("bad=%zz; good=ok")).toEqual({ bad: "%zz", good: "ok" });
+  });
+
   it("serializes a secure, httpOnly session cookie", () => {
     const c = serializeSessionCookie("tok123", { secure: true, maxAgeSeconds: 3600 });
     expect(c).toContain(`${SESSION_COOKIE}=tok123`);
