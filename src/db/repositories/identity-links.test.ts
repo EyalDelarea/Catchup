@@ -69,7 +69,7 @@ describe("identity-links repository", () => {
       await recordLink(c, {
         lidJid: "789@lid",
         pnJid: "972522222222@s.whatsapp.net",
-        source: "event",
+        source: "bridge",
       });
     });
     await withTenant(app, TENANT_B, async (c) => {

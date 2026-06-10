@@ -12,7 +12,7 @@ export const up = (pgm: MigrationBuilder): void => {
         DEFAULT COALESCE(current_setting('app.tenant_id', true)::uuid, '${DEFAULT_TENANT_ID}'),
       lid_jid    text NOT NULL,
       pn_jid     text NOT NULL,
-      source     text NOT NULL CHECK (source IN ('message_alt', 'bridge', 'event')),
+      source     text NOT NULL CHECK (source IN ('message_alt', 'bridge')),
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
       CONSTRAINT identity_links_tenant_id_fkey

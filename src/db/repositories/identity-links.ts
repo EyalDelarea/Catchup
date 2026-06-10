@@ -1,6 +1,6 @@
 import type pg from "pg";
 
-export type IdentityLinkSource = "message_alt" | "bridge" | "event";
+export type IdentityLinkSource = "message_alt" | "bridge";
 
 export type RecordLinkInput = {
   lidJid: string;
