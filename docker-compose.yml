@@ -7,7 +7,9 @@ name: catchup
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector-enabled Postgres (superset of the stock image) so the ask feature's
+    # `CREATE EXTENSION vector` migration applies. pg16 keeps the major version pinned.
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
