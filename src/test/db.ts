@@ -34,7 +34,9 @@ let container: StartedPostgreSqlContainer | undefined;
 export default async function setup({ provide }: GlobalSetupContext): Promise<() => Promise<void>> {
   // max_connections is raised because many parallel test files each open a pool
   // against this single server.
-  container = await new PostgreSqlContainer("postgres:16-alpine")
+  // pgvector image (not the stock postgres) so `CREATE EXTENSION vector` in the
+  // message_embeddings migration succeeds. pg16 matches the docker-compose major.
+  container = await new PostgreSqlContainer("pgvector/pgvector:pg16")
     .withCommand(["postgres", "-c", "max_connections=300"])
     .start();
   const adminUri = container.getConnectionUri();
