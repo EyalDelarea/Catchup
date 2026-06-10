@@ -631,5 +631,28 @@ describe("messages read queries", () => {
       expect(rows[0].media_path).toBe("/data/media/live/x.jpg");
       expect(rows[0].media_status).toBe("present");
     });
+
+    it("backfills a blank media_filename from the path basename (so the analyzer can classify it)", async () => {
+      const groupId = await seedGroup("mark-media-filename-blank");
+      const id = await seedMessageWithExternalId(groupId, "EXT-FN-BLANK");
+      // Deferred-backfill rows arrive with no filename.
+      await pool.query("UPDATE messages SET media_filename='' WHERE id=$1", [id]);
+
+      await markMessageMediaPresent(pool, id, "/data/media/backfill/bf-123.jpg");
+
+      const { rows } = await pool.query("SELECT media_filename FROM messages WHERE id=$1", [id]);
+      expect(rows[0].media_filename).toBe("bf-123.jpg");
+    });
+
+    it("preserves an existing non-blank media_filename", async () => {
+      const groupId = await seedGroup("mark-media-filename-keep");
+      const id = await seedMessageWithExternalId(groupId, "EXT-FN-KEEP");
+      await pool.query("UPDATE messages SET media_filename='IMG-001.jpg' WHERE id=$1", [id]);
+
+      await markMessageMediaPresent(pool, id, "/data/media/backfill/bf-999.mp4");
+
+      const { rows } = await pool.query("SELECT media_filename FROM messages WHERE id=$1", [id]);
+      expect(rows[0].media_filename).toBe("IMG-001.jpg");
+    });
   });
 });
