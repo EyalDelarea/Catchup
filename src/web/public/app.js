@@ -14,7 +14,8 @@
  * Teardown: EventSource is closed when leaving a streaming view
  */
 
-import { actOnSuggestion, askStream, createScopeCategory, getGroups, getMessages, getPreferences, getScopeCategories, getScopes, getStatus, getSummaries, getToday, putPreferences, putScopes, summarizeStream } from "./lib/api.js";
+import { actOnSuggestion, askStream, createScopeCategory, getGroups, getMeetings, getMessages, getPeople, getPreferences, getScopeCategories, getScopes, getStatus, getSummaries, getToday, getTodos, putPreferences, putScopes, setTodoDone, summarizeStream } from "./lib/api.js";
+import { avatarTint, buildMonthGrid, eventDaySet, groupMeetingsByDay, peopleStatusMeta, relativeDay, todoProgress } from "./lib/agenda.js";
 import { activeCount, filterScopes, groupByCategory, partitionRemoved, sectionCount } from "./lib/scopes.js";
 import { DIGEST_CHOICES, ENGINE_KINDS, PROACT_LEVELS, isDigestSelected, normalizeEngineConfig, toggleDigestTime } from "./lib/prefs.js";
 import { buildDeck, clampIndex, commitActionFor, emptyTally, greeting, indexAfterRemoval, isSuggestion, leavingVariant, peekCount, recordTally, removeCardById, segmentFills, suggestionConfig, tallyBits, tileCounts, TILE_KINDS } from "./lib/today.js";
@@ -78,7 +79,7 @@ function setView(view) {
 
 /**
  * Navigate to a view, pushing a history entry.
- * @param {"feed"|"detail"|"total"|"ama"|"thread"|"sources"|"settings"|"today"} view
+ * @param {"feed"|"detail"|"total"|"ama"|"thread"|"sources"|"settings"|"today"|"people"|"agenda"} view
  * @param {string} [arg] — group name (detail) or AMA scope (ama)
  */
 function navigate(view, arg) {
@@ -108,6 +109,12 @@ function navigate(view, arg) {
   } else if (view === "settings") {
     history.pushState({ view: "settings" }, "", "#settings");
     renderSettings();
+  } else if (view === "people") {
+    history.pushState({ view: "people" }, "", "#people");
+    renderPeople();
+  } else if (view === "agenda") {
+    history.pushState({ view: "agenda" }, "", "#agenda");
+    renderAgenda();
   } else {
     history.pushState({ view: "feed" }, "", location.pathname);
     setView("feed");
@@ -128,6 +135,10 @@ window.addEventListener("popstate", (e) => {
     renderSources();
   } else if (state?.view === "settings") {
     renderSettings();
+  } else if (state?.view === "people") {
+    renderPeople();
+  } else if (state?.view === "agenda") {
+    renderAgenda();
   } else if (state?.view === "ama") {
     renderAma(state.scope ?? null);
   } else if (state?.view === "thread" && state.chat) {
@@ -200,6 +211,18 @@ function renderShell() {
         <span class="feat__sub">מה קרה בכל הצ׳אטים</span>
         <span class="feat__hint">הקש לסיכום ›</span>
       </button>
+      <button class="feat feat--people" id="people-card" type="button" aria-label="אנשים">
+        <span class="feat__ico" aria-hidden="true">👥</span>
+        <span class="feat__title">אנשים</span>
+        <span class="feat__sub">מי מחכה לתשובה</span>
+        <span class="feat__hint">פתח את האנשים ›</span>
+      </button>
+      <button class="feat feat--agenda" id="agenda-card" type="button" aria-label="פגישות ומשימות">
+        <span class="feat__ico" aria-hidden="true">🗓️</span>
+        <span class="feat__title">פגישות ומשימות</span>
+        <span class="feat__sub">היומן והמשימות שלך</span>
+        <span class="feat__hint">פתח את היומן ›</span>
+      </button>
     </div>
     <div class="health-pill" role="status" aria-live="polite">
       <span class="health-pill__dot"></span><span>טוען…</span>
@@ -226,6 +249,8 @@ function renderShell() {
   document.getElementById("today-card")?.addEventListener("click", () => navigate("today"));
   document.getElementById("ama-card").addEventListener("click", () => navigate("ama"));
   document.getElementById("total-card").addEventListener("click", () => navigate("total"));
+  document.getElementById("people-card")?.addEventListener("click", () => navigate("people"));
+  document.getElementById("agenda-card")?.addEventListener("click", () => navigate("agenda"));
   document.getElementById("theme-toggle")?.addEventListener("click", toggleTheme);
   document.getElementById("settings-gear")?.addEventListener("click", () => navigate("settings"));
   document.getElementById("manage-sources")?.addEventListener("click", () => navigate("sources"));
@@ -2168,6 +2193,450 @@ function showTodayFlash(text) {
   setTimeout(() => el.classList.remove("show"), 1100);
 }
 
+/* ── 7e. People (§5) ─────────────────────────────────────── */
+//
+// Two-pane (list + sticky detail) on desktop, stacks on mobile. Fetch-on-entry,
+// then a thin paint. The People/CRM endpoint may not exist yet — any failure
+// (404 / network) renders the empty state rather than crashing.
+
+const peopleState = { people: [], selected: 0 };
+
+/** A per-name tinted initials disc (oklch tint hashed from the name). */
+function buildAvatarDisc(name, size = 42) {
+  const t = avatarTint(name);
+  return `<span class="entity-avatar" aria-hidden="true"
+    style="--av-sz:${size}px;--av-bg:${t.bg};--av-fg:${t.fg};--av-fs:${Math.round(size * 0.36)}px">${escHtml(t.initials)}</span>`;
+}
+
+/** Source chip → S2 thread jump. Falls back to a plain label when the entity
+ *  carries no jumpable `{chat, sourceMessageId}`. Shared by People + Agenda. */
+function buildSrcJump({ chat, sourceMessageId, label }) {
+  const text = escHtml(label ?? (chat ? formatGroupName(chat) : "מקור"));
+  const id = Number(sourceMessageId);
+  if (!chat || !Number.isFinite(id)) {
+    return `<span class="srcchip">${icon("arrowL", { size: 13 })}<span>${text}</span></span>`;
+  }
+  return `<button type="button" class="srcchip" data-src-jump="1" data-chat="${escHtml(chat)}" data-id="${id}">${icon("arrowL", { size: 13 })}<span>${text}</span></button>`;
+}
+
+/** Delegate source-chip clicks within a container to the S2 thread jump. */
+function wireSrcJumps(root) {
+  for (const chip of root.querySelectorAll("[data-src-jump]")) {
+    chip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = Number(chip.dataset.id);
+      if (chip.dataset.chat && Number.isFinite(id)) {
+        navigate("thread", { chat: chip.dataset.chat, aroundId: id });
+      }
+    });
+  }
+}
+
+/** A back-nav row (mobile shows it; the top-bar is hidden off-feed). */
+function buildEntityNav(backId) {
+  return `
+    <nav class="detail-nav entity-nav" aria-label="ניווט">
+      <button class="back-btn" id="${backId}" aria-label="חזרה">
+        <span class="back-btn__arrow" aria-hidden="true">›</span> חזרה
+      </button>
+    </nav>`;
+}
+
+async function renderPeople() {
+  teardownStream();
+  setView("ama"); // reuse the single-pane slot, like Sources / Settings / Today
+  markActiveRow(null);
+  paneMain.innerHTML = `<div class="people"><p class="thread-loading">טוען אנשים…</p></div>`;
+  let people = [];
+  try {
+    people = DEMO ? [] : await getPeople();
+  } catch {
+    people = []; // endpoint not built yet / network → empty state
+  }
+  peopleState.people = Array.isArray(people) ? people : [];
+  peopleState.selected = 0;
+  paintPeople();
+}
+
+function paintPeople() {
+  const { people } = peopleState;
+  if (people.length === 0) {
+    paneMain.innerHTML = `
+      <div class="people">
+        ${buildEntityNav("people-back")}
+        <div class="entity-head">
+          <div class="entity-head__title">${icon("users", { size: 18 })} אנשים</div>
+        </div>
+        ${buildEntityEmpty("users", "אין עדיין אנשים", "כשתתחילו לשוחח, CatchApp יזהה לידים ואנשי קשר שמחכים לתשובה — והם יופיעו כאן.")}
+      </div>`;
+    document.getElementById("people-back")?.addEventListener("click", () => history.back());
+    return;
+  }
+
+  const sel = Math.max(0, Math.min(peopleState.selected, people.length - 1));
+  peopleState.selected = sel;
+  const warmWaiting = people.filter((p) => p.openThreads > 0).length;
+
+  paneMain.innerHTML = `
+    <div class="people">
+      ${buildEntityNav("people-back")}
+      <div class="entity-head">
+        <div class="entity-head__title">${icon("users", { size: 18 })} אנשים</div>
+        <span class="entity-count mono" dir="ltr">${warmWaiting}/${people.length}</span>
+      </div>
+      <div class="split">
+        <div class="ppl-list" role="list">
+          ${people.map((p, i) => buildPersonRow(p, i === sel)).join("")}
+        </div>
+        ${buildPersonDetail(people[sel])}
+      </div>
+    </div>`;
+  wirePeople();
+}
+
+function buildPersonRow(p, isSel) {
+  const meta = peopleStatusMeta(p.status);
+  const last = formatAgo(p.lastContactAt) ?? "אין קשר עדיין";
+  const note = p.nextStep ? escHtml(p.nextStep) : "אין צעד פתוח";
+  const open = p.openThreads > 0
+    ? ` · <span class="mono" dir="ltr">${p.openThreads}</span> שיחות פתוחות`
+    : "";
+  return `
+    <button type="button" class="ppl-row${isSel ? " is-sel" : ""}" role="listitem" data-idx="${p.id}">
+      ${buildAvatarDisc(p.name, 42)}
+      <div class="ppl-row__body">
+        <div class="ppl-row__name">${escHtml(p.name)}
+          <span class="entity-badge${meta.warn ? " is-warn" : ""}">${escHtml(meta.label)}</span>
+        </div>
+        <p class="ppl-row__note">${note}</p>
+        <div class="ppl-row__meta">קשר אחרון · ${escHtml(last)}${open}</div>
+      </div>
+    </button>`;
+}
+
+function buildPersonDetail(p) {
+  const meta = peopleStatusMeta(p.status);
+  const last = formatAgo(p.lastContactAt) ?? "אין קשר עדיין";
+  const chip = buildSrcJump({ chat: p.chat, sourceMessageId: p.sourceMessageId, label: "מההודעה" });
+  const openChat = p.chat
+    ? `<button class="btn btn-primary" id="ppl-open-chat" type="button">${icon("message")}פתח צ׳אט</button>`
+    : `<button class="btn btn-primary" type="button" disabled>${icon("message")}פתח צ׳אט</button>`;
+  return `
+    <aside class="ppl-detail surface" aria-label="פרטי איש קשר">
+      <div class="ppl-detail__head">
+        ${buildAvatarDisc(p.name, 56)}
+        <div class="ppl-detail__id">
+          <div class="ppl-detail__name">${escHtml(p.name)}</div>
+          <span class="entity-badge${meta.warn ? " is-warn" : " is-accent"}">${escHtml(meta.label)}</span>
+        </div>
+      </div>
+      <div class="ppl-detail__divide"></div>
+      <div class="ppl-detail__rows">
+        <div class="ppl-detail__row">${icon("clock", { size: 16 })}<span>קשר אחרון</span><b>${escHtml(last)}</b></div>
+        <div class="ppl-detail__row">${icon("message", { size: 16 })}<span>שיחות פתוחות</span><b class="mono" dir="ltr">${p.openThreads}</b></div>
+      </div>
+      <div class="ppl-detail__divide"></div>
+      <div class="ppl-next__kicker">${icon("target", { size: 13 })} הצעד הבא</div>
+      <div class="ppl-next surface">
+        <span>${p.nextStep ? escHtml(p.nextStep) : "אין צעד פתוח כרגע"}</span>
+        ${p.nextStep ? chip : ""}
+      </div>
+      <div class="ppl-detail__actions">
+        ${openChat}
+        <button class="btn btn-ghost" id="ppl-add-task" type="button">${icon("plus")}משימה</button>
+      </div>
+    </aside>`;
+}
+
+function wirePeople() {
+  document.getElementById("people-back")?.addEventListener("click", () => history.back());
+  const root = paneMain.querySelector(".people");
+  if (!root) return;
+  for (const row of root.querySelectorAll(".ppl-row")) {
+    row.addEventListener("click", () => {
+      const id = Number(row.dataset.idx);
+      const idx = peopleState.people.findIndex((p) => p.id === id);
+      if (idx >= 0) {
+        peopleState.selected = idx;
+        paintPeople();
+      }
+    });
+  }
+  const sel = peopleState.people[peopleState.selected];
+  document.getElementById("ppl-open-chat")?.addEventListener("click", () => {
+    if (sel?.chat) navigate("detail", sel.chat);
+  });
+  // "+ משימה" is intentionally static for this UI-only slice.
+  wireSrcJumps(root);
+}
+
+/* ── 7f. Meetings & To-dos (§6) ──────────────────────────── */
+//
+// Two visually-distinct columns (`.duo`): a month calendar + day-grouped agenda
+// timeline on the left, and a checklist with a progress bar on the right.
+// Local-only — no Google-Calendar connect banner (that's the S8 gated work).
+// Both endpoints may be absent; any failure renders empty columns, never crashes.
+
+const agendaState = { meetings: [], todos: [], monthOffset: 0 };
+const DOW_HE = ["א", "ב", "ג", "ד", "ה", "ו", "ש"];
+
+async function renderAgenda() {
+  teardownStream();
+  setView("ama");
+  markActiveRow(null);
+  paneMain.innerHTML = `<div class="agenda-view"><p class="thread-loading">טוען פגישות ומשימות…</p></div>`;
+  let meetings = [];
+  let todos = [];
+  if (!DEMO) {
+    [meetings, todos] = await Promise.all([
+      getMeetings().catch(() => []),
+      getTodos().catch(() => []),
+    ]);
+  }
+  agendaState.meetings = Array.isArray(meetings) ? meetings : [];
+  agendaState.todos = Array.isArray(todos) ? todos : [];
+  agendaState.monthOffset = 0;
+  paintAgenda();
+}
+
+function paintAgenda() {
+  paneMain.innerHTML = `
+    <div class="agenda-view">
+      ${buildEntityNav("agenda-back")}
+      <div class="entity-head">
+        <div class="entity-head__title">${icon("calendar", { size: 18 })} פגישות ומשימות</div>
+      </div>
+      <div class="duo">
+        <section class="duo__col">
+          <h2 class="duo__sec">${icon("calendar", { size: 15 })} פגישות שנאספו</h2>
+          ${buildCalendar()}
+          ${buildAgendaTimeline()}
+        </section>
+        <section class="duo__col" id="agenda-todos">
+          ${buildTodosColumn()}
+        </section>
+      </div>
+    </div>`;
+  wireAgenda();
+}
+
+/** Month calendar (today highlighted, event dots). Prev/next shift the month. */
+function buildCalendar() {
+  const base = new Date();
+  base.setDate(1);
+  base.setMonth(base.getMonth() + agendaState.monthOffset);
+  const year = base.getFullYear();
+  const monthIndex = base.getMonth();
+  const isCurrent = agendaState.monthOffset === 0;
+  const todayDay = isCurrent ? new Date().getDate() : null;
+  const events = eventDaySet(agendaState.meetings, year, monthIndex);
+  const cells = buildMonthGrid(year, monthIndex, { today: todayDay, events });
+  let monthLabel = `${year}`;
+  try {
+    monthLabel = base.toLocaleDateString("he-IL", { month: "long", year: "numeric" });
+  } catch {
+    /* leave numeric fallback */
+  }
+  const dow = DOW_HE.map((d) => `<span>${d}</span>`).join("");
+  const grid = cells
+    .map((c) => {
+      if (c == null) return `<div class="cal-cell is-empty"></div>`;
+      const dots = c.hasEvent ? `<span class="cal-dot" aria-hidden="true"></span>` : "";
+      return `<div class="cal-cell${c.isToday ? " is-today" : ""}"><span class="cal-n mono" dir="ltr">${c.day}</span>${dots}</div>`;
+    })
+    .join("");
+  return `
+    <div class="cal surface">
+      <div class="cal-head">
+        <b>${escHtml(monthLabel)}</b>
+        <div class="cal-nav">
+          <button class="cal-navbtn" data-cal-nav="prev" type="button" aria-label="חודש קודם">${icon("chevR", { size: 16 })}</button>
+          <button class="cal-navbtn" data-cal-nav="next" type="button" aria-label="חודש הבא">${icon("chevL", { size: 16 })}</button>
+        </div>
+      </div>
+      <div class="cal-grid cal-dow" aria-hidden="true">${dow}</div>
+      <div class="cal-grid" role="grid">${grid}</div>
+    </div>`;
+}
+
+/** Hebrew day-group heading from the pure group's relative classification. */
+function agendaDayLabel(group) {
+  switch (group.relative) {
+    case "today":
+      return "היום";
+    case "tomorrow":
+      return "מחר";
+    case "yesterday":
+      return "אתמול";
+    case "none":
+      return "ללא תאריך";
+    default:
+      try {
+        return new Date(`${group.key}T00:00:00Z`).toLocaleDateString("he-IL", {
+          weekday: "long",
+          day: "numeric",
+          month: "long",
+        });
+      } catch {
+        return group.key ?? "";
+      }
+  }
+}
+
+/** Day-grouped agenda timeline (rail + dots). Grouping is the pure lib's. */
+function buildAgendaTimeline() {
+  const groups = groupMeetingsByDay(agendaState.meetings, new Date().toISOString());
+  if (groups.length === 0) {
+    return `<div class="agenda-timeline">${buildEntityEmpty("calendar", "אין פגישות", "פגישות שיזוהו בשיחות יופיעו כאן, מקובצות לפי יום.")}</div>`;
+  }
+  return `
+    <div class="agenda-timeline">
+      ${groups
+        .map(
+          (g) => `
+        <div class="day-group">
+          <div class="day-group__head">
+            <span class="day-pill">${escHtml(agendaDayLabel(g))}</span>
+            <span class="day-group__count"><span class="mono" dir="ltr">${g.items.length}</span> פגישות</span>
+          </div>
+          <div class="tl">
+            ${g.items.map(buildMeetingItem).join("")}
+          </div>
+        </div>`,
+        )
+        .join("")}
+    </div>`;
+}
+
+function buildMeetingItem(m) {
+  let time = "";
+  if (m.startsAt) {
+    try {
+      time = new Date(m.startsAt).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
+    } catch {
+      time = "";
+    }
+  }
+  const owner = m.owner ? `<span class="tl-owner">${icon("user", { size: 13 })}${escHtml(formatGroupName(m.owner))}</span>` : "";
+  const chip = buildSrcJump({ chat: m.chat, sourceMessageId: m.sourceMessageId });
+  return `
+    <div class="tl-item">
+      <div class="tl-time mono" dir="ltr">${escHtml(time) || "—"}</div>
+      <div class="tl-rail" aria-hidden="true"><span class="tl-dot"></span></div>
+      <div class="tl-card surface">
+        <h4>${escHtml(m.title)}</h4>
+        <div class="tl-card__meta">${owner}${chip}</div>
+      </div>
+    </div>`;
+}
+
+/** To-dos checklist column: progress bar + round-checkbox rows. */
+function buildTodosColumn() {
+  const todos = agendaState.todos;
+  const inner =
+    todos.length === 0
+      ? buildEntityEmpty("checks", "אין משימות פתוחות", "משימות שיחולצו מהשיחות יופיעו כאן, עם מקור ותאריך יעד.")
+      : buildChecklist(todos);
+  return `<h2 class="duo__sec">${icon("checks", { size: 15 })} משימות שחולצו</h2>${inner}`;
+}
+
+function buildChecklist(todos) {
+  const p = todoProgress(todos);
+  const rows = todos.map(buildTodoRow).join("");
+  return `
+    <div class="checklist surface">
+      <div class="checklist__head">
+        <b><span class="mono" dir="ltr">${p.done}</span> מתוך <span class="mono" dir="ltr">${p.total}</span> הושלמו</b>
+        <span class="entity-badge is-accent"><span class="mono" dir="ltr">${p.open}</span> פתוחות</span>
+      </div>
+      <div class="checklist__bar" role="progressbar" aria-valuenow="${p.pct}" aria-valuemin="0" aria-valuemax="100">
+        <b style="inline-size:${p.pct}%"></b>
+      </div>
+      <div class="checklist__rows">${rows}</div>
+    </div>`;
+}
+
+function buildTodoRow(t) {
+  const chip = buildSrcJump({ chat: t.chat, sourceMessageId: t.sourceMessageId });
+  const due = dueLabel(t.dueAt);
+  const dueBadge = due ? `<span class="entity-badge">${escHtml(due)}</span>` : "";
+  return `
+    <div class="cl-row${t.done ? " is-done" : ""}" data-todo="${t.id}">
+      <button class="cl-box${t.done ? " is-on" : ""}" type="button" data-todo-toggle="${t.id}"
+        role="checkbox" aria-checked="${t.done}" aria-label="סימון כהושלם">${icon("check", { size: 14 })}</button>
+      <div class="cl-row__body">
+        <div class="cl-row__title">${escHtml(t.title)}</div>
+        <div class="cl-row__meta">${chip}${dueBadge}</div>
+      </div>
+    </div>`;
+}
+
+/** Short Hebrew due-date label from an ISO `dueAt` (null → no badge). */
+function dueLabel(dueAt) {
+  if (!dueAt) return "";
+  const rel = relativeDay(String(dueAt).slice(0, 10), new Date().toISOString());
+  if (rel === "today") return "להיום";
+  if (rel === "tomorrow") return "עד מחר";
+  if (rel === "yesterday") return "היה אתמול";
+  try {
+    return `עד ${new Date(`${String(dueAt).slice(0, 10)}T00:00:00Z`).toLocaleDateString("he-IL", { weekday: "long" })}`;
+  } catch {
+    return "";
+  }
+}
+
+function paintTodos() {
+  const col = document.getElementById("agenda-todos");
+  if (!col) return;
+  col.innerHTML = buildTodosColumn();
+  for (const btn of col.querySelectorAll("[data-todo-toggle]")) {
+    btn.addEventListener("click", () => onTodoToggle(Number(btn.dataset.todoToggle)));
+  }
+  wireSrcJumps(col);
+}
+
+/** Optimistic checkbox toggle; reverts + repaints on a failed PATCH. */
+async function onTodoToggle(id) {
+  const t = agendaState.todos.find((x) => x.id === id);
+  if (!t) return;
+  const next = !t.done;
+  t.done = next;
+  paintTodos();
+  if (DEMO) return;
+  try {
+    await setTodoDone(id, next);
+  } catch {
+    t.done = !next; // revert
+    paintTodos();
+  }
+}
+
+function wireAgenda() {
+  document.getElementById("agenda-back")?.addEventListener("click", () => history.back());
+  const root = paneMain.querySelector(".agenda-view");
+  if (!root) return;
+  for (const btn of root.querySelectorAll("[data-cal-nav]")) {
+    btn.addEventListener("click", () => {
+      agendaState.monthOffset += btn.dataset.calNav === "next" ? 1 : -1;
+      paintAgenda();
+    });
+  }
+  for (const btn of root.querySelectorAll("[data-todo-toggle]")) {
+    btn.addEventListener("click", () => onTodoToggle(Number(btn.dataset.todoToggle)));
+  }
+  wireSrcJumps(root);
+}
+
+/** Shared empty-state card for People + Agenda columns. */
+function buildEntityEmpty(iconName, title, text) {
+  return `
+    <div class="entity-empty surface">
+      <div class="entity-empty__ico">${icon(iconName, { size: 24 })}</div>
+      <h3>${escHtml(title)}</h3>
+      <p>${escHtml(text)}</p>
+    </div>`;
+}
+
 /* ── 8. Helpers ──────────────────────────────────────────── */
 
 function formatGroupName(name) {
@@ -2233,6 +2702,14 @@ function resolveInitialRoute() {
   if (hash === "#settings") {
     history.replaceState({ view: "settings" }, "", hash);
     return { view: "settings" };
+  }
+  if (hash === "#people") {
+    history.replaceState({ view: "people" }, "", hash);
+    return { view: "people" };
+  }
+  if (hash === "#agenda") {
+    history.replaceState({ view: "agenda" }, "", hash);
+    return { view: "agenda" };
   }
   history.replaceState({ view: "feed" }, "", location.pathname);
   return { view: "feed" };
@@ -2609,6 +3086,10 @@ async function boot() {
     renderSources();
   } else if (route.view === "settings") {
     renderSettings();
+  } else if (route.view === "people") {
+    renderPeople();
+  } else if (route.view === "agenda") {
+    renderAgenda();
   } else {
     setView("feed");
     renderMainWelcome();
