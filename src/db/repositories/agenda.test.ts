@@ -5,8 +5,8 @@ import { createTestDatabase } from "../../test/db.js";
 import { listMeetings, listTodos, setTodoDone, upsertMeetings, upsertTodos } from "./agenda.js";
 import { upsertGroup } from "./groups.js";
 import { getMessageIdByExternalId, insertMessages } from "./messages.js";
-import { listPeople, refreshPeople } from "./people.js";
 import { upsertParticipant } from "./participants.js";
+import { listPeople, refreshPeople } from "./people.js";
 
 describe("agenda + people repositories", () => {
   let pool: pg.Pool;
@@ -46,7 +46,9 @@ describe("agenda + people repositories", () => {
     await upsertMeetings(pool, [
       { title: "פגישה 14:00", owner: "דנה", groupId, sourceMessageId: msgId },
     ]);
-    await upsertTodos(pool, [{ title: "לשלוח דוח", owner: "דנה", groupId, sourceMessageId: msgId }]);
+    await upsertTodos(pool, [
+      { title: "לשלוח דוח", owner: "דנה", groupId, sourceMessageId: msgId },
+    ]);
 
     const meetings = await listMeetings(pool);
     expect(meetings.find((m) => m.title === "פגישה 14:00")?.chat).toBe("agenda-grp");
@@ -58,7 +60,9 @@ describe("agenda + people repositories", () => {
     const todo = (await listTodos(pool)).find((t) => t.sourceMessageId === msgId)!;
     expect(await setTodoDone(pool, todo.id, true)).toBe(true);
     // re-extract the same source → upsert must NOT reset done
-    await upsertTodos(pool, [{ title: "לשלוח דוח (עודכן)", owner: "דנה", groupId, sourceMessageId: msgId }]);
+    await upsertTodos(pool, [
+      { title: "לשלוח דוח (עודכן)", owner: "דנה", groupId, sourceMessageId: msgId },
+    ]);
     const after = (await listTodos(pool)).find((t) => t.sourceMessageId === msgId)!;
     expect(after.done).toBe(true);
     expect(after.title).toBe("לשלוח דוח (עודכן)");

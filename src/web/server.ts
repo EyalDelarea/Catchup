@@ -6,6 +6,7 @@ import { currentUser } from "../auth/service.js";
 import { DEFAULT_TENANT_ID, scopedPool } from "../db/tenant-context.js";
 import { makeAdminRoutes } from "./admin-routes.js";
 import { makeAuthRoutes } from "./auth-routes.js";
+import { handleMeetings, handlePeople, handleTodos } from "./handlers/agenda.js";
 import { handleAsk } from "./handlers/ask.js";
 import type { ServerDeps } from "./handlers/context.js";
 import { handleGroups } from "./handlers/groups.js";
@@ -180,6 +181,19 @@ function dispatchApi(
   if (url.pathname.startsWith("/api/suggestions")) {
     if ((req.method === "PUT" || req.method === "POST") && blockCrossOrigin(req, res)) return;
     void handleSuggestions(url, req, res, deps);
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/people") {
+    void handlePeople(url, res, deps);
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/meetings") {
+    void handleMeetings(url, res, deps);
+    return;
+  }
+  if (url.pathname.startsWith("/api/todos")) {
+    if (req.method === "PATCH" && blockCrossOrigin(req, res)) return;
+    void handleTodos(url, req, res, deps);
     return;
   }
   res.writeHead(404, { "content-type": "text/plain" });

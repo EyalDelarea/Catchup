@@ -74,7 +74,8 @@ export async function listPeople(client: pg.Pool | pg.PoolClient): Promise<Perso
     lastContactAt: r.last_contact_at,
     openThreads: r.open_threads,
     nextStep: r.next_step,
-    sourceMessageId: r.next_step_source_message_id === null ? null : Number(r.next_step_source_message_id),
+    sourceMessageId:
+      r.next_step_source_message_id === null ? null : Number(r.next_step_source_message_id),
     chat: r.chat,
   }));
 }
