@@ -22,6 +22,8 @@ import { shouldStartBackgroundRefresh } from "./lib/open-state.js";
 import { PHASE_LABELS, PHASES, phaseFill, activeZoneIndex, phaseCaption, scanFill } from "./lib/phase-loader.js";
 import { appendToken, beginQuestion, createConversation, failAnswer, finishAnswer, loadConversation, saveConversation, setPhase } from "./lib/ama-conversation.js";
 import { DEMO_GROUPS, DEMO_SUMMARY, DEMO_SUMMARIES, DEMO_TOTAL_HIGHLIGHTS, DEMO_TOTAL_PERCHAT } from "./lib/demo-data.js";
+import { applyTheme, readStoredTheme, resolveInitialTheme, setTheme } from "./lib/theme.js";
+import { icon } from "./lib/icons.js";
 
 /** Off by default. `?demo=1` previews dummy data; `?demo=tube` shows the loader. */
 const DEMO = new URLSearchParams(location.search).get("demo");
@@ -33,6 +35,14 @@ const topBar = document.getElementById("top-bar");
 const paneList = document.getElementById("pane-list");
 const paneMain = document.getElementById("pane-main");
 const staleBanner = document.getElementById("stale-banner");
+
+/** Active theme ("light" | "dark"). The pre-paint snippet in index.html already
+ *  reflected this onto <html>; we resolve it again here to drive the toggle. */
+let currentTheme = resolveInitialTheme(
+  readStoredTheme(),
+  window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
+);
+applyTheme(currentTheme);
 
 /** Currently open EventSource (cleaned up on view change). */
 let activeEventSource = null;
@@ -161,6 +171,7 @@ function renderShell() {
     <div class="health-pill" role="status" aria-live="polite">
       <span class="health-pill__dot"></span><span>טוען…</span>
     </div>
+    ${themeToggleHtml()}
   `;
 
   paneList.innerHTML = `
@@ -177,8 +188,26 @@ function renderShell() {
 
   document.getElementById("ama-card").addEventListener("click", () => navigate("ama"));
   document.getElementById("total-card").addEventListener("click", () => navigate("total"));
+  document.getElementById("theme-toggle")?.addEventListener("click", toggleTheme);
   const input = document.getElementById("search-input");
   if (input) input.addEventListener("input", () => renderGroupList(cachedGroups, input.value));
+}
+
+/** Top-bar בהיר/כהה control. Shows the icon of the mode it switches TO. */
+function themeToggleHtml() {
+  const toDark = currentTheme !== "dark";
+  return `<button id="theme-toggle" class="theme-toggle" type="button"
+    aria-label="${toDark ? "מעבר למצב כהה" : "מעבר למצב בהיר"}">${icon(toDark ? "moon" : "sun")}</button>`;
+}
+
+/** Flip + persist the theme, updating the toggle button in place (re-rendering
+ *  the whole shell would reset the populated group list to skeletons). */
+function toggleTheme() {
+  currentTheme = currentTheme === "dark" ? "light" : "dark";
+  setTheme(currentTheme);
+  const btn = document.getElementById("theme-toggle");
+  if (btn) btn.outerHTML = themeToggleHtml();
+  document.getElementById("theme-toggle")?.addEventListener("click", toggleTheme);
 }
 
 /** Fetch groups and populate the list. */
