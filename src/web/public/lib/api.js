@@ -318,3 +318,100 @@ export function actOnSuggestion(id, action, finalText) {
     return r.json();
   });
 }
+
+/**
+ * @typedef {{
+ *   id: number,
+ *   name: string,
+ *   status: "active"|"cold-lead"|"warm"|"dormant",
+ *   lastContactAt: string|null,
+ *   openThreads: number,
+ *   nextStep: string|null,
+ *   sourceMessageId: number|null,
+ *   chat: string|null
+ * }} Person
+ */
+
+/**
+ * Fetch the People/CRM list (§5). Derived server-side from messages. Throws on a
+ * non-OK response; the People view treats that (e.g. a 404 while the endpoint is
+ * still being built) as an empty list and renders the empty state.
+ * @returns {Promise<Person[]>}
+ */
+export function getPeople() {
+  return fetch("/api/people").then((r) => {
+    if (!r.ok) throw new Error(`people ${r.status}`);
+    return r.json();
+  });
+}
+
+/**
+ * @typedef {{
+ *   id: number,
+ *   title: string,
+ *   startsAt: string|null,
+ *   owner: string|null,
+ *   chat: string,
+ *   sourceMessageId: number
+ * }} Meeting
+ */
+
+/**
+ * Fetch extracted meetings (§6), optionally bounded by an ISO `from`/`to`
+ * window. Throws on a non-OK response; the Agenda view renders an empty state.
+ * @param {string} [from] - inclusive ISO lower bound
+ * @param {string} [to] - exclusive ISO upper bound
+ * @returns {Promise<Meeting[]>}
+ */
+export function getMeetings(from, to) {
+  const qs = new URLSearchParams();
+  if (from) qs.set("from", from);
+  if (to) qs.set("to", to);
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return fetch(`/api/meetings${suffix}`).then((r) => {
+    if (!r.ok) throw new Error(`meetings ${r.status}`);
+    return r.json();
+  });
+}
+
+/**
+ * @typedef {{
+ *   id: number,
+ *   title: string,
+ *   dueAt: string|null,
+ *   owner: string|null,
+ *   done: boolean,
+ *   chat: string,
+ *   sourceMessageId: number
+ * }} Todo
+ */
+
+/**
+ * Fetch extracted to-dos (§6). Throws on a non-OK response; the Agenda view
+ * renders an empty state.
+ * @returns {Promise<Todo[]>}
+ */
+export function getTodos() {
+  return fetch("/api/todos").then((r) => {
+    if (!r.ok) throw new Error(`todos ${r.status}`);
+    return r.json();
+  });
+}
+
+/**
+ * Toggle a to-do's done state. Same-origin (cookies + JSON content-type) so the
+ * CSRF guard passes. Returns the updated to-do.
+ * @param {number} id
+ * @param {boolean} done
+ * @returns {Promise<Todo>}
+ */
+export function setTodoDone(id, done) {
+  return fetch(`/api/todos/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ done }),
+  }).then((r) => {
+    if (!r.ok) throw new Error(`setTodoDone ${r.status}`);
+    return r.json();
+  });
+}
