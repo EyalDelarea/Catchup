@@ -14,6 +14,7 @@ import { handlePreferences } from "./handlers/preferences.js";
 import { handleScopeCategories } from "./handlers/scope-categories.js";
 import { handleScopes } from "./handlers/scopes.js";
 import { handleStatus } from "./handlers/status.js";
+import { handleSuggestions } from "./handlers/suggestions.js";
 import { handleSummaries } from "./handlers/summaries.js";
 import { handleSummarize } from "./handlers/summarize.js";
 import { handleTotalSummary } from "./handlers/total-summary.js";
@@ -174,6 +175,11 @@ function dispatchApi(
   if (url.pathname === "/api/preferences" && (req.method === "GET" || req.method === "PUT")) {
     if (req.method === "PUT" && blockCrossOrigin(req, res)) return;
     void handlePreferences(url, req, res, deps);
+    return;
+  }
+  if (url.pathname.startsWith("/api/suggestions")) {
+    if ((req.method === "PUT" || req.method === "POST") && blockCrossOrigin(req, res)) return;
+    void handleSuggestions(url, req, res, deps);
     return;
   }
   res.writeHead(404, { "content-type": "text/plain" });

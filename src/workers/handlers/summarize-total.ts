@@ -8,6 +8,11 @@ export type SummarizeTotalHandlerDeps = {
   generateTotalSummary: (range: { since: Date }) => Promise<TotalSummaryOutput>;
   insertTotalSummary: (pool: pg.Pool, input: InsertTotalSummaryInput) => Promise<number>;
   model: string;
+  /**
+   * Optional (S6): after the total summary is committed, enqueue suggestion
+   * generation for it. Best-effort — a failure here must NOT fail the digest.
+   */
+  enqueueSuggestGenerate?: (totalSummaryId: number, tenantId?: string) => Promise<void>;
 };
 
 /**
@@ -22,11 +27,23 @@ export function makeSummarizeTotalHandler(deps: SummarizeTotalHandlerDeps) {
       throw new Error(`Invalid since in summarize.total payload: ${job.payload.since}`);
     }
     const output = await deps.generateTotalSummary({ since });
-    await deps.insertTotalSummary(deps.pool, {
+    const totalSummaryId = await deps.insertTotalSummary(deps.pool, {
       rangeKind: "scheduled",
       parameters: { since: since.toISOString() },
       output,
       model: deps.model,
     });
+
+    // S6: chain suggestion generation off the committed aggregate. Best-effort —
+    // never let an enqueue hiccup fail the digest the user is waiting on.
+    if (deps.enqueueSuggestGenerate) {
+      try {
+        await deps.enqueueSuggestGenerate(totalSummaryId, job.payload.tenantId);
+      } catch (err) {
+        process.stderr.write(
+          `[summarize.total] suggest.generate enqueue failed: ${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
+    }
   };
 }
