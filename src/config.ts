@@ -144,6 +144,12 @@ export type AuthConfig = {
   tosVersion: string;
   /** Base URL used to build verify/reset links in emails. */
   publicBaseUrl: string;
+  /**
+   * Emails (lowercased) allowed to reach the operator/admin dashboard — the
+   * cross-tenant view. A logged-in user whose email is in this list is the operator;
+   * everyone else gets 403 on /api/admin/*. Empty = no operator (admin disabled).
+   */
+  operatorEmails: string[];
 };
 
 export type AppConfig = {
@@ -252,5 +258,9 @@ function loadAuthConfig(env: NodeJS.ProcessEnv): AuthConfig {
     emailTokenTtlSeconds: Number(env.EMAIL_TOKEN_TTL_MINUTES ?? 60) * 60,
     tosVersion: env.TOS_VERSION ?? "1",
     publicBaseUrl: env.PUBLIC_BASE_URL ?? "http://localhost:8787",
+    operatorEmails: (env.OPERATOR_EMAILS ?? "")
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter((e) => e.length > 0),
   };
 }

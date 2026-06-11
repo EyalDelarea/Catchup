@@ -649,6 +649,16 @@ program
       getQueueDepths,
       logger: webLogger,
       onboarding: tenantRegistry ?? undefined,
+      // T5 operator dashboard — cross-tenant view via the operator pool + registry health.
+      // Only meaningful in multi-tenant mode with at least one OPERATOR_EMAILS entry.
+      admin:
+        config.auth.enabled && tenantRegistry
+          ? {
+              operatorPool,
+              registry: tenantRegistry,
+              operatorEmails: config.auth.operatorEmails,
+            }
+          : undefined,
       auth: {
         deps: {
           appPool,
