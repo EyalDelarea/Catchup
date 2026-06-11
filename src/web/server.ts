@@ -71,6 +71,12 @@ export type ServerDeps = {
     deps: AuthDeps;
     cookieSecure: boolean;
     required: boolean;
+    /**
+     * When true, a session is not enough — the user's email must be verified to reach
+     * anything outside /api/auth/*. Off by default (the dev log mailer can't deliver),
+     * so single-user and unconfigured-SMTP deployments are unaffected.
+     */
+    requireEmailVerified?: boolean;
   };
   /**
    * T4 onboarding: the per-tenant WhatsApp session registry. When present, the
@@ -139,6 +145,16 @@ export function createServer(deps: ServerDeps): http.Server {
           return;
         }
         tenantId = session.tenantId;
+        // A session alone isn't enough when email verification is enforced — otherwise the
+        // verify step is cosmetic (a registrant is auto-logged-in before verifying).
+        if (deps.auth.requireEmailVerified) {
+          const user = await currentUser(deps.auth.deps, session);
+          if (!user?.emailVerified) {
+            res.writeHead(403, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: "Email verification required." }));
+            return;
+          }
+        }
       }
       // Admin (cross-tenant) — gated on the session user's email being an operator.
       // Computed here so a tenant session can never reach the admin pool.

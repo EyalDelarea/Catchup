@@ -30,3 +30,19 @@ export async function verifyPassword(storedHash: string, plaintext: string): Pro
     return false;
   }
 }
+
+// The dummy hash is computed once (lazily) and reused — the first missing-user login pays
+// the one-time hashing cost; every call after pays only the verify cost, which is what we
+// want to match against a real login.
+let dummyHash: Promise<string> | null = null;
+
+/**
+ * Spend an argon2 verify against a throwaway hash. Call this on the "user not found" login
+ * branch so a missing account costs the same wall-clock time as a wrong password, closing
+ * the timing side-channel that would otherwise enumerate accounts. The result is
+ * intentionally discarded.
+ */
+export async function spendDummyVerify(plaintext: string): Promise<void> {
+  if (!dummyHash) dummyHash = hashPassword("timing-equalizer-not-a-real-credential");
+  await verifyPassword(await dummyHash, plaintext);
+}

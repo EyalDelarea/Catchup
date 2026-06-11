@@ -683,6 +683,7 @@ program
         },
         cookieSecure: config.auth.cookieSecure,
         required: config.auth.enabled,
+        requireEmailVerified: config.auth.requireEmailVerification,
       },
       ...collectDeps,
     });

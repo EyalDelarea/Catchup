@@ -150,6 +150,13 @@ export type AuthConfig = {
    * everyone else gets 403 on /api/admin/*. Empty = no operator (admin disabled).
    */
   operatorEmails: string[];
+  /**
+   * Gate app access (everything outside /api/auth/*) on a verified email
+   * (REQUIRE_EMAIL_VERIFICATION=true). Default false so the dev log mailer — which only
+   * surfaces the verify link locally — never locks anyone out; turn it on once real SMTP
+   * delivery is wired.
+   */
+  requireEmailVerification: boolean;
 };
 
 export type AppConfig = {
@@ -262,5 +269,6 @@ function loadAuthConfig(env: NodeJS.ProcessEnv): AuthConfig {
       .split(",")
       .map((e) => e.trim().toLowerCase())
       .filter((e) => e.length > 0),
+    requireEmailVerification: env.REQUIRE_EMAIL_VERIFICATION === "true",
   };
 }

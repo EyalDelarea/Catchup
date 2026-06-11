@@ -108,6 +108,13 @@ describe("loadConfig auth block (T2 multi-tenant)", () => {
     ).toEqual(["boss@acme.test", "ops@acme.test"]);
   });
 
+  it("requireEmailVerification is off by default and opt-in via REQUIRE_EMAIL_VERIFICATION", () => {
+    expect(loadConfig({}).auth.requireEmailVerification).toBe(false);
+    expect(loadConfig({ REQUIRE_EMAIL_VERIFICATION: "true" }).auth.requireEmailVerification).toBe(
+      true,
+    );
+  });
+
   it("honors TTL, ToS version and public base URL overrides", () => {
     const cfg = loadConfig({
       SESSION_TTL_DAYS: "7",

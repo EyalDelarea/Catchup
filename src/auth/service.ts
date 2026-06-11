@@ -21,7 +21,7 @@ import {
   setPasswordHash,
 } from "../db/repositories/users.js";
 import { withTenant } from "../db/tenant-context.js";
-import { hashPassword, verifyPassword } from "./password.js";
+import { hashPassword, spendDummyVerify, verifyPassword } from "./password.js";
 import { generateToken, hashToken } from "./tokens.js";
 
 /**
@@ -118,9 +118,13 @@ export async function login(
   input: { email: string; password: string },
 ): Promise<{ rawToken: string; user: AuthedUser } | null> {
   const user = await findUserForLogin(deps.operatorPool, input.email);
-  // Verify even when the user is missing? We still hit argon2 only when we have a hash; a
-  // missing user returns null. (Timing-uniformity hardening can come in T6.)
-  if (!user || !(await verifyPassword(user.passwordHash, input.password))) {
+  // Equalize timing across the missing-user and wrong-password branches: a missing user
+  // still spends one argon2 verify (against a dummy hash) so response time can't be used
+  // to enumerate which emails are registered.
+  const passwordOk = user
+    ? await verifyPassword(user.passwordHash, input.password)
+    : (await spendDummyVerify(input.password), false);
+  if (!user || !passwordOk) {
     await audit(deps, {
       tenantId: user?.tenantId ?? null,
       actorEmail: input.email.toLowerCase(),
