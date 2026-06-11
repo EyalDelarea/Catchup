@@ -20,7 +20,7 @@ import { renderMarkdown } from "./lib/markdown.js";
 import { deriveHealth } from "./lib/health.js";
 import { shouldStartBackgroundRefresh } from "./lib/open-state.js";
 import { PHASE_LABELS, PHASES, phaseFill, activeZoneIndex, phaseCaption, scanFill } from "./lib/phase-loader.js";
-import { appendToken, beginQuestion, createConversation, failAnswer, finishAnswer } from "./lib/ama-conversation.js";
+import { appendToken, beginQuestion, createConversation, failAnswer, finishAnswer, loadConversation, saveConversation, setPhase } from "./lib/ama-conversation.js";
 import { DEMO_GROUPS, DEMO_SUMMARY, DEMO_SUMMARIES, DEMO_TOTAL_HIGHLIGHTS, DEMO_TOTAL_PERCHAT } from "./lib/demo-data.js";
 
 /** Off by default. `?demo=1` previews dummy data; `?demo=tube` shows the loader. */
@@ -42,8 +42,19 @@ let totalLoaderTimer = null;
 let healthInterval = null;
 /** Cached groups list. */
 let cachedGroups = [];
-/** Active AMA conversation (recreated each time the panel opens). */
+/** Active AMA conversation (restored from sessionStorage when the panel opens). */
 let amaConversation = createConversation();
+/** Scope of the active AMA conversation, for persistence keying. */
+let amaScope = null;
+
+/** sessionStorage, or null if the browser blocks access (private mode, etc.). */
+function amaStorage() {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
 
 /* ── 2. Routing ──────────────────────────────────────────── */
 
@@ -1009,7 +1020,8 @@ function runTotal({ since }) {
  */
 function renderAma(scope) {
   teardownStream();
-  amaConversation = createConversation();
+  amaScope = scope ?? null;
+  amaConversation = loadConversation(amaStorage(), amaScope);
   const sub = scope ? `על "${escHtml(formatGroupName(scope))}"` : "מחפש בכל השיחות שלך";
   paneMain.innerHTML = `
     <div class="ama-panel">
@@ -1036,12 +1048,19 @@ function renderAma(scope) {
   setView("ama");
   markActiveRow(scope);
 
+  // Replace the empty-state hint with the restored thread, if there is one.
+  if (amaConversation.messages.length) renderAmaMessages();
+
   document.getElementById("ama-back-btn")?.addEventListener("click", () => history.back());
   document.getElementById("ama-form")?.addEventListener("submit", (e) => {
     e.preventDefault();
     submitAmaQuestion(scope);
   });
 }
+
+/** No SSE activity for this long → treat the request as stuck and surface it. */
+const AMA_STALL_MS = 120_000;
+let amaStallTimer = null;
 
 /** Send the typed question to /api/ask and stream the answer into the panel. */
 function submitAmaQuestion(scope) {
@@ -1052,13 +1071,33 @@ function submitAmaQuestion(scope) {
   if (!reply) return;
   if (input) input.value = "";
   renderAmaMessages();
+  saveConversation(amaStorage(), amaScope, amaConversation);
 
   const settle = () => {
+    if (amaStallTimer) { clearTimeout(amaStallTimer); amaStallTimer = null; }
     teardownStream();
     renderAmaMessages();
+    saveConversation(amaStorage(), amaScope, amaConversation);
   };
+  // Reset on every event; if the server goes silent for too long (a hung or
+  // overloaded model), fail visibly instead of spinning "חושב…" forever.
+  const armStall = () => {
+    if (amaStallTimer) clearTimeout(amaStallTimer);
+    amaStallTimer = setTimeout(() => {
+      if (reply.pending) failAnswer(reply, "אין תגובה מהשרת. נסה שוב.");
+      settle();
+    }, AMA_STALL_MS);
+  };
+  armStall();
+
   activeEventSource = askStream({ q, chat: scope ?? undefined }, {
+    phase: (d) => {
+      armStall();
+      setPhase(reply, d.phase);
+      renderAmaMessages();
+    },
     token: (d) => {
+      armStall();
       appendToken(reply, d.delta);
       renderAmaMessages();
     },
@@ -1080,7 +1119,9 @@ function renderAmaMessages() {
       return `<div class="ama-bubble ama-bubble--user">${escHtml(m.text)}</div>`;
     }
     if (m.pending && !m.text) {
-      return `<div class="ama-bubble ama-bubble--ai ama-bubble--pending">חושב…</div>`;
+      const label =
+        m.phase === "searching" ? "מחפש בהודעות…" : m.phase === "synthesizing" ? "מנסח תשובה…" : "חושב…";
+      return `<div class="ama-bubble ama-bubble--ai ama-bubble--pending">${label}</div>`;
     }
     const err = m.error ? `<span class="ama-bubble__err">${escHtml(m.error)}</span>` : "";
     return `<div class="ama-bubble ama-bubble--ai">${escHtml(m.text)}${err}${renderAmaSources(m.citations)}</div>`;
