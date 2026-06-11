@@ -121,8 +121,9 @@ describe("CLI contract — doctor command (FR-016)", () => {
     const r = run(["doctor"]);
     const lines = r.stdout.split("\n").filter((l) => l.trim().length > 0);
     for (const line of lines) {
-      // ⚠️ is the advisory level (e.g. the default-DB-password check).
-      expect(line).toMatch(/^[✅⚠️❌]/);
+      // ⚠️ is the advisory level (e.g. the default-DB-password check). Use an alternation,
+      // not a character class — ⚠️ is two code points (⚠ + variation selector).
+      expect(line).toMatch(/^(✅|⚠️|❌)/);
     }
   });
 
