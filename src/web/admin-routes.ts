@@ -60,7 +60,10 @@ export function makeAdminRoutes(opts: AdminRoutesOptions) {
         return true;
       }
       if (req.method === "GET" && url.pathname === "/api/admin/audit") {
-        const limit = Number(url.searchParams.get("limit") ?? "50");
+        // Guard against a non-numeric ?limit (e.g. ?limit=abc → NaN), which would survive
+        // listAudit's Math.min/Math.max clamp and reach SQL as the LIMIT bind param.
+        const parsedLimit = Number(url.searchParams.get("limit") ?? "50");
+        const limit = Number.isFinite(parsedLimit) ? parsedLimit : 50;
         const tenantId = url.searchParams.get("tenant") ?? undefined;
         json(res, 200, await listAudit(operatorPool, { limit, tenantId }));
         return true;
