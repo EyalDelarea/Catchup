@@ -576,6 +576,13 @@ program
         }
       : {};
 
+    // T6 audit sink — append to the global audit_log on the operator pool. Shared by
+    // the auth service, onboarding, and the operator dashboard so every security event
+    // is recorded.
+    const { appendAudit } = await import("./db/repositories/audit.js");
+    const recordAudit = (entry: import("./db/repositories/audit.js").AuditEntry) =>
+      appendAudit(operatorPool, entry);
+
     // ── T3/T4: per-tenant WhatsApp session registry (multi-tenant mode) ──────
     // Created BEFORE the server so /api/onboarding/* can drive it (link → QR →
     // connected). Hosts the supervised sessions for every tenant except the default,
@@ -624,6 +631,7 @@ program
         );
         registry.on("connected", (tenantId: string) => {
           log.collector.info({ tenantId }, "tenant session connected");
+          void recordAudit({ tenantId, action: "onboarding.link" }).catch(() => {});
         });
         registry.on("logged-out", (tenantId: string) => {
           log.collector.error({ tenantId }, "tenant session logged out — re-link required");
@@ -657,6 +665,7 @@ program
               operatorPool,
               registry: tenantRegistry,
               operatorEmails: config.auth.operatorEmails,
+              recordAudit,
             }
           : undefined,
       auth: {
@@ -669,6 +678,8 @@ program
           emailTokenTtlSeconds: config.auth.emailTokenTtlSeconds,
           tosVersion: config.auth.tosVersion,
           publicBaseUrl: config.auth.publicBaseUrl,
+          // Audit auth events only in multi-tenant mode (single-user local needs no trail).
+          recordAudit: config.auth.enabled ? recordAudit : undefined,
         },
         cookieSecure: config.auth.cookieSecure,
         required: config.auth.enabled,
