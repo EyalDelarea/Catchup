@@ -183,8 +183,15 @@ describe("web server", () => {
     const g = await upsertGroup(pool, { name, source: "import" });
     await seedText(g, "hello for cache hit", `catchup-ch-${randomUUID()}`);
 
-    // First run: advance the watermark
-    await fetch(`${base}/api/summarize?group=${encodeURIComponent(name)}&mode=catchup`);
+    // First run: advance the watermark. Drain the SSE body to `event: done` — the
+    // watermark commit lands just before that frame, so consuming the stream is what
+    // guarantees the row is visible to the SELECT below. (`await fetch(...)` alone
+    // resolves at response-headers time, before the handler commits — a race under
+    // parallel DB load.)
+    const firstRun = await (
+      await fetch(`${base}/api/summarize?group=${encodeURIComponent(name)}&mode=catchup`)
+    ).text();
+    expect(firstRun).toContain("event: done");
 
     // Count summaries before the second request
     const { rows: before } = await pool.query(

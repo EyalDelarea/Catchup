@@ -34,4 +34,9 @@ describe("buildAskPrompt", () => {
     const p = buildAskPrompt("x", cands, NOW);
     expect(p.system.toLowerCase()).not.toContain("json");
   });
+  it("treats 'what did X ask/say' as a recap, not a demand for a literal question", () => {
+    const p = buildAskPrompt("מה גיא שאל אותי היום?", cands, NOW);
+    expect(p.system).toContain("לסכם את ההודעות הרלוונטיות");
+    expect(p.system).toContain("אין מידע רק כאשר אין כלל הודעות רלוונטיות");
+  });
 });
