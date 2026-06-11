@@ -34,7 +34,9 @@ describe("proactivenessCap", () => {
 
 describe("enabledKinds", () => {
   it("returns only enabled kinds in stable order", () => {
-    const c = loadEngineConfig({ kinds: { task: true, meeting: false, followup: true, recap: false } });
+    const c = loadEngineConfig({
+      kinds: { task: true, meeting: false, followup: true, recap: false },
+    });
     expect(enabledKinds(c)).toEqual(["task", "followup"]);
   });
 });

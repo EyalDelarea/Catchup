@@ -17,7 +17,10 @@ export const SUPPRESS_MIN_NEG = 2;
 export const SUPPRESS_MAX_RATIO = 0.34;
 
 /** Keep only per-chat entries whose group is in the included set (S4). Pure. */
-export function filterInScope(perChat: PerChatEntry[], includedGroupIds: Set<number>): PerChatEntry[] {
+export function filterInScope(
+  perChat: PerChatEntry[],
+  includedGroupIds: Set<number>,
+): PerChatEntry[] {
   return perChat.filter((p) => includedGroupIds.has(p.groupId));
 }
 

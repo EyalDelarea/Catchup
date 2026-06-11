@@ -1,7 +1,15 @@
 import type pg from "pg";
+import type {
+  BiasEntry,
+  NewSuggestion,
+  SuggestionKind,
+} from "../../db/repositories/suggestions.js";
 import type { Job } from "../../jobs/job-types.js";
-import type { BiasEntry, NewSuggestion, SuggestionKind } from "../../db/repositories/suggestions.js";
-import { enabledKinds, loadEngineConfig, proactivenessCap } from "../../summarization/engine-config.js";
+import {
+  enabledKinds,
+  loadEngineConfig,
+  proactivenessCap,
+} from "../../summarization/engine-config.js";
 import {
   applySuppression,
   capDrafts,

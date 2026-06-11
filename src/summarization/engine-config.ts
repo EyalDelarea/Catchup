@@ -18,7 +18,11 @@ export type EngineConfig = {
 const KINDS: SuggestionKind[] = ["task", "meeting", "followup", "recap"];
 
 function defaults(): EngineConfig {
-  return { on: false, kinds: { task: true, meeting: true, followup: true, recap: true }, proact: "מאוזן" };
+  return {
+    on: false,
+    kinds: { task: true, meeting: true, followup: true, recap: true },
+    proact: "מאוזן",
+  };
 }
 
 /** Coerce the opaque stored blob into a typed {@link EngineConfig}, filling gaps. */
@@ -34,7 +38,9 @@ export function loadEngineConfig(raw: unknown): EngineConfig {
     }
   }
   const proact =
-    src.proact === "עדין" || src.proact === "מאוזן" || src.proact === "יוזם" ? src.proact : d.proact;
+    src.proact === "עדין" || src.proact === "מאוזן" || src.proact === "יוזם"
+      ? src.proact
+      : d.proact;
   return { on: typeof src.on === "boolean" ? src.on : d.on, kinds, proact };
 }
 

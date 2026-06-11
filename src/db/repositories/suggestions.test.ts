@@ -34,8 +34,20 @@ describe("suggestions repository", () => {
     const gA = await upsertGroup(pool, { name: "sug-A", source: "import" });
     const gB = await upsertGroup(pool, { name: "sug-B", source: "import" });
     await insertSuggestions(pool, [
-      { totalSummaryId: totalId, kind: "task", groupId: gA, proposedText: "לקנות חלב", reason: "כי" },
-      { totalSummaryId: totalId, kind: "meeting", groupId: gB, proposedText: "פגישה", reason: "כי" },
+      {
+        totalSummaryId: totalId,
+        kind: "task",
+        groupId: gA,
+        proposedText: "לקנות חלב",
+        reason: "כי",
+      },
+      {
+        totalSummaryId: totalId,
+        kind: "meeting",
+        groupId: gB,
+        proposedText: "פגישה",
+        reason: "כי",
+      },
     ]);
 
     let deck = await listPendingDeck(pool);

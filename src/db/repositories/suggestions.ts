@@ -46,9 +46,7 @@ export async function insertSuggestions(
  * for included chats only (S4 default-on: a chat with no scope row is included).
  * Joined to the group name. Newest first.
  */
-export async function listPendingDeck(
-  client: pg.Pool | pg.PoolClient,
-): Promise<DeckSuggestion[]> {
+export async function listPendingDeck(client: pg.Pool | pg.PoolClient): Promise<DeckSuggestion[]> {
   const { rows } = await client.query<{
     id: string;
     kind: SuggestionKind;
@@ -108,9 +106,7 @@ export async function decideSuggestion(
 }
 
 /** Per-(kind, chat) bias tallies: edited+accepted = positive, discarded = negative. */
-export async function loadBias(
-  client: pg.Pool | pg.PoolClient,
-): Promise<Map<string, BiasEntry>> {
+export async function loadBias(client: pg.Pool | pg.PoolClient): Promise<Map<string, BiasEntry>> {
   const { rows } = await client.query<{
     kind: SuggestionKind;
     group_id: string;

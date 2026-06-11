@@ -40,7 +40,14 @@ describe("suggestGenerateHandler", () => {
   it("extracts per enabled kind, scope-filters, caps, and persists", async () => {
     // one draft per chat per kind; balanced cap = 3
     const extract = vi.fn(async (kind, inScope: PerChatEntry[]) =>
-      inScope.map((p): Draft => ({ kind, groupId: p.groupId, proposedText: `${kind}-${p.groupId}`, reason: "r" })),
+      inScope.map(
+        (p): Draft => ({
+          kind,
+          groupId: p.groupId,
+          proposedText: `${kind}-${p.groupId}`,
+          reason: "r",
+        }),
+      ),
     );
     const deps = makeDeps({
       loadIncludedGroupIds: vi.fn().mockResolvedValue([1]), // group 2 excluded
@@ -65,7 +72,9 @@ describe("suggestGenerateHandler", () => {
       inScope.map((p): Draft => ({ kind, groupId: p.groupId, proposedText: "x", reason: "r" })),
     );
     const deps = makeDeps({
-      loadEngineConfigRaw: vi.fn().mockResolvedValue({ on: true, kinds: { task: true }, proact: "עדין" }),
+      loadEngineConfigRaw: vi
+        .fn()
+        .mockResolvedValue({ on: true, kinds: { task: true }, proact: "עדין" }),
       extract,
     });
     await makeSuggestGenerateHandler(deps)(job);
