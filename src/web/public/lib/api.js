@@ -226,3 +226,44 @@ export function createScopeCategory(name) {
     return r.json();
   });
 }
+
+/**
+ * @typedef {{
+ *   digestTimes: string,
+ *   morningNotification: boolean,
+ *   engineConfig: Record<string, unknown>,
+ *   theme: string|null
+ * }} Preferences
+ * `digestTimes` is a CSV of HH:MM ("08:00,18:00"); `engineConfig` is an opaque
+ * blob owned by the suggestion engine (S6). When nothing is saved the server
+ * returns env defaults.
+ */
+
+/**
+ * Fetch the tenant's preferences.
+ * @returns {Promise<Preferences>}
+ */
+export function getPreferences() {
+  return fetch("/api/preferences").then((r) => {
+    if (!r.ok) throw new Error(`preferences ${r.status}`);
+    return r.json();
+  });
+}
+
+/**
+ * Apply a partial preferences update. Same-origin (cookies + JSON) so the CSRF
+ * guard passes. `digestTimes`, when present, must be a non-empty CSV of HH:MM
+ * (validated server-side — 400 on malformed). Returns the updated preferences.
+ * @param {Partial<Preferences>} patch
+ * @returns {Promise<Preferences>}
+ */
+export function putPreferences(patch) {
+  return fetch("/api/preferences", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+  }).then((r) => {
+    if (!r.ok) throw new Error(`putPreferences ${r.status}`);
+    return r.json();
+  });
+}

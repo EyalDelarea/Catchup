@@ -14,8 +14,9 @@
  * Teardown: EventSource is closed when leaving a streaming view
  */
 
-import { askStream, createScopeCategory, getGroups, getMessages, getScopeCategories, getScopes, getStatus, getSummaries, putScopes, summarizeStream } from "./lib/api.js";
+import { askStream, createScopeCategory, getGroups, getMessages, getPreferences, getScopeCategories, getScopes, getStatus, getSummaries, putPreferences, putScopes, summarizeStream } from "./lib/api.js";
 import { activeCount, filterScopes, groupByCategory, partitionRemoved, sectionCount } from "./lib/scopes.js";
+import { DIGEST_CHOICES, ENGINE_KINDS, PROACT_LEVELS, isDigestSelected, normalizeEngineConfig, toggleDigestTime } from "./lib/prefs.js";
 import { formatAgo, presetToSince, validateRangeInput } from "./lib/time.js";
 import { renderMarkdown } from "./lib/markdown.js";
 import { deriveHealth } from "./lib/health.js";
@@ -76,7 +77,7 @@ function setView(view) {
 
 /**
  * Navigate to a view, pushing a history entry.
- * @param {"feed"|"detail"|"total"|"ama"} view
+ * @param {"feed"|"detail"|"total"|"ama"|"thread"|"sources"|"settings"} view
  * @param {string} [arg] — group name (detail) or AMA scope (ama)
  */
 function navigate(view, arg) {
@@ -100,6 +101,9 @@ function navigate(view, arg) {
   } else if (view === "sources") {
     history.pushState({ view: "sources" }, "", "#sources");
     renderSources();
+  } else if (view === "settings") {
+    history.pushState({ view: "settings" }, "", "#settings");
+    renderSettings();
   } else {
     history.pushState({ view: "feed" }, "", location.pathname);
     setView("feed");
@@ -116,6 +120,8 @@ window.addEventListener("popstate", (e) => {
     renderTotal(false);
   } else if (state?.view === "sources") {
     renderSources();
+  } else if (state?.view === "settings") {
+    renderSettings();
   } else if (state?.view === "ama") {
     renderAma(state.scope ?? null);
   } else if (state?.view === "thread" && state.chat) {
@@ -186,6 +192,7 @@ function renderShell() {
     <div class="health-pill" role="status" aria-live="polite">
       <span class="health-pill__dot"></span><span>טוען…</span>
     </div>
+    <button id="settings-gear" class="theme-toggle" type="button" aria-label="הגדרות">${icon("sliders")}</button>
     ${themeToggleHtml()}
   `;
 
@@ -207,6 +214,7 @@ function renderShell() {
   document.getElementById("ama-card").addEventListener("click", () => navigate("ama"));
   document.getElementById("total-card").addEventListener("click", () => navigate("total"));
   document.getElementById("theme-toggle")?.addEventListener("click", toggleTheme);
+  document.getElementById("settings-gear")?.addEventListener("click", () => navigate("settings"));
   document.getElementById("manage-sources")?.addEventListener("click", () => navigate("sources"));
   const input = document.getElementById("search-input");
   if (input) input.addEventListener("input", () => renderGroupList(cachedGroups, input.value));
@@ -1557,6 +1565,237 @@ function wireSources() {
   }
 }
 
+/* ── 7d. Settings (preferences §8) ───────────────────────── */
+
+const settingsState = { prefs: null };
+
+/** The Settings screen (§8): privacy callout, daily digest, display mode,
+ *  and the experimental suggestion-engine config. Fetch-on-entry, then paint. */
+async function renderSettings() {
+  teardownStream();
+  setView("ama"); // reuse the single-pane slot, like Sources
+  paneMain.innerHTML = `<div class="settings-panel"><p class="thread-loading">טוען הגדרות…</p></div>`;
+  if (DEMO) {
+    settingsState.prefs = {
+      digestTimes: "08:00",
+      morningNotification: true,
+      engineConfig: {},
+      theme: currentTheme,
+    };
+    paintSettings();
+    return;
+  }
+  try {
+    settingsState.prefs = await getPreferences();
+  } catch {
+    paneMain.innerHTML = `<div class="settings-panel"><p class="error-state">שגיאה בטעינת ההגדרות.</p></div>`;
+    return;
+  }
+  paintSettings();
+}
+
+/** Apply a preferences patch locally + persist in the background (optimistic).
+ *  On failure we refetch to resync — mirrors applyScopeChange. */
+async function applyPrefChange(patch) {
+  Object.assign(settingsState.prefs, patch);
+  paintSettings();
+  try {
+    await putPreferences(patch);
+  } catch {
+    renderSettings();
+  }
+}
+
+function paintSettings() {
+  const prefs = settingsState.prefs;
+  const engine = normalizeEngineConfig(prefs.engineConfig);
+
+  const digestChips = DIGEST_CHOICES.map((t) => {
+    const on = isDigestSelected(prefs.digestTimes, t);
+    return `<button class="set-chip${on ? " is-on" : ""}" data-act="digest" data-val="${t}" type="button"
+      role="switch" aria-checked="${on}"><span class="mono" dir="ltr">${t}</span></button>`;
+  }).join("");
+
+  const themeSeg = [
+    ["light", "בהיר"],
+    ["dark", "כהה"],
+  ]
+    .map(
+      ([val, label]) =>
+        `<button class="set-seg__btn${currentTheme === val ? " is-active" : ""}" data-act="theme" data-val="${val}" type="button">${label}</button>`,
+    )
+    .join("");
+
+  const kindChips = ENGINE_KINDS.map(
+    ([k, label]) =>
+      `<button class="set-chip${engine.kinds[k] ? " is-on" : ""}" data-act="kind" data-val="${k}" type="button"
+        role="switch" aria-checked="${!!engine.kinds[k]}">${engine.kinds[k] ? icon("check", { size: 13 }) : ""}${label}</button>`,
+  ).join("");
+
+  const proactSeg = PROACT_LEVELS.map(
+    (lvl) =>
+      `<button class="set-seg__btn${engine.proact === lvl ? " is-active" : ""}" data-act="proact" data-val="${lvl}" type="button">${lvl}</button>`,
+  ).join("");
+
+  paneMain.innerHTML = `
+    <div class="settings-panel">
+      <div class="settings-head">
+        <button class="back-btn" id="settings-back" aria-label="חזרה">
+          <span class="back-btn__arrow" aria-hidden="true">›</span> חזרה
+        </button>
+        <div class="settings-head__title">הגדרות</div>
+      </div>
+
+      <div class="set-callout">
+        <span class="set-callout__ico" aria-hidden="true">${icon("shield", { size: 22 })}</span>
+        <div>
+          <b class="set-callout__title">המידע שלך נשאר אצלך</b>
+          <p class="set-callout__text">הכול מאוחסן ומעובד על המכשיר הזה. אתה השולט היחיד במידע.</p>
+        </div>
+      </div>
+
+      <h2 class="set-sec">פרטיות ונתונים</h2>
+      <div class="set-card">
+        <div class="setrow">
+          ${icon("lock", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>אחסון מקומי בלבד</h4><p>שמירת ההודעות והסיכומים על המכשיר</p></div>
+          <span class="set-switch is-on" role="img" aria-label="פעיל"><span class="set-switch__knob"></span></span>
+        </div>
+        <div class="set-divide"></div>
+        <div class="setrow">
+          ${icon("cloud", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>גיבוי לענן</h4><p>כבוי כברירת מחדל — שום דבר לא יוצא בלי אישורך</p></div>
+          <span class="set-switch is-disabled" role="img" aria-label="כבוי (לא זמין)"><span class="set-switch__knob"></span></span>
+        </div>
+        <div class="set-divide"></div>
+        <div class="setrow">
+          ${icon("trash", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>נתק וואטסאפ ומחק הכול</h4><p>הסרה מלאה של הנתונים מהמכשיר</p></div>
+          <button class="set-btn set-btn--danger" type="button" disabled>מחיקה</button>
+        </div>
+      </div>
+
+      <h2 class="set-sec">הסיכום היומי</h2>
+      <div class="set-card">
+        <div class="setrow">
+          ${icon("bell", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>התראת בוקר</h4><p>תזכורת עדינה כשהסיכום מוכן</p></div>
+          <button class="set-switch${prefs.morningNotification ? " is-on" : ""}" data-act="morning" type="button"
+            role="switch" aria-checked="${prefs.morningNotification}" aria-label="התראת בוקר"><span class="set-switch__knob"></span></button>
+        </div>
+        <div class="set-divide"></div>
+        <div class="setrow setrow--stack">
+          ${icon("clock", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>שעות הסיכום</h4><p>מתי להכין את הסיכום היומי</p></div>
+        </div>
+        <div class="set-chips" role="group" aria-label="שעות הסיכום">${digestChips}</div>
+      </div>
+
+      <h2 class="set-sec">תצוגה</h2>
+      <div class="set-card">
+        <div class="setrow">
+          ${icon("sliders", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>מצב תצוגה</h4><p>בהיר או כהה — נשמר במכשיר</p></div>
+          <div class="set-seg" role="group" aria-label="מצב תצוגה">${themeSeg}</div>
+        </div>
+      </div>
+
+      <h2 class="set-sec">מנוע ההצעות <span class="beta">ניסיוני</span></h2>
+      <div class="set-card">
+        <div class="setrow">
+          ${icon("sparkle", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>הצעות חכמות בסיכום</h4><p>זיהוי משימות, פגישות ופולואו-אפים מהשיחות. בשלב ניסיוני — בשליטתך המלאה.</p></div>
+          <button class="set-switch${engine.on ? " is-on" : ""}" data-act="engine-on" type="button"
+            role="switch" aria-checked="${engine.on}" aria-label="מנוע ההצעות"><span class="set-switch__knob"></span></button>
+        </div>
+        ${
+          engine.on
+            ? `
+        <div class="set-divide"></div>
+        <div class="setrow setrow--stack">
+          <div class="setrow__body"><h4>אילו הצעות להציג</h4><p>כבו סוג כדי שלא יופיע בסיכום</p></div>
+        </div>
+        <div class="set-chips" role="group" aria-label="סוגי הצעות">${kindChips}</div>
+        <div class="set-divide"></div>
+        <div class="setrow">
+          ${icon("bolt", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>רמת יוזמה</h4><p>כמה הצעות המנוע יציע ביום</p></div>
+          <div class="set-seg" role="group" aria-label="רמת יוזמה">${proactSeg}</div>
+        </div>
+        <div class="set-divide"></div>
+        <div class="setrow">
+          ${icon("filter", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>צ׳אטים מוזנים</h4><p>בחרו אילו שיחות המנוע ינתח</p></div>
+          <button class="set-btn" id="settings-manage" type="button">ניהול ${icon("chevL", { size: 16 })}</button>
+        </div>`
+            : ""
+        }
+      </div>
+    </div>`;
+  wireSettings();
+}
+
+function wireSettings() {
+  document.getElementById("settings-back")?.addEventListener("click", () => history.back());
+  document.getElementById("settings-manage")?.addEventListener("click", () => navigate("sources"));
+
+  const prefs = settingsState.prefs;
+
+  // Daily digest
+  for (const btn of document.querySelectorAll('[data-act="digest"]')) {
+    btn.addEventListener("click", () =>
+      applyPrefChange({ digestTimes: toggleDigestTime(prefs.digestTimes, btn.dataset.val) }),
+    );
+  }
+  document
+    .querySelector('[data-act="morning"]')
+    ?.addEventListener("click", () =>
+      applyPrefChange({ morningNotification: !prefs.morningNotification }),
+    );
+
+  // Display mode — localStorage is the source of truth (lib/theme.js); we also
+  // mirror the choice into prefs so a fresh device can pick it up.
+  for (const btn of document.querySelectorAll('[data-act="theme"]')) {
+    btn.addEventListener("click", () => {
+      const val = btn.dataset.val;
+      if (val !== currentTheme) setDisplayMode(val);
+      applyPrefChange({ theme: val });
+    });
+  }
+
+  // Experimental engine — read/normalize, mutate, write the whole opaque blob back.
+  const engine = normalizeEngineConfig(prefs.engineConfig);
+  document
+    .querySelector('[data-act="engine-on"]')
+    ?.addEventListener("click", () =>
+      applyPrefChange({ engineConfig: { ...engine, on: !engine.on } }),
+    );
+  for (const btn of document.querySelectorAll('[data-act="kind"]')) {
+    btn.addEventListener("click", () => {
+      const k = btn.dataset.val;
+      applyPrefChange({
+        engineConfig: { ...engine, kinds: { ...engine.kinds, [k]: !engine.kinds[k] } },
+      });
+    });
+  }
+  for (const btn of document.querySelectorAll('[data-act="proact"]')) {
+    btn.addEventListener("click", () =>
+      applyPrefChange({ engineConfig: { ...engine, proact: btn.dataset.val } }),
+    );
+  }
+}
+
+/** Apply + persist a theme choice and keep the top-bar toggle icon in sync. */
+function setDisplayMode(value) {
+  currentTheme = value;
+  setTheme(currentTheme);
+  const btn = document.getElementById("theme-toggle");
+  if (btn) {
+    btn.outerHTML = themeToggleHtml();
+    document.getElementById("theme-toggle")?.addEventListener("click", toggleTheme);
+  }
+}
+
 /* ── 8. Helpers ──────────────────────────────────────────── */
 
 function formatGroupName(name) {
@@ -1610,6 +1849,14 @@ function resolveInitialRoute() {
   if (hash === "#ama") {
     history.replaceState({ view: "ama", scope: null }, "", hash);
     return { view: "ama", scope: null };
+  }
+  if (hash === "#sources") {
+    history.replaceState({ view: "sources" }, "", hash);
+    return { view: "sources" };
+  }
+  if (hash === "#settings") {
+    history.replaceState({ view: "settings" }, "", hash);
+    return { view: "settings" };
   }
   history.replaceState({ view: "feed" }, "", location.pathname);
   return { view: "feed" };
@@ -1980,6 +2227,10 @@ async function boot() {
     renderTotal(true);
   } else if (route.view === "ama") {
     renderAma(route.scope ?? null);
+  } else if (route.view === "sources") {
+    renderSources();
+  } else if (route.view === "settings") {
+    renderSettings();
   } else {
     setView("feed");
     renderMainWelcome();
