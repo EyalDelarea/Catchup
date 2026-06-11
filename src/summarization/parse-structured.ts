@@ -4,8 +4,8 @@ import type { StructuredSummary, SummaryBullet } from "./summarizer.js";
 // Matches the Hebrew ## headings the prompt emits. Unknown headings (e.g.
 // "לפי משתתף") are intentionally ignored. actionItems has no heading of its own
 // in S3 — the field is reserved for a later slice and stays empty here.
-const HEADINGS: Record<string, "overview" | "topics" | "decisions" | "openQuestions"> = {
-  תקציר: "overview",
+const HEADINGS: Record<string, "tldr" | "topics" | "decisions" | "openQuestions"> = {
+  תקציר: "tldr",
   "נושאים עיקריים": "topics",
   "החלטות ומשימות": "decisions",
   "שאלות פתוחות": "openQuestions",
@@ -30,16 +30,16 @@ export function parseStructuredSummary(
 ): StructuredSummary {
   const result: StructuredSummary = {
     version: 2,
-    overview: "",
+    overview: raw, // full markdown — back-compat field, verbatim for copy
+    tldr: "",
     topics: [],
     decisions: [],
     openQuestions: [],
     actionItems: [],
-    raw,
   };
 
-  const overviewLines: string[] = [];
-  let current: "overview" | "topics" | "decisions" | "openQuestions" | null = null;
+  const tldrLines: string[] = [];
+  let current: "tldr" | "topics" | "decisions" | "openQuestions" | null = null;
   let sawHeading = false;
 
   for (const line of raw.split("\n")) {
@@ -51,9 +51,9 @@ export function parseStructuredSummary(
     }
     if (current === null) continue; // text before/under an unknown heading
 
-    if (current === "overview") {
+    if (current === "tldr") {
       const text = stripMarker(line.trim()).text;
-      if (text) overviewLines.push(text);
+      if (text) tldrLines.push(text);
       continue;
     }
 
@@ -64,8 +64,8 @@ export function parseStructuredSummary(
     result[current].push(toBullet(body, indexMap));
   }
 
-  // No recognized headings at all → the model ignored the format; keep the prose.
-  result.overview = sawHeading ? overviewLines.join(" ") : raw.trim();
+  // tldr = the ## תקציר body; when the model ignored the format, fall back to raw.
+  result.tldr = sawHeading ? tldrLines.join(" ") : raw.trim();
   return result;
 }
 

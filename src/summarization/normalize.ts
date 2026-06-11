@@ -8,30 +8,32 @@ import type { SummaryBullet, SummaryOutput } from "./summarizer.js";
  */
 export type NormalizedSummary = {
   version: 1 | 2;
+  /** Full markdown — backs "העתק סיכום" and the legacy render fallback. */
   overview: string;
+  /** TL;DR (## תקציר) — the new §3 card's summary section. */
+  tldr: string;
   topics: SummaryBullet[];
   decisions: SummaryBullet[];
   openQuestions: SummaryBullet[];
   actionItems: SummaryBullet[];
-  /** Verbatim markdown — backs "העתק סיכום" and the render fallback. */
-  raw: string;
 };
 
 /**
  * Normalize a stored {@link SummaryOutput} for rendering. Structured rows pass
  * through; legacy prose rows are sectioned best-effort (no source links) so old
- * history still renders with headings. Never throws.
+ * history still renders with headings. `overview` is always the full markdown.
+ * Never throws.
  */
 export function normalizeSummaryOutput(output: SummaryOutput): NormalizedSummary {
   if ("version" in output && output.version === 2) {
     return {
       version: 2,
       overview: output.overview,
+      tldr: output.tldr,
       topics: output.topics,
       decisions: output.decisions,
       openQuestions: output.openQuestions,
       actionItems: output.actionItems,
-      raw: output.raw,
     };
   }
 
@@ -41,11 +43,11 @@ export function normalizeSummaryOutput(output: SummaryOutput): NormalizedSummary
   const parsed = parseStructuredSummary(prose, new Map());
   return {
     version: 1,
-    overview: parsed.overview,
+    overview: prose,
+    tldr: parsed.tldr,
     topics: parsed.topics,
     decisions: parsed.decisions,
     openQuestions: parsed.openQuestions,
     actionItems: parsed.actionItems,
-    raw: prose,
   };
 }

@@ -28,20 +28,21 @@ describe("parseStructuredSummary", () => {
     const out = parseStructuredSummary(raw, idx);
 
     expect(out.version).toBe(2);
-    expect(out.overview).toBe("הצוות סיכם את שבוע העבודה והחליט על דדליין.");
+    expect(out.overview).toBe(raw); // full markdown retained for back-compat + copy
+    expect(out.tldr).toBe("הצוות סיכם את שבוע העבודה והחליט על דדליין.");
     expect(out.topics).toEqual([
       { text: "דנה העלתה את נושא התקציב", sourceMessageId: 1001 },
       { text: "יוסי דיווח על התקדמות בפיתוח", sourceMessageId: 1002 },
     ]);
     expect(out.decisions).toEqual([{ text: "הוחלט לשחרר ביום חמישי", sourceMessageId: 1003 }]);
     expect(out.openQuestions).toEqual([{ text: "מי אחראי על הבדיקות?" }]);
-    expect(out.raw).toBe(raw);
   });
 
   it("handles a sparse תקציר-only summary", () => {
     const raw = "## תקציר\nשיחה קצרה ללא החלטות.";
     const out = parseStructuredSummary(raw, idx);
-    expect(out.overview).toBe("שיחה קצרה ללא החלטות.");
+    expect(out.overview).toBe(raw);
+    expect(out.tldr).toBe("שיחה קצרה ללא החלטות.");
     expect(out.topics).toEqual([]);
     expect(out.decisions).toEqual([]);
     expect(out.openQuestions).toEqual([]);
@@ -60,19 +61,19 @@ describe("parseStructuredSummary", () => {
     expect(out.decisions).toEqual([{ text: "החלטה ללא מקור" }, { text: "בולט עם כוכבית" }]);
   });
 
-  it("never throws when the model ignored the format — overview = raw", () => {
+  it("never throws when the model ignored the format — tldr = raw", () => {
     const raw = "סתם טקסט חופשי ללא כותרות בכלל.";
     const out = parseStructuredSummary(raw, idx);
     expect(out.version).toBe(2);
-    expect(out.overview).toBe("סתם טקסט חופשי ללא כותרות בכלל.");
+    expect(out.overview).toBe(raw);
+    expect(out.tldr).toBe("סתם טקסט חופשי ללא כותרות בכלל.");
     expect(out.topics).toEqual([]);
-    expect(out.raw).toBe(raw);
   });
 
   it("ignores unknown sections like ## לפי משתתף", () => {
     const raw = "## תקציר\nתמצית.\n\n## לפי משתתף\n- דנה: משהו";
     const out = parseStructuredSummary(raw, idx);
-    expect(out.overview).toBe("תמצית.");
+    expect(out.tldr).toBe("תמצית.");
     expect(out.topics).toEqual([]);
     expect(out.decisions).toEqual([]);
   });

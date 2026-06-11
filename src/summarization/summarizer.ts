@@ -12,8 +12,13 @@ export type SummaryBullet = {
 /** Fielded summary (S3+). Discriminated by `version: 2`. */
 export type StructuredSummary = {
   version: 2;
-  /** 1–2 line TL;DR (## תקציר). Always present. */
+  /**
+   * The FULL markdown summary. Kept as the back-compat field every legacy reader
+   * (history UI, copy, catchup cache) already renders, and verbatim for "העתק סיכום".
+   */
   overview: string;
+  /** The ## תקציר TL;DR line — the new §3 card's summary section. */
+  tldr: string;
   /** נושאים עיקריים */
   topics: SummaryBullet[];
   /** החלטות ומשימות */
@@ -22,8 +27,6 @@ export type StructuredSummary = {
   openQuestions: SummaryBullet[];
   /** Explicit owner/task items (overlaps the meetings/to-dos slice). */
   actionItems: SummaryBullet[];
-  /** Verbatim model markdown — backs "העתק סיכום" + the render fallback. */
-  raw: string;
 };
 
 /** Legacy prose shape — rows written before S3. */
