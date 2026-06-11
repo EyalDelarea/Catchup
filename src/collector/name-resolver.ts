@@ -25,6 +25,17 @@ import { getLogger } from "../logging/log.js";
 
 const log = getLogger("name-resolver");
 
+/**
+ * A UNIQUE(tenant_id, name) collision (Postgres `23505`) is the expected outcome
+ * when two JIDs resolve to the same display name — the loser simply keeps its
+ * JID-name and a later directory event may resolve it differently. These are
+ * benign and high-volume, so they log at `debug`. Anything else (a DB outage, an
+ * `XX002` corrupt-index error, …) is unexpected and must stay visible at `warn`.
+ */
+function isBenignNameConflict(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: string }).code === "23505";
+}
+
 export type NameResolverDeps = {
   /** Fetch the WhatsApp group subject for a @g.us JID. Only called for @g.us. */
   groupSubject: (jid: string) => Promise<string>;
@@ -81,9 +92,11 @@ export async function resolveAllGroupNames(
       }
     } catch (err) {
       // One failure must never abort the batch (incl. UNIQUE name collisions).
-      // These are expected/benign, so log only the reason — not a full stack.
+      // Benign dup-name collisions are routine noise (debug); anything else is
+      // unexpected and stays at warn. Log only the reason — not a full stack.
       const reason = err instanceof Error ? err.message : String(err);
-      log.warn({ jid: whatsappId, reason }, "skipped");
+      const level = isBenignNameConflict(err) ? "debug" : "warn";
+      log[level]({ jid: whatsappId, reason }, "skipped");
     }
   }
 
@@ -152,8 +165,10 @@ async function applyName(
     return await updateDisplayName(pool, jid, name);
   } catch (err) {
     // Expected/benign (forbidden, item-not-found, name collision) — reason only.
+    // Dup-name collisions are routine (debug); unexpected errors stay at warn.
     const reason = err instanceof Error ? err.message : String(err);
-    log.warn({ jid, reason }, "directory update skipped");
+    const level = isBenignNameConflict(err) ? "debug" : "warn";
+    log[level]({ jid, reason }, "directory update skipped");
     return false;
   }
 }
