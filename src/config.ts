@@ -33,6 +33,20 @@ export type EmbeddingConfig = {
   model: string;
   /** Vector dimension the model emits — must match the message_embeddings column. */
   dimension: number;
+  /**
+   * When true, `serve` runs a periodic embedding backfill so newly-arrived messages
+   * become semantically searchable without a manual `embed-backfill`. Default true.
+   */
+  autoEmbed: boolean;
+  /**
+   * Comma-separated HH:MM times (local) for the auto-embed pass. Default
+   * "03:00,15:00" — twice daily, off-peak, recent-first.
+   */
+  autoEmbedTimes: string;
+  /** Max messages embedded per auto-embed run (caps compute per tick). Default 2000. */
+  autoEmbedLimit: number;
+  /** Messages per model call within a run. Default 32. */
+  autoEmbedBatchSize: number;
 };
 
 export type WebConfig = {
@@ -184,6 +198,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       ollamaHost: env.OLLAMA_HOST ?? "http://localhost:11434",
       model: env.EMBEDDING_MODEL ?? "bge-m3",
       dimension: Number(env.EMBEDDING_DIM ?? 1024),
+      autoEmbed: env.AUTO_EMBED !== "false",
+      autoEmbedTimes: env.AUTO_EMBED_TIMES ?? "03:00,15:00",
+      autoEmbedLimit: Number(env.AUTO_EMBED_LIMIT ?? 2000),
+      autoEmbedBatchSize: Number(env.AUTO_EMBED_BATCH_SIZE ?? 32),
     },
     vision: {
       model: env.VISION_MODEL ?? "gemma4:26b",

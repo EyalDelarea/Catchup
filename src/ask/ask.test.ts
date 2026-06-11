@@ -77,7 +77,10 @@ describe("ask", () => {
       {
         summarizer: fakeSummarizer("ok [1]."),
         retrievers: [fakeRetriever(many)],
-        tokenBudget: 200,
+        // Tiny budget, sized to the prompt: with this candidate size the assembled
+        // prompt is ~245 tokens for 1 candidate and ~576 for all 5, so 400 forces a
+        // partial trim (keeps the top few, drops the rest).
+        tokenBudget: 400,
       },
       "שאלה",
       NOW,
