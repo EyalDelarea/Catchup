@@ -95,10 +95,10 @@ export async function register(
     );
     userId = user.id;
   } catch (err) {
-    // Roll the just-created tenant back so a taken email leaves no orphan tenant.
-    if (err instanceof EmailTakenError) {
-      await deps.operatorPool.query(`DELETE FROM tenants WHERE id = $1`, [tenant.id]);
-    }
+    // Roll the just-created tenant back so ANY failure to create its owner user leaves
+    // no orphan tenant — a taken email, but also transient DB errors. The cleanup is
+    // best-effort so it never masks the original failure.
+    await deps.operatorPool.query(`DELETE FROM tenants WHERE id = $1`, [tenant.id]).catch(() => {});
     throw err;
   }
 

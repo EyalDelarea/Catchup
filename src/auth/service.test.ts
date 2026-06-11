@@ -126,6 +126,21 @@ describe("registration", () => {
     expect(after.rows[0].n).toBe(before.rows[0].n); // no orphan tenant left behind
   });
 
+  it("rolls back the tenant when user creation fails for a non-EmailTaken reason", async () => {
+    const before = await op.query("SELECT count(*)::int AS n FROM tenants");
+    // A broken app pool makes withTenant() throw a generic (non-EmailTaken) error after
+    // the tenant has already been provisioned on the operator pool.
+    const brokenDeps: AuthDeps = {
+      ...deps,
+      appPool: { connect: () => Promise.reject(new Error("db down")) } as unknown as pg.Pool,
+    };
+    await expect(
+      register(brokenDeps, { email: "rollback@acme.test", password: "pw-12345678", consent: true }),
+    ).rejects.toThrow(/db down/);
+    const after = await op.query("SELECT count(*)::int AS n FROM tenants");
+    expect(after.rows[0].n).toBe(before.rows[0].n); // tenant rolled back, no orphan
+  });
+
   it("isolates two registrations into distinct tenants", async () => {
     const a = await register(deps, { email: "a@t.test", password: "pw-12345678", consent: true });
     const b = await register(deps, { email: "b@t.test", password: "pw-12345678", consent: true });
