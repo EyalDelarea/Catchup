@@ -10,7 +10,12 @@ export type ScopeCategory = {
 
 const SYSTEM_CATEGORIES = ["עבודה", "אישי", "לקוחות"];
 
-function mapRow(r: { id: string; name: string; is_system: boolean; sort_order: number }): ScopeCategory {
+function mapRow(r: {
+  id: string;
+  name: string;
+  is_system: boolean;
+  sort_order: number;
+}): ScopeCategory {
   return { id: Number(r.id), name: r.name, isSystem: r.is_system, sortOrder: r.sort_order };
 }
 
@@ -56,10 +61,7 @@ export async function createCategory(
     name: string;
     is_system: boolean;
     sort_order: number;
-  }>(
-    `SELECT id, name, is_system, sort_order FROM scope_categories WHERE name = $1`,
-    [name],
-  );
+  }>(`SELECT id, name, is_system, sort_order FROM scope_categories WHERE name = $1`, [name]);
   return mapRow(existing.rows[0]!);
 }
 
