@@ -284,12 +284,21 @@ async function issueEmailToken(
     }),
   );
   const link = `${deps.publicBaseUrl}/${path}?token=${rawToken}`;
-  // Look the user's email up on the operator pool (pre/non-tenant-bound send).
-  const user = await getUserEmail(deps, tenantId, userId);
-  await deps.mailer.send(user, subject, `${subject}\n\n${link}\n`);
+  // Resolve the recipient. Reaching here with no email means the just-issued token's
+  // user can't be loaded — a real inconsistency; fail fast rather than mailing an empty
+  // address (which a downstream SMTP transport would reject or silently drop).
+  const email = await getUserEmail(deps, tenantId, userId);
+  if (!email) {
+    throw new Error(`cannot send ${kind} email: no resolvable recipient for user ${userId}`);
+  }
+  await deps.mailer.send(email, subject, `${subject}\n\n${link}\n`);
 }
 
-async function getUserEmail(deps: AuthDeps, tenantId: string, userId: string): Promise<string> {
+async function getUserEmail(
+  deps: AuthDeps,
+  tenantId: string,
+  userId: string,
+): Promise<string | null> {
   const u = await withTenant(deps.appPool, tenantId, (c) => getUserById(c, userId));
-  return u?.email ?? "";
+  return u?.email ?? null;
 }
