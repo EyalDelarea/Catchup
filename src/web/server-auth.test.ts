@@ -38,12 +38,23 @@ afterAll(async () => {
   await op?.end();
 });
 
+const onboardingStarts: string[] = [];
+const fakeRegistry = {
+  start: async (tenantId: string): Promise<void> => {
+    onboardingStarts.push(tenantId);
+  },
+  snapshot: () => [],
+  on: () => {},
+  off: () => {},
+};
+
 function startServer(authRequired: boolean): Promise<{ base: string; server: http.Server }> {
   const server = createServer({
     pool: app,
     summarizer: new FakeSummarizer(),
     tokenBudget: 24000,
     model: "fake",
+    onboarding: fakeRegistry,
     auth: {
       deps: {
         appPool: app,
@@ -93,12 +104,28 @@ describe("multi-tenant mode (auth required)", () => {
   it("gates /api/* behind a session (401 without one) but leaves auth + SPA pages open", async () => {
     expect((await fetch(`${base}/api/groups`)).status).toBe(401);
     expect((await fetch(`${base}/api/status`)).status).toBe(401);
+    expect((await fetch(`${base}/api/onboarding/status`)).status).toBe(401); // T4 gated too
     const me = await fetch(`${base}/api/auth/me`);
     expect(me.status).toBe(401); // auth route answers itself, not the gate
     const home = await fetch(`${base}/`);
     expect(home.status).toBe(200);
     expect((await fetch(`${base}/verify`)).status).toBe(200); // emailed-link landing page = SPA
     expect((await fetch(`${base}/reset`)).status).toBe(200);
+  });
+
+  it("onboarding link starts the session for the AUTHENTICATED tenant only (T4)", async () => {
+    onboardingStarts.length = 0;
+    const cookie = await registerAndGetCookie(base, "onboard@live.test");
+    const me = (await (await fetch(`${base}/api/auth/me`, { headers: { cookie } })).json()) as {
+      tenantId: string;
+    };
+
+    const r = await fetch(`${base}/api/onboarding/link`, {
+      method: "POST",
+      headers: { cookie },
+    });
+    expect(r.status).toBe(202);
+    expect(onboardingStarts).toEqual([me.tenantId]);
   });
 
   it("isolates tenants end-to-end through the live request path", async () => {

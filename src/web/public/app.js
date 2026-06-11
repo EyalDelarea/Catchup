@@ -1212,12 +1212,83 @@ async function authGate() {
     return false;
   }
   const me = await fetch("/api/auth/me").catch(() => null);
-  if (me && me.ok) return true;
+  if (me && me.ok) {
+    // Authenticated (multi-tenant): the tenant must have a linked WhatsApp session
+    // before the app is useful. Gate on onboarding status; show the QR pane if not.
+    const ob = await fetch("/api/onboarding/status").catch(() => null);
+    if (ob && ob.ok) {
+      const { status } = await ob.json();
+      if (status !== "connected") {
+        renderOnboarding(status);
+        return false;
+      }
+    }
+    return true;
+  }
   // No session. Distinguish single-user (APIs open) from multi-tenant (gated).
   const probe = await fetch("/api/status").catch(() => null);
   if (probe && probe.status !== 401) return true;
   renderAuthPane("login");
   return false;
+}
+
+/**
+ * T4 onboarding pane: link a WhatsApp account by scanning a QR. Opens the
+ * /api/onboarding/qr SSE stream (server renders the QR to a data URL); when the
+ * session reports "connected" we reload into the app.
+ */
+function renderOnboarding(initialStatus) {
+  authShell(`
+    <p class="auth-card__sub">כדי להתחיל, חברו את חשבון הוואטסאפ שלכם.</p>
+    <div id="qr-box" class="qr-box" aria-live="polite">
+      <div class="qr-spinner" aria-hidden="true"></div>
+      <p id="qr-hint" class="qr-hint">מכינים קוד QR…</p>
+    </div>
+    <ol class="qr-steps">
+      <li>פתחו וואטסאפ בטלפון → הגדרות → מכשירים מקושרים</li>
+      <li>הקישו "קישור מכשיר" וסרקו את הקוד שלמעלה</li>
+    </ol>
+    <p id="qr-status" class="qr-status"></p>
+    <button type="button" id="auth-logout" class="auth-link">התנתקות</button>
+  `);
+  const logout = document.getElementById("auth-logout");
+  if (logout)
+    logout.onclick = async () => {
+      await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+      location.href = "/";
+    };
+
+  if (initialStatus === "logged-out" || initialStatus === "failed") {
+    setOnboardingStatus(
+      initialStatus === "logged-out"
+        ? "החיבור נותק. סרקו שוב כדי לקשר מחדש."
+        : "החיבור נכשל. מנסים שוב…",
+    );
+  }
+
+  const es = new EventSource("/api/onboarding/qr");
+  activeEventSource = es;
+  es.addEventListener("qr", (e) => {
+    const { dataUrl } = JSON.parse(e.data);
+    const box = document.getElementById("qr-box");
+    if (box && dataUrl) {
+      box.innerHTML = `<img class="qr-img" src="${dataUrl}" alt="קוד QR לקישור וואטסאפ" width="264" height="264" />`;
+    }
+  });
+  es.addEventListener("connected", () => {
+    es.close();
+    setOnboardingStatus("✅ מחובר! טוען את האפליקציה…");
+    setTimeout(() => location.reload(), 800);
+  });
+  es.addEventListener("logged-out", () => {
+    setOnboardingStatus("הקישור נדחה. רעננו ונסו שוב.");
+  });
+  es.onerror = () => setOnboardingStatus("שגיאת חיבור לשרת. רעננו את הדף.");
+}
+
+function setOnboardingStatus(text) {
+  const el = document.getElementById("qr-status");
+  if (el) el.textContent = text;
 }
 
 function authShell(innerHtml) {

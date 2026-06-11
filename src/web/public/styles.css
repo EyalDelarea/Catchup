@@ -2254,3 +2254,68 @@ body::after {
   padding: 0;
   align-self: flex-start;
 }
+
+/* ── T4 onboarding (link WhatsApp via QR) ─────────────────────────────────── */
+
+.auth-card__sub {
+  margin: 0;
+  font-size: 0.95rem;
+  text-align: center;
+  opacity: 0.85;
+}
+
+.qr-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 264px;
+  padding: 16px;
+  background: #ffffff;
+  border-radius: 14px;
+}
+
+.qr-img {
+  display: block;
+  width: 264px;
+  height: 264px;
+  image-rendering: pixelated;
+}
+
+.qr-hint {
+  margin: 0;
+  color: #04121f;
+  font-size: 0.9rem;
+}
+
+.qr-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(4, 18, 31, 0.2);
+  border-top-color: #04121f;
+  border-radius: 50%;
+  animation: qr-spin 0.8s linear infinite;
+}
+
+@keyframes qr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.qr-steps {
+  margin: 4px 0 0;
+  padding-inline-start: 20px;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  opacity: 0.85;
+}
+
+.qr-status {
+  margin: 0;
+  text-align: center;
+  font-size: 0.9rem;
+  color: var(--accent);
+  min-height: 1.2em;
+}

@@ -25,6 +25,7 @@ import type { Selection } from "../summarization/select.js";
 import type { StreamingSummarizer } from "../summarization/summarizer.js";
 import { generateTotalSummary } from "../summarization/total-summary.js";
 import { makeAuthRoutes } from "./auth-routes.js";
+import { makeOnboardingRoutes, type OnboardingRegistry } from "./onboarding-routes.js";
 import { sseFrame } from "./sse.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -70,6 +71,12 @@ export type ServerDeps = {
     cookieSecure: boolean;
     required: boolean;
   };
+  /**
+   * T4 onboarding: the per-tenant WhatsApp session registry. When present, the
+   * /api/onboarding/* endpoints (QR stream + link + status) are served, scoped to the
+   * authenticated tenant. Absent → onboarding endpoints 404 (single-user CLI linking).
+   */
+  onboarding?: OnboardingRegistry;
 };
 
 /** SPA entry pages: / plus the landing paths used in verify/reset emails. */
@@ -78,6 +85,9 @@ const SPA_PATHS = new Set(["/", "/verify", "/reset"]);
 export function createServer(deps: ServerDeps): http.Server {
   const authRoutes = deps.auth
     ? makeAuthRoutes({ deps: deps.auth.deps, cookieSecure: deps.auth.cookieSecure })
+    : null;
+  const onboardingRoutes = deps.onboarding
+    ? makeOnboardingRoutes({ registry: deps.onboarding })
     : null;
 
   const handleRequest = async (
@@ -109,6 +119,9 @@ export function createServer(deps: ServerDeps): http.Server {
         }
         tenantId = session.tenantId;
       }
+      // Onboarding talks to the registry, not the DB pool — route it with the raw
+      // tenantId before the pool-scoped dispatch.
+      if (onboardingRoutes && (await onboardingRoutes.handle(req, res, url, tenantId))) return;
       const scoped: ServerDeps = { ...deps, pool: scopedPool(deps.pool, () => tenantId) };
       dispatchApi(url, req, res, scoped);
       return;
