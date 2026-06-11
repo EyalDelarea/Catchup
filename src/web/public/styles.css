@@ -1837,7 +1837,24 @@ body::after {
 }
 .brand { order: 0; flex: 1 1 60%; }
 #top-bar .health-pill { order: 1; flex: 0 0 auto; align-self: flex-start; }
+#top-bar .theme-toggle { order: 1; flex: 0 0 auto; align-self: flex-start; }
 .core { order: 2; flex: 1 1 100%; display: flex; gap: 11px; margin-top: 4px; }
+
+/* ── בהיר/כהה theme toggle ──────────────────────────────── */
+.theme-toggle {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 40px;
+  block-size: 40px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.18s cubic-bezier(0.4, 0, 0.2, 1), color 0.18s;
+}
+.theme-toggle:hover { background: var(--hover); color: var(--ink); }
+.theme-toggle .ic { display: block; }
 
 /* ── Core-features twin cards ───────────────────────────── */
 .feat {
