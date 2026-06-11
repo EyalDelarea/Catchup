@@ -1,6 +1,7 @@
 import type http from "node:http";
 import { listMeetings, listTodos, setTodoDone } from "../../db/repositories/agenda.js";
 import { listPeople } from "../../db/repositories/people.js";
+import { buildIcs } from "../../summarization/build-ics.js";
 import type { ServerDeps } from "./context.js";
 import { readJsonBody } from "./scopes.js";
 
@@ -44,6 +45,30 @@ export async function handleMeetings(
   } catch {
     res.writeHead(500, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "Failed to load meetings." }));
+  }
+}
+
+/**
+ * GET /api/meetings.ics — the LOCAL agenda as a downloadable iCalendar file (S8).
+ * The constitution-safe alternative to outbound calendar sync: the user imports
+ * this into any calendar themselves; nothing leaves the box automatically.
+ */
+export async function handleMeetingsIcs(
+  _url: URL,
+  res: http.ServerResponse,
+  deps: ServerDeps,
+): Promise<void> {
+  try {
+    const meetings = await listMeetings(deps.pool);
+    const ics = buildIcs(meetings, new Date());
+    res.writeHead(200, {
+      "content-type": "text/calendar; charset=utf-8",
+      "content-disposition": 'attachment; filename="catchapp.ics"',
+    });
+    res.end(ics);
+  } catch {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "Failed to export calendar." }));
   }
 }
 
