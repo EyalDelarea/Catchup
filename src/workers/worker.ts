@@ -54,6 +54,7 @@ const PREFETCH_ONE_TYPES = new Set<JobType>([
   "analyze.video",
   "summarize.group",
   "summarize.total",
+  "suggest.generate",
 ]);
 
 /**
@@ -422,6 +423,37 @@ async function main(): Promise<void> {
         ),
       insertTotalSummary,
       model: config.summarization.model,
+      // S6: chain typed-suggestion generation off the committed aggregate.
+      enqueueSuggestGenerate: async (totalSummaryId, tenantId) => {
+        await bus.enqueue("suggest.generate", { totalSummaryId, tenantId });
+      },
+    });
+  }
+
+  if (requestedTypes.includes("suggest.generate")) {
+    const { makeSuggestGenerateHandler } = await import("./handlers/suggest-generate.js");
+    const { getTotalSummaryById } = await import("../db/repositories/total-summaries.js");
+    const { listIncludedGroupIds } = await import("../db/repositories/chat-scopes.js");
+    const { getPreferences } = await import("../db/repositories/user-preferences.js");
+    const { insertSuggestions, loadBias } = await import("../db/repositories/suggestions.js");
+    const { makeOllamaExtractor } = await import("../summarization/suggest-extractor.js");
+    const { OllamaSummarizer } = await import("../summarization/summarizer.js");
+    const suggestSummarizer = new OllamaSummarizer({
+      host: config.summarization.ollamaHost,
+      model: config.summarization.model,
+      numCtx: config.summarization.numCtx,
+      temperature: config.summarization.temperature,
+      repeatPenalty: config.summarization.repeatPenalty,
+      numPredict: config.summarization.numPredict,
+    });
+    handlers["suggest.generate"] = makeSuggestGenerateHandler({
+      pool,
+      loadPerChat: async (p, id) => (await getTotalSummaryById(p, id))?.output.perChat ?? [],
+      loadIncludedGroupIds: (p) => listIncludedGroupIds(p),
+      loadEngineConfigRaw: async (p) => (await getPreferences(p))?.engineConfig ?? {},
+      loadBias: (p) => loadBias(p),
+      extract: makeOllamaExtractor(suggestSummarizer),
+      insertSuggestions,
     });
   }
 
