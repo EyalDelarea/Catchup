@@ -3,6 +3,8 @@ import { findGroupByName } from "../../db/repositories/groups.js";
 import { countReadableByGroup, getOldestSentAt } from "../../db/repositories/messages.js";
 import { upsertWatermark } from "../../db/repositories/read-watermarks.js";
 import { insertSummary } from "../../db/repositories/summaries.js";
+import { normalizeSummaryOutput } from "../../summarization/normalize.js";
+import { parseStructuredSummary } from "../../summarization/parse-structured.js";
 import { prepareSummary } from "../../summarization/prepare.js";
 import { prepareCatchup } from "../../summarization/prepare-catchup.js";
 import { persistCatchupResult } from "../../summarization/run-summary.js";
@@ -117,6 +119,8 @@ export async function handleSummarize(
       }
       // Guard: if the client disconnected, do NOT commit partial summary or advance watermark.
       if (ac.signal.aborted) return;
+      // Parse the streamed prose into the fielded schema once, at completion.
+      const structured = parseStructuredSummary(full, prepared.indexMap);
       // Commit only after the stream completes successfully.
       // Shared persist helper: summary row first, watermark second (no partial state).
       const summaryId = await persistCatchupResult({
@@ -124,7 +128,7 @@ export async function handleSummarize(
         groupId: prepared.groupId,
         summaryType: prepared.summaryType,
         parameters: prepared.parameters,
-        fullText: full,
+        output: structured,
         model: deps.model,
         newWatermark: prepared.newWatermark,
         insertSummary,
@@ -142,6 +146,7 @@ export async function handleSummarize(
       );
       send("done", {
         summaryId,
+        summary: normalizeSummaryOutput(structured),
         elapsedMs: Date.now() - start,
         messageCount: prepared.messageCount,
         usedFallback: prepared.usedFallback,
@@ -199,11 +204,12 @@ export async function handleSummarize(
     }
     // Guard: if the client disconnected, do NOT commit partial summary.
     if (ac.signal.aborted) return;
+    const structured = parseStructuredSummary(full, prepared.indexMap);
     const summaryId = await insertSummary(deps.pool, {
       groupId: prepared.groupId,
       summaryType: prepared.summaryType,
       parameters: prepared.parameters,
-      output: { overview: full.trim() },
+      output: structured,
       model: deps.model,
     });
     deps.logger?.info(
@@ -218,6 +224,7 @@ export async function handleSummarize(
     );
     send("done", {
       summaryId,
+      summary: normalizeSummaryOutput(structured),
       elapsedMs: Date.now() - start,
       fetchMs,
       summarizeMs: Date.now() - start,

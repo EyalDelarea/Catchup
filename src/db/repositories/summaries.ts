@@ -37,7 +37,7 @@ export type SummaryRow = {
   id: number;
   summaryType: string;
   parameters: Record<string, unknown>;
-  output: { overview: string };
+  output: SummaryOutput;
   model: string;
   createdAt: Date;
 };
@@ -54,7 +54,7 @@ export async function listSummariesByGroup(
     id: string;
     summary_type: string;
     parameters: Record<string, unknown>;
-    output: { overview: string };
+    output: SummaryOutput;
     model: string;
     created_at: Date;
   }>(

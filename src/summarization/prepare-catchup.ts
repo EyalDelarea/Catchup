@@ -21,6 +21,8 @@ export type PreparedCatchup =
       kind: "ready";
       groupId: number;
       prompt: SummaryPrompt;
+      /** line-index → messages.id, for resolving the model's `^N` source markers. */
+      indexMap: Map<number, number>;
       summaryType: "watermark";
       parameters: {
         fromExclusive: { sentAt: string; messageId: number } | null;
@@ -144,6 +146,7 @@ export async function prepareCatchup(
     kind: "ready",
     groupId: group.id,
     prompt,
+    indexMap: prompt.indexMap,
     summaryType: "watermark",
     parameters,
     messageCount: range.length,

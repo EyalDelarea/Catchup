@@ -23,6 +23,34 @@ describe("buildPrompt", () => {
     expect(user).toContain("מי מביא אוהל?");
   });
 
+  describe("source-line indexing", () => {
+    it("prefixes each transcript line with a 1-based [#N] index", () => {
+      const { user } = buildPrompt(msgs);
+      expect(user).toContain("[#1] ");
+      expect(user).toContain("[#2] ");
+    });
+
+    it("maps each index to its messages.id when present", () => {
+      const withIds = [
+        { ...msgs[0]!, messageId: 5001 },
+        { ...msgs[1]!, messageId: 5002 },
+      ];
+      const { indexMap } = buildPrompt(withIds);
+      expect(indexMap.get(1)).toBe(5001);
+      expect(indexMap.get(2)).toBe(5002);
+    });
+
+    it("leaves indexMap empty when messages carry no messageId", () => {
+      expect(buildPrompt(msgs).indexMap.size).toBe(0);
+    });
+
+    it("instructs the model to tag bullets with ^N source markers", () => {
+      const { system } = buildPrompt(msgs);
+      expect(system).toContain("^N");
+      expect(system).toContain("[#N]");
+    });
+  });
+
   describe("BASE_INSTRUCTIONS — section contract", () => {
     it("instructs the model to produce a Hebrew markdown summary with ## headings", () => {
       const { system } = buildPrompt(msgs);

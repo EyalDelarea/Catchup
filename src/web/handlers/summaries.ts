@@ -1,6 +1,7 @@
 import type http from "node:http";
 import { findGroupByName } from "../../db/repositories/groups.js";
 import { listSummariesByGroup } from "../../db/repositories/summaries.js";
+import { normalizeSummaryOutput } from "../../summarization/normalize.js";
 import type { ServerDeps } from "./context.js";
 
 export async function handleSummaries(
@@ -33,7 +34,10 @@ export async function handleSummaries(
       id: s.id,
       summaryType: s.summaryType,
       parameters: s.parameters,
-      output: s.output,
+      // Normalize so the client always gets a consistent shape: structured rows
+      // pass through; legacy prose rows are sectioned best-effort. `output.overview`
+      // stays the full markdown, so existing readers are unaffected.
+      output: normalizeSummaryOutput(s.output),
       model: s.model,
       createdAt: s.createdAt.toISOString(),
     }));

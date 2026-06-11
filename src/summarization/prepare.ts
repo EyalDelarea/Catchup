@@ -10,6 +10,8 @@ export type PreparedSummary =
       kind: "ready";
       groupId: number;
       prompt: SummaryPrompt;
+      /** line-index → messages.id, for resolving the model's `^N` source markers. */
+      indexMap: Map<number, number>;
       summaryType: "last_n" | "since";
       parameters: Record<string, unknown>;
       messageCount: number;
@@ -51,6 +53,7 @@ export async function prepareSummary(
     kind: "ready",
     groupId: group.id,
     prompt,
+    indexMap: prompt.indexMap,
     summaryType,
     parameters,
     messageCount: messages.length,
