@@ -2098,7 +2098,75 @@ body::after {
 @keyframes ama-pending-pulse { 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) { .ama-bubble--pending { animation: none; } }
 .ama-bubble__err { display: block; margin-top: 6px; font-size: var(--text-xs); color: #f87171; }
-.ama-src { display: inline-block; margin-inline-end: 10px; }
+/* citation chips are now buttons that jump to the source message */
+.ama-src {
+  display: inline-block;
+  margin-inline-end: 8px;
+  margin-block-start: 4px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--accent-ink);
+  background: var(--accent-weak);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.ama-src:hover { background: var(--surface-2); border-color: var(--accent); }
+
+/* suggestion chips above the Ask input */
+.ama-suggest { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 8px 4px; }
+.ama-suggest__chip {
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.ama-suggest__chip:hover { background: var(--hover); color: var(--ink); }
+
+/* ── Thread view (Ask source-jump) ──────────────────────── */
+.thread-panel { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+.thread-head { display: flex; align-items: center; gap: 10px; }
+.thread-head__title { font-weight: 700; color: var(--ink); }
+.thread-head__src {
+  margin-inline-start: auto;
+  font-size: var(--text-sm);
+  color: var(--accent-ink);
+  background: var(--accent-weak);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+.thread-loading { color: var(--muted); }
+.thread-msgs { display: flex; flex-direction: column; gap: 8px; }
+.cmsg {
+  max-inline-size: 80%;
+  padding: 8px 11px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.cmsg--me { margin-inline-start: auto; background: var(--accent-weak); }
+.cmsg--them { margin-inline-end: auto; }
+.cmsg__meta { font-size: var(--text-xs); color: var(--muted); margin-block-end: 2px; }
+.cmsg__text { color: var(--ink); white-space: pre-wrap; }
+.cmsg__tag {
+  display: inline-block;
+  margin-block-start: 4px;
+  font-size: var(--text-xs);
+  color: var(--accent-ink);
+}
+.cmsg--hl { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-weak); }
+@media (prefers-reduced-motion: no-preference) {
+  .cmsg--pulse { animation: srcPulse 1.2s cubic-bezier(0.4, 0, 0.2, 1) 1; }
+  @keyframes srcPulse {
+    0%, 100% { box-shadow: 0 0 0 2px var(--accent-weak); }
+    35% { box-shadow: 0 0 0 6px var(--accent-weak); }
+  }
+}
 .ama-input {
   display: flex; align-items: center; gap: 8px;
   margin-top: 14px;

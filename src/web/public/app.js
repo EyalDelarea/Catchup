@@ -14,7 +14,7 @@
  * Teardown: EventSource is closed when leaving a streaming view
  */
 
-import { askStream, getGroups, getStatus, getSummaries, summarizeStream } from "./lib/api.js";
+import { askStream, getGroups, getMessages, getStatus, getSummaries, summarizeStream } from "./lib/api.js";
 import { formatAgo, presetToSince, validateRangeInput } from "./lib/time.js";
 import { renderMarkdown } from "./lib/markdown.js";
 import { deriveHealth } from "./lib/health.js";
@@ -89,6 +89,13 @@ function navigate(view, arg) {
     const hash = arg ? `#ama=${encodeURIComponent(arg)}` : "#ama";
     history.pushState({ view: "ama", scope: arg ?? null }, "", hash);
     renderAma(arg ?? null);
+  } else if (view === "thread" && arg) {
+    history.pushState(
+      { view: "thread", chat: arg.chat, aroundId: arg.aroundId },
+      "",
+      `#thread=${encodeURIComponent(arg.chat)}&m=${arg.aroundId}`,
+    );
+    renderThread(arg.chat, arg.aroundId);
   } else {
     history.pushState({ view: "feed" }, "", location.pathname);
     setView("feed");
@@ -105,6 +112,8 @@ window.addEventListener("popstate", (e) => {
     renderTotal(false);
   } else if (state?.view === "ama") {
     renderAma(state.scope ?? null);
+  } else if (state?.view === "thread" && state.chat) {
+    renderThread(state.chat, state.aroundId);
   } else {
     setView("feed");
     markActiveRow(null);
@@ -1067,6 +1076,7 @@ function renderAma(scope) {
       <div class="ama-messages" id="ama-messages" aria-live="polite">
         <div class="ama-empty">${scope ? "שאל כל שאלה על הצ׳אט הזה ✨" : "שאל כל שאלה על השיחות שלך ✨"}</div>
       </div>
+      ${amaSuggestHtml(scope)}
       <form class="ama-input" id="ama-form">
         <input id="ama-q" class="ama-input__field" type="text" placeholder="שאל שאלה…"
           aria-label="שאלה" autocomplete="off" />
@@ -1085,6 +1095,40 @@ function renderAma(scope) {
     e.preventDefault();
     submitAmaQuestion(scope);
   });
+
+  // Delegate citation clicks (chips are re-rendered on every token) → source jump.
+  document.getElementById("ama-messages")?.addEventListener("click", (e) => {
+    const chip = e.target.closest?.(".ama-src");
+    if (!chip) return;
+    const chat = chip.dataset.chat;
+    const id = Number(chip.dataset.id);
+    if (chat && Number.isFinite(id)) navigate("thread", { chat, aroundId: id });
+  });
+
+  // Suggestion chips fill the box and submit.
+  for (const chip of document.querySelectorAll(".ama-suggest__chip")) {
+    chip.addEventListener("click", () => {
+      const input = document.getElementById("ama-q");
+      if (input) input.value = chip.dataset.q || chip.textContent || "";
+      submitAmaQuestion(scope);
+    });
+  }
+}
+
+/** Starter prompts shown above the input on the global Ask, before any question. */
+const AMA_SUGGESTIONS = [
+  "מה הכי דחוף מכל השיחות שלי?",
+  "מה פספסתי היום?",
+  "אילו החלטות פתוחות צריך לסגור?",
+];
+
+/** Suggestion-chip row — only on the global Ask with an empty thread. */
+function amaSuggestHtml(scope) {
+  if (scope || amaConversation.messages.length) return "";
+  const chips = AMA_SUGGESTIONS.map(
+    (q) => `<button type="button" class="ama-suggest__chip" data-q="${escHtml(q)}">${escHtml(q)}</button>`,
+  ).join("");
+  return `<div class="ama-suggest">${chips}</div>`;
 }
 
 /** No SSE activity for this long → treat the request as stuck and surface it. */
@@ -1099,6 +1143,7 @@ function submitAmaQuestion(scope) {
   const reply = beginQuestion(amaConversation, q);
   if (!reply) return;
   if (input) input.value = "";
+  document.querySelector(".ama-suggest")?.remove();
   renderAmaMessages();
   saveConversation(amaStorage(), amaScope, amaConversation);
 
@@ -1158,13 +1203,72 @@ function renderAmaMessages() {
   el.scrollTop = el.scrollHeight;
 }
 
-/** Render the resolved [n] citations under an answer bubble. */
+/** Render the resolved [n] citations under an answer bubble. Each chip is a
+ *  button that jumps to the cited message in its chat thread. */
 function renderAmaSources(citations) {
   if (!citations?.length) return "";
   const items = citations.map((c) =>
-    `<span class="ama-src">[${c.n}] ${escHtml(c.sender)} · ${escHtml(formatGroupName(c.chat))} · ${escHtml(fmtTime(c.sentAt))}</span>`
+    `<button type="button" class="ama-src" data-chat="${escHtml(c.chat)}" data-id="${c.messageId}">` +
+    `[${c.n}] ${escHtml(c.sender)} · ${escHtml(formatGroupName(c.chat))} · ` +
+    `<span dir="ltr">${escHtml(fmtTime(c.sentAt))}</span></button>`
   ).join("");
   return `<span class="ama-bubble__src">↳ ${items}</span>`;
+}
+
+/* ── 7b. Thread view (Ask source-jump) ───────────────────── */
+
+/**
+ * Render a chat thread windowed around a cited message and pulse the source.
+ * Reuses the single-pane (ama) layout slot. Back returns via history.
+ * @param {string} chat — group name
+ * @param {number} aroundId — cited message id to center + pulse
+ */
+async function renderThread(chat, aroundId) {
+  teardownStream();
+  setView("ama");
+  paneMain.innerHTML = `
+    <div class="thread-panel">
+      <div class="thread-head">
+        <button class="back-btn" id="thread-back" aria-label="חזרה">
+          <span class="back-btn__arrow" aria-hidden="true">›</span> חזרה
+        </button>
+        <div class="thread-head__title">${escHtml(formatGroupName(chat))}</div>
+        <span class="thread-head__src">מקור מקושר</span>
+      </div>
+      <div class="thread-msgs" id="thread-msgs"><p class="thread-loading">טוען שיחה…</p></div>
+    </div>`;
+  document.getElementById("thread-back")?.addEventListener("click", () => history.back());
+
+  let rows = [];
+  try {
+    rows = await getMessages({ chat, aroundId, limit: 24 });
+  } catch {
+    const box = document.getElementById("thread-msgs");
+    if (box) box.innerHTML = `<p class="error-state">שגיאה בטעינת השיחה.</p>`;
+    return;
+  }
+  const box = document.getElementById("thread-msgs");
+  if (!box) return; // navigated away while loading
+  if (!rows.length) {
+    box.innerHTML = `<p class="empty-state">לא נמצאו הודעות.</p>`;
+    return;
+  }
+  box.innerHTML = rows
+    .map((m) => {
+      const side = m.fromMe ? "cmsg--me" : "cmsg--them";
+      const hl = m.id === aroundId ? " cmsg--hl" : "";
+      const tag = m.id === aroundId ? `<span class="cmsg__tag">מקור הסיכום</span>` : "";
+      return `<div class="cmsg ${side}${hl}" data-id="${m.id}">
+        <div class="cmsg__meta">${escHtml(m.sender)} · <span dir="ltr">${escHtml(fmtTime(m.sentAt))}</span></div>
+        <div class="cmsg__text">${escHtml(m.text)}</div>${tag}
+      </div>`;
+    })
+    .join("");
+  const target = box.querySelector(".cmsg--hl");
+  if (target) {
+    target.scrollIntoView({ block: "center" });
+    target.classList.add("cmsg--pulse");
+  }
 }
 
 /* ── 8. Helpers ──────────────────────────────────────────── */

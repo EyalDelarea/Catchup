@@ -9,6 +9,7 @@ import { makeAuthRoutes } from "./auth-routes.js";
 import { handleAsk } from "./handlers/ask.js";
 import type { ServerDeps } from "./handlers/context.js";
 import { handleGroups } from "./handlers/groups.js";
+import { handleMessages } from "./handlers/messages.js";
 import { handleStatus } from "./handlers/status.js";
 import { handleSummaries } from "./handlers/summaries.js";
 import { handleSummarize } from "./handlers/summarize.js";
@@ -151,6 +152,10 @@ function dispatchApi(
   }
   if (req.method === "GET" && url.pathname === "/api/summaries") {
     void handleSummaries(url, res, deps);
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/messages") {
+    void handleMessages(url, res, deps);
     return;
   }
   res.writeHead(404, { "content-type": "text/plain" });

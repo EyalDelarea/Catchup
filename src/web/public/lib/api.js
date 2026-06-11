@@ -56,6 +56,22 @@ export function getSummaries(group, limit) {
 }
 
 /**
+ * Fetch a window of messages around a cited message, for the Ask source-jump
+ * thread view.
+ *
+ * @param {{chat: string, aroundId: number, limit?: number}} params
+ * @returns {Promise<Array<{id: number, sender: string, text: string, sentAt: string, fromMe: boolean}>>}
+ */
+export function getMessages({ chat, aroundId, limit }) {
+  const qs = new URLSearchParams({ chat, aroundId: String(aroundId) });
+  if (limit) qs.set("limit", String(limit));
+  return fetch(`/api/messages?${qs.toString()}`).then((r) => {
+    if (!r.ok) throw new Error(`messages ${r.status}`);
+    return r.json();
+  });
+}
+
+/**
  * Open an SSE stream to /api/summarize and wire up event handlers.
  *
  * params shape (one of):

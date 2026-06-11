@@ -155,6 +155,79 @@ export async function getNewestAnchor(
   };
 }
 
+/** One message row for the thread view (Ask source-jump). */
+export type ThreadMessage = {
+  id: number;
+  sender: string;
+  text: string;
+  sentAt: Date;
+  fromMe: boolean;
+};
+
+/**
+ * Window of messages around an anchor id within a group, ascending by
+ * (sent_at, id). `limit` is split before/after the anchor (the anchor is
+ * included in the "before" half). Returns [] when the anchor is not in the
+ * group, so a citation that points elsewhere degrades to empty rather than
+ * erroring. `text` mirrors the lexical retriever's display content
+ * (text · media description · transcript), so media/voice rows still read.
+ */
+export async function getMessagesAround(
+  client: pg.Pool | pg.PoolClient,
+  groupId: number,
+  aroundId: number,
+  limit: number,
+): Promise<ThreadMessage[]> {
+  const before = Math.ceil(limit / 2);
+  const after = Math.floor(limit / 2);
+  const { rows } = await client.query<{
+    id: string;
+    sender: string;
+    text: string | null;
+    sent_at: Date;
+    from_me: boolean;
+  }>(
+    `
+    WITH anchor AS (
+      SELECT sent_at, id FROM messages WHERE id = $2 AND group_id = $1
+    ), win AS (
+      (SELECT m.id FROM messages m, anchor a
+        WHERE m.group_id = $1 AND m.message_type <> 'system'
+          AND (m.sent_at, m.id) <= (a.sent_at, a.id)
+        ORDER BY m.sent_at DESC, m.id DESC LIMIT $3)
+      UNION
+      (SELECT m.id FROM messages m, anchor a
+        WHERE m.group_id = $1 AND m.message_type <> 'system'
+          AND (m.sent_at, m.id) > (a.sent_at, a.id)
+        ORDER BY m.sent_at ASC, m.id ASC LIMIT $4)
+    )
+    SELECT m.id,
+           COALESCE(p.display_name, 'Unknown') AS sender,
+           concat_ws(' — ',
+             NULLIF(trim(m.text_content), ''),
+             NULLIF(trim(an.description), ''),
+             NULLIF(trim(t.transcript), '')
+           ) AS text,
+           m.sent_at,
+           COALESCE(m.from_me, false) AS from_me
+    FROM win
+    JOIN messages m ON m.id = win.id
+    LEFT JOIN participants p ON p.id = m.participant_id
+    LEFT JOIN transcripts t ON t.message_id = m.id AND t.status = 'completed'
+    LEFT JOIN media_analyses an ON an.message_id = m.id AND an.status = 'completed'
+    ORDER BY m.sent_at ASC, m.id ASC
+    `,
+    [groupId, aroundId, before, after],
+  );
+  return rows.map((r) => ({
+    id: Number(r.id),
+    sender: r.sender,
+    text: r.text ?? "",
+    sentAt: r.sent_at,
+    fromMe: r.from_me,
+  }));
+}
+
 /**
  * True if a message with this (group_id, external_id) is already stored.
  *
