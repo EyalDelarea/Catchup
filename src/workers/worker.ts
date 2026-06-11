@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { startReconcileLoop } from "../collector/identity-reconcile-loop.js";
 import { DEFAULT_TENANT_ID, runWithTenantContext } from "../db/tenant-context.js";
 import type { JobBus } from "../jobs/job-bus.js";
 import type { Job, JobType } from "../jobs/job-types.js";
@@ -434,11 +435,23 @@ async function main(): Promise<void> {
     ...(config.auth.enabled ? { fairShareWindow: 4 } : {}),
   });
 
+  // Periodically reconcile lid/phone duplicate chats from the durable identity
+  // map (session-independent; runs once now, then hourly). Uses the REAL appPool
+  // (not the per-query scopedPool, which has no connect()) — reconcileIdentities
+  // opens its own withTenant transaction, setting the tenant GUC under RLS.
+  const reconcile = startReconcileLoop({
+    pool: appPool,
+    tenantId: DEFAULT_TENANT_ID,
+    intervalMs: 60 * 60 * 1000,
+    onError: (err) => logger.warn({ err }, "identity reconcile tick failed"),
+  });
+
   // Graceful shutdown (both SIGINT and SIGTERM)
   let shuttingDown = false;
   const gracefulShutdown = (signal: NodeJS.Signals) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    reconcile.stop();
     logLifecycle("shutdown", { proc: "worker", signal });
     void worker.close().then(() => {
       void appPool.end();

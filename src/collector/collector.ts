@@ -19,6 +19,7 @@ import {
   updateDisplayName,
   upsertGroupByCanonicalJid,
 } from "../db/repositories/groups.js";
+import { recordLink, siblingForJid } from "../db/repositories/identity-links.js";
 import { getMessageIdByExternalId, insertMessages } from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
 import { currentTenantId } from "../db/tenant-context.js";
@@ -107,34 +108,52 @@ export type CollectorOptions = {
  * Resolve the person's *other* identity (the lid<->pn sibling) for a 1:1 chat,
  * so an incoming message can be routed into an existing chat under either form.
  *
- * Tries Baileys' lid<->pn mapping first; falls back to `remoteJidAlt` (the
- * alternate identity WhatsApp ships on the message key) when the mapping store
- * isn't warm yet. Returns null for group JIDs (@g.us — not part of LID
- * migration) and when no alternate identity is known. Never throws.
+ * Priority order:
+ * 1. Durable DB map (identity_links) — works even when Baileys is cold or in
+ *    worker-only contexts (no live session).
+ * 2. Live Baileys lid<->pn bridge — fast-path when the session is warm.
+ * 3. Cold-store fallback: the alternate identity carried on the message key.
+ *
+ * Returns the sibling JID (or null) plus `learned`: true when the pairing came
+ * from the live bridge / alt key (a NEW fact worth persisting), false when it was
+ * already read from the DB map (already persisted — no re-write needed) or absent.
+ * Returns null for group JIDs (@g.us — not part of LID migration). Never throws.
  */
 async function resolveSiblingJid(
+  client: pg.Pool | pg.PoolClient,
   remoteJid: string,
   remoteJidAlt: string | null,
   opts: CollectorOptions,
-): Promise<string | null> {
+): Promise<{ jid: string | null; learned: boolean }> {
   // Group chats are not subject to LID migration.
-  if (remoteJid.endsWith("@g.us")) return null;
+  if (remoteJid.endsWith("@g.us")) return { jid: null, learned: false };
 
+  // 1. Durable DB map first — already persisted, so nothing new to learn.
+  try {
+    const fromDb = await siblingForJid(client, remoteJid);
+    if (fromDb && fromDb !== remoteJid) return { jid: fromDb, learned: false };
+  } catch (e) {
+    process.stderr.write(
+      `Warning: identity-link sibling lookup failed (jid=${remoteJid}): ${e instanceof Error ? e.message : String(e)}\n`,
+    );
+  }
+
+  // 2. Live Baileys lid<->pn mapping — a freshly learned pairing worth persisting.
   try {
     if (remoteJid.endsWith("@s.whatsapp.net") && opts.lidForPn) {
       const lid = await opts.lidForPn(remoteJid);
-      if (lid && lid !== remoteJid) return lid;
+      if (lid && lid !== remoteJid) return { jid: lid, learned: true };
     } else if (remoteJid.endsWith("@lid") && opts.pnForLid) {
       const pn = await opts.pnForLid(remoteJid);
-      if (pn && pn !== remoteJid) return pn;
+      if (pn && pn !== remoteJid) return { jid: pn, learned: true };
     }
   } catch {
     // Bridge failures must never break ingest — fall through to the alt key.
   }
 
-  // Cold-store fallback: the alternate identity carried on the message key.
-  if (remoteJidAlt && remoteJidAlt !== remoteJid) return remoteJidAlt;
-  return null;
+  // 3. Cold-store fallback: the alternate identity carried on the message key.
+  if (remoteJidAlt && remoteJidAlt !== remoteJid) return { jid: remoteJidAlt, learned: true };
+  return { jid: null, learned: false };
 }
 
 /** Deterministic, filesystem-safe filename for a live voice note (keyed by the
@@ -195,7 +214,27 @@ export async function handleIncomingMessage(
   // identity (@lid vs @s.whatsapp.net) so LID-migration duplicates can't form.
   // `canonicalJid` is the identity the chat is actually keyed under — use it for
   // the display-name resolution below so we target the right row.
-  const siblingJid = await resolveSiblingJid(mapped.remoteJid, mapped.remoteJidAlt, opts);
+  const sibling = await resolveSiblingJid(client, mapped.remoteJid, mapped.remoteJidAlt, opts);
+  const siblingJid = sibling.jid;
+
+  // Persist a NEWLY learned pairing (from the live bridge / alt key) durably so
+  // future ingest (incl. worker-only, cold bridge) and the reconcile job can
+  // canonicalize without a live session. A sibling already read from the DB map
+  // needs no re-write — skip it to avoid per-message write amplification.
+  if (siblingJid && sibling.learned) {
+    const lid = mapped.remoteJid.endsWith("@lid") ? mapped.remoteJid : siblingJid;
+    const pn = mapped.remoteJid.endsWith("@lid") ? siblingJid : mapped.remoteJid;
+    if (lid.endsWith("@lid") && pn.endsWith("@s.whatsapp.net")) {
+      try {
+        await recordLink(client, { lidJid: lid, pnJid: pn, source: "message_alt" });
+      } catch (e) {
+        process.stderr.write(
+          `Warning: identity-link capture failed (lid=${lid}, pn=${pn}): ${e instanceof Error ? e.message : String(e)}\n`,
+        );
+      }
+    }
+  }
+
   const { groupId, canonicalJid } = await upsertGroupByCanonicalJid(client, {
     primaryJid: mapped.remoteJid,
     siblingJid,

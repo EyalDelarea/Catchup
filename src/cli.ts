@@ -733,6 +733,55 @@ program
       log.scheduler.error({ err }, "ops-sweep scheduler startup error (web server continues)");
     }
 
+    // ── Auto-embed scheduler ──────────────────────────────────────────────────
+    // Periodically embed newly-arrived messages (recent-first, bounded) so the
+    // semantic ask retriever stays current without a manual `embed-backfill`.
+    // Mirrors the ops-sweep scheduler; runs the bounded backfill in the callback
+    // (no job enqueued). Reuses the embedder already built for the ask retriever.
+    let embedHandle: { stop: () => void } = { stop: () => {} };
+    try {
+      const { runEmbeddingBackfill } = await import("./ask/embedding-backfill.js");
+      const { selectMessagesNeedingEmbedding, upsertEmbedding } = await import(
+        "./db/repositories/message-embeddings.js"
+      );
+      const parsedEmbedTimes = parseTimes(config.embedding.autoEmbedTimes);
+      embedHandle = startScheduler({
+        pool,
+        bus: brokerBus,
+        times: parsedEmbedTimes,
+        enabled: config.embedding.autoEmbed,
+        now: () => new Date(),
+        setTimer: (cb, ms) => setTimeout(cb, ms),
+        getLastRun,
+        recordRun,
+        slotKeyPrefix: "embed",
+        enqueueRun: async (poolArg) => {
+          const { embedded } = await runEmbeddingBackfill(
+            {
+              selectPending: (l) => selectMessagesNeedingEmbedding(poolArg, { limit: l }),
+              embed: (texts) => embedder.embed(texts),
+              upsert: (messageId, embedding) =>
+                upsertEmbedding(poolArg, { messageId, embedding, model: embedder.model }),
+            },
+            {
+              limit: config.embedding.autoEmbedLimit,
+              batchSize: config.embedding.autoEmbedBatchSize,
+            },
+          );
+          log.scheduler.info({ embedded }, "auto-embed run complete");
+        },
+      });
+      if (config.embedding.autoEmbed) {
+        log.scheduler.info(
+          { times: config.embedding.autoEmbedTimes },
+          "auto-embed scheduler started",
+        );
+      }
+    } catch (err) {
+      // Auto-embed scheduler startup failure must NOT crash the web server
+      log.scheduler.error({ err }, "auto-embed scheduler startup error (web server continues)");
+    }
+
     // ── --collect mode: start live collector in the same process ──────────────
     let liveHandle: { stop: () => void } | null = null;
     let backfillHandle: { stop: () => void } | null = null;
@@ -967,6 +1016,7 @@ program
       // Stop schedulers first (prevents new enqueue calls)
       schedulerHandle.stop();
       opsSweepHandle.stop();
+      embedHandle.stop();
       // Stop collector wiring (if started)
       liveHandle?.stop();
       backfillHandle?.stop();
@@ -1390,6 +1440,22 @@ program
             `  "${c.name}"  keep ${c.survivorJid} (${c.survivorMsgs} msgs)  ⟵ merge ${c.dupJid} (${c.dupMsgs} msgs)`,
           );
         }
+        // Persist every discovered pairing into the durable identity map so future
+        // reconciles (and ingest canonicalization) work without a live session.
+        const { recordLink } = await import("./db/repositories/identity-links.js");
+        for (const c of candidates) {
+          const lid = c.survivorJid.endsWith("@lid") ? c.survivorJid : c.dupJid;
+          const pn = c.survivorJid.endsWith("@lid") ? c.dupJid : c.survivorJid;
+          if (lid.endsWith("@lid") && pn.endsWith("@s.whatsapp.net")) {
+            try {
+              await recordLink(pool, { lidJid: lid, pnJid: pn, source: "bridge" });
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              console.error(`  ! could not persist identity link for "${c.name}": ${msg}`);
+            }
+          }
+        }
+
         if (options.apply) {
           let ok = 0;
           let moved = 0;

@@ -17,6 +17,10 @@ export type IvritWhisperOptions = {
   ffmpegPath: string;
   /** Override the worker script path (used in tests). Defaults to worker.py. */
   workerScript?: string;
+  /** Injected spawn for testability. Defaults to node:child_process spawn. */
+  spawn?: typeof spawn;
+  /** Grace period (ms) to await a clean exit before SIGKILL. Defaults to 2000. */
+  killTimeoutMs?: number;
 };
 
 type WorkerMessage = {
@@ -36,7 +40,8 @@ export class IvritWhisperTranscriber implements Transcriber {
   }
 
   async open(): Promise<void> {
-    const proc = spawn(this.opts.pythonPath, [this.workerScript, this.opts.model], {
+    const spawnFn = this.opts.spawn ?? spawn;
+    const proc = spawnFn(this.opts.pythonPath, [this.workerScript, this.opts.model], {
       stdio: ["pipe", "pipe", "inherit"],
     });
     this.proc = proc;
@@ -103,9 +108,23 @@ export class IvritWhisperTranscriber implements Transcriber {
   }
 
   async close(): Promise<void> {
-    if (this.proc) {
-      this.proc.stdin?.end();
-      this.proc.kill();
+    const proc = this.proc;
+    if (proc) {
+      // Graceful shutdown: close stdin so the Python worker reaches EOF and exits,
+      // releasing its multiprocessing semaphore cleanly. A bare SIGTERM kill tears
+      // the interpreter down first, which triggers the resource_tracker
+      // "leaked semaphore" warning. SIGKILL only as a last-resort fallback.
+      proc.stdin?.end();
+      const exited = new Promise<void>((resolve) => proc.once("exit", () => resolve()));
+      let timer: NodeJS.Timeout | undefined;
+      const timeout = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, this.opts.killTimeoutMs ?? 2000);
+      });
+      await Promise.race([exited, timeout]);
+      if (timer) clearTimeout(timer);
+      if (proc.exitCode === null && proc.signalCode === null) {
+        proc.kill("SIGKILL");
+      }
       this.proc = null;
     }
     if (this.rl) {
