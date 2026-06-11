@@ -28,7 +28,9 @@ function mapRow(r: Row): UserPreferences {
 }
 
 /** The current tenant's preferences row, or null when none has been saved yet. */
-export async function getPreferences(client: pg.Pool | pg.PoolClient): Promise<UserPreferences | null> {
+export async function getPreferences(
+  client: pg.Pool | pg.PoolClient,
+): Promise<UserPreferences | null> {
   const { rows } = await client.query<Row>(
     `SELECT digest_times, morning_notification, engine_config, theme FROM user_preferences LIMIT 1`,
   );
@@ -56,7 +58,8 @@ export async function upsertPreferences(
     sets.push(`${col} = EXCLUDED.${col}`);
   };
   if (patch.digestTimes !== undefined) add("digest_times", patch.digestTimes);
-  if (patch.morningNotification !== undefined) add("morning_notification", patch.morningNotification);
+  if (patch.morningNotification !== undefined)
+    add("morning_notification", patch.morningNotification);
   if (patch.engineConfig !== undefined) add("engine_config", JSON.stringify(patch.engineConfig));
   if (patch.theme !== undefined) add("theme", patch.theme);
   sets.push("updated_at = now()");

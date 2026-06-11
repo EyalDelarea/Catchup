@@ -10,6 +10,7 @@ import { handleAsk } from "./handlers/ask.js";
 import type { ServerDeps } from "./handlers/context.js";
 import { handleGroups } from "./handlers/groups.js";
 import { handleMessages } from "./handlers/messages.js";
+import { handlePreferences } from "./handlers/preferences.js";
 import { handleScopeCategories } from "./handlers/scope-categories.js";
 import { handleScopes } from "./handlers/scopes.js";
 import { handleStatus } from "./handlers/status.js";
@@ -168,6 +169,11 @@ function dispatchApi(
   if (url.pathname === "/api/scope-categories" && (req.method === "GET" || req.method === "POST")) {
     if (req.method === "POST" && blockCrossOrigin(req, res)) return;
     void handleScopeCategories(url, req, res, deps);
+    return;
+  }
+  if (url.pathname === "/api/preferences" && (req.method === "GET" || req.method === "PUT")) {
+    if (req.method === "PUT" && blockCrossOrigin(req, res)) return;
+    void handlePreferences(url, req, res, deps);
     return;
   }
   res.writeHead(404, { "content-type": "text/plain" });
