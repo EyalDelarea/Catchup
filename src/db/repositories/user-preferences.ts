@@ -38,6 +38,23 @@ export async function getPreferences(
 }
 
 /**
+ * Read a SPECIFIC tenant's `digest_times`, or null when no row exists. Intended
+ * for the scheduler, which runs outside a request and reads via the operator
+ * (BYPASSRLS) pool — hence the explicit tenant filter (not RLS-scoped). Returns
+ * null so the caller can fall back to the env default.
+ */
+export async function getTenantDigestTimes(
+  operatorClient: pg.Pool | pg.PoolClient,
+  tenantId: string,
+): Promise<string | null> {
+  const { rows } = await operatorClient.query<{ digest_times: string }>(
+    `SELECT digest_times FROM user_preferences WHERE tenant_id = $1`,
+    [tenantId],
+  );
+  return rows[0]?.digest_times ?? null;
+}
+
+/**
  * Upsert the current tenant's preferences (one row, keyed by the tenant_id PK
  * default). Only the provided fields are written; the rest keep their stored
  * values or column defaults on first insert. Returns the resulting row.
