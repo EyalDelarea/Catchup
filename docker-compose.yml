@@ -9,7 +9,17 @@ services:
   postgres:
     # pgvector-enabled Postgres (superset of the stock image) so the ask feature's
     # `CREATE EXTENSION vector` migration applies. pg16 keeps the major version pinned.
-    image: pgvector/pgvector:pg16
+    #
+    # Pinned by digest, NOT just the floating `pg16` tag: the `pg16` tag is rebuilt
+    # in place against newer Debian/glibc/ICU, and a glibc/ICU bump changes text
+    # collation ordering. A btree index over a text column (e.g. participants'
+    # (tenant_id, display_name)) built under the old collation then looks corrupt to
+    # the new library — surfacing as `XX002 … overlaps with invalid duplicate tuple`
+    # on the next upsert, which silently breaks message ingestion. Pinning the digest
+    # freezes the OS libraries so the collation never drifts under our indexes.
+    # To bump deliberately: pull the new digest, then REINDEX text indexes (or run
+    # `catchup doctor`, which now amchecks them). See ops/runbooks/collation-corruption.md.
+    image: pgvector/pgvector:pg16@sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

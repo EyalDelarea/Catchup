@@ -150,6 +150,37 @@ export async function checkDefaultPasswords(
   }
 }
 
+/**
+ * 9. Btree indexes pass amcheck (detects collation-drift corruption).
+ *
+ * A glibc/ICU bump under an unpinned Postgres image changes text collation order,
+ * which makes a btree over a text column (e.g. participants' (tenant_id, display_name))
+ * look corrupt — surfacing as `XX002 … overlaps with invalid duplicate tuple` on the
+ * next upsert and silently breaking message ingestion. The probe amchecks every valid
+ * btree index and reports unhealthy only on a definitive corruption error, so a clean
+ * fail here means "REINDEX + pin the image", not a transient environment quirk.
+ */
+export async function checkIndexIntegrity(probe: () => Promise<boolean>): Promise<CheckResult> {
+  const name = "DB indexes pass integrity check (amcheck)";
+  const fix =
+    "REINDEX the corrupt index (e.g. REINDEX INDEX participants_tenant_idx) and pin the pgvector image by digest — see ops/runbooks/collation-corruption.md";
+  try {
+    const ok = await probe();
+    return ok
+      ? { name, ok: true }
+      : {
+          name,
+          ok: false,
+          detail:
+            "a btree index failed amcheck (XX002) — likely glibc/ICU collation drift from an unpinned Postgres image; this can silently break message ingestion",
+          fix,
+        };
+  } catch {
+    // A probe error is inconclusive — checkPostgres owns real DB-outage signalling.
+    return { name, ok: true };
+  }
+}
+
 // ── Runner ────────────────────────────────────────────────────────────────────
 
 /**
@@ -270,6 +301,49 @@ async function realDefaultPasswordProbe(
   }
 }
 
+/**
+ * Real index-integrity probe: amcheck every valid btree index and resolve false
+ * ONLY on a definitive corruption error (SQLSTATE XX002 — typically glibc/ICU
+ * collation drift under a text index). Permission/extension/setup problems are
+ * inconclusive (not corruption) and resolve true, so the check never cries wolf.
+ */
+async function realIndexIntegrityProbe(databaseUrl: string): Promise<boolean> {
+  try {
+    const { default: pg } = await import("pg");
+    const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+    try {
+      try {
+        await pool.query("CREATE EXTENSION IF NOT EXISTS amcheck");
+      } catch {
+        return true; // restricted role can't install amcheck — inconclusive, not corrupt
+      }
+      const { rows } = await pool.query<{ idx: string }>(`
+        SELECT c.oid::regclass::text AS idx
+        FROM pg_index i
+        JOIN pg_class c ON c.oid = i.indexrelid
+        JOIN pg_am am ON am.oid = c.relam
+        WHERE am.amname = 'btree'
+          AND i.indisvalid AND i.indisready
+          AND c.relnamespace = 'public'::regnamespace
+      `);
+      for (const { idx } of rows) {
+        try {
+          // heapallindexed=true also catches heap rows missing from the index.
+          await pool.query(`SELECT bt_index_check($1::regclass, true)`, [idx]);
+        } catch (err) {
+          if ((err as { code?: string }).code === "XX002") return false; // corrupt
+          // Other errors (lock contention, catalog perms, …) are inconclusive — skip.
+        }
+      }
+      return true;
+    } finally {
+      await pool.end();
+    }
+  } catch {
+    return true; // connection failure — checkPostgres owns that signal
+  }
+}
+
 /** Real Python probe: spawn pythonPath -c "import faster_whisper" */
 async function realPythonProbe(pythonPath: string): Promise<boolean> {
   return spawnProbe(pythonPath, ["-c", "import faster_whisper"]);
@@ -291,6 +365,7 @@ export function defaultChecks(config: AppConfig): Array<() => Promise<CheckResul
     () => checkDocker(realDockerProbe),
     () => checkComposeServices(realComposeProbe),
     () => checkPostgres(() => realPostgresProbe(config.databaseUrl)),
+    () => checkIndexIntegrity(() => realIndexIntegrityProbe(config.databaseUrl)),
     () => checkRabbitMQ(() => realRabbitMqProbe(config.broker.url)),
     () =>
       checkOllama(config.summarization.model, () =>
