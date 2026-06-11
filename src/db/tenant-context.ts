@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type pg from "pg";
 
 /**
@@ -34,4 +35,45 @@ export async function withTenant<T>(
   } finally {
     client.release();
   }
+}
+
+/**
+ * A drop-in pg.Pool whose every query() runs inside withTenant(getTenantId()).
+ *
+ * Each query gets its OWN short transaction — deliberately NOT one transaction per
+ * request/job, because requests and jobs can hold a model call open for minutes and an
+ * idle-in-transaction connection that long blocks vacuum and pins a pool slot. A bare
+ * pg.Pool autocommits each query independently anyway, so per-query scoping preserves
+ * the exact semantics existing callers already have, plus tenant context.
+ *
+ * getTenantId is re-read on EVERY query (late binding), so one adapter built at startup
+ * can serve per-job tenants via currentTenantId().
+ *
+ * Only query() is supported — connect()/end() etc. stay on the real pool. The cast is
+ * safe for repos, which only ever call query().
+ */
+export function scopedPool(pool: pg.Pool, getTenantId: () => string): pg.Pool {
+  const adapter = {
+    query: (...args: unknown[]) =>
+      withTenant(pool, getTenantId(), (client) =>
+        (client.query as (...a: unknown[]) => Promise<unknown>)(...args),
+      ),
+  };
+  return adapter as unknown as pg.Pool;
+}
+
+const tenantStorage = new AsyncLocalStorage<string>();
+
+/**
+ * Run fn with `tenantId` as the ambient tenant (AsyncLocalStorage). Used by the worker:
+ * handler dependency closures are built once at startup, so the per-job tenant travels
+ * here rather than through every signature.
+ */
+export function runWithTenantContext<T>(tenantId: string, fn: () => T): T {
+  return tenantStorage.run(tenantId, fn);
+}
+
+/** The ambient tenant, or DEFAULT_TENANT_ID outside any runWithTenantContext. */
+export function currentTenantId(): string {
+  return tenantStorage.getStore() ?? DEFAULT_TENANT_ID;
 }

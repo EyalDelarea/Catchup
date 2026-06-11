@@ -1,0 +1,287 @@
+{
+  "title": "Catchup Ask / AMA",
+  "uid": "catchup-ask",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "browser",
+  "tags": ["catchup", "ask"],
+  "templating": {
+    "list": [
+      {
+        "name": "component",
+        "type": "query",
+        "label": "Component",
+        "datasource": { "type": "loki", "uid": "loki" },
+        "query": "label_values({service_name=\"catchup\"}, component)",
+        "definition": "label_values({service_name=\"catchup\"}, component)",
+        "refresh": 2,
+        "multi": false,
+        "includeAll": false,
+        "current": { "text": "ask", "value": "ask" }
+      },
+      {
+        "name": "level",
+        "type": "custom",
+        "label": "Level",
+        "query": "debug : 20,info : 30,warning : 40,error : 50",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Asks (range)",
+      "description": "Count of completed asks (evt=\"ask\") in the selected range.",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask\" [$__range]))",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" }, "unit": "short" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Zero-result rate (range)",
+      "description": "Proportion of completed asks where the retriever fed 0 candidates into synthesis (candidateCount=0). A high value is the \"feature feels broken\" signal.",
+      "gridPos": { "x": 4, "y": 0, "w": 5, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask\" | candidateCount=\"0\" [$__range])) / sum(count_over_time({service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask\" [$__range]))",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.2 }, { "color": "red", "value": 0.5 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Avg candidates (range)",
+      "description": "Mean candidateCount across completed asks — retriever effectiveness at a glance.",
+      "gridPos": { "x": 9, "y": 0, "w": 5, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "avg(avg_over_time({service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask\" | unwrap candidateCount [$__range]))",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "unit": "short", "decimals": 1 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Errors (range)",
+      "description": "Count of evt=\"ask_error\" (exceptions thrown while handling /api/ask).",
+      "gridPos": { "x": 14, "y": 0, "w": 5, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask_error\" [$__range]))",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Aborts (range)",
+      "description": "Completed asks where the client disconnected mid-stream (aborted=true).",
+      "gridPos": { "x": 19, "y": 0, "w": 5, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask\" | aborted=\"true\" [$__range]))",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Ask volume over time (by scoped)",
+      "description": "Completed asks per interval, split by whether the ask was chat-scoped (scoped=true) or across all chats (scoped=false).",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum by (scoped) (count_over_time({service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask\" [$__interval]))",
+          "legendFormat": "scoped={{scoped}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 70, "stacking": { "mode": "normal" } }, "unit": "short", "min": 0 },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "scoped=true" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] },
+          { "matcher": { "id": "byName", "options": "scoped=false" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } } ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Latency percentiles (TTFB & total)",
+      "description": "p50/p95 of time-to-first-token (ttfbMs) and total duration (totalMs). Asks that never emitted a token (ttfbMs=null) are dropped from the TTFB series by unwrap.",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        { "expr": "quantile_over_time(0.5, {service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask\" | unwrap ttfbMs [$__interval])", "legendFormat": "p50 ttfb", "refId": "A" },
+        { "expr": "quantile_over_time(0.95, {service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask\" | unwrap ttfbMs [$__interval])", "legendFormat": "p95 ttfb", "refId": "B" },
+        { "expr": "quantile_over_time(0.5, {service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask\" | unwrap totalMs [$__interval])", "legendFormat": "p50 total", "refId": "C" },
+        { "expr": "quantile_over_time(0.95, {service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask\" | unwrap totalMs [$__interval])", "legendFormat": "p95 total", "refId": "D" }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "pointSize": 5, "showPoints": "auto" }, "unit": "ms", "min": 0 },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "p95 total" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] },
+          { "matcher": { "id": "byName", "options": "p50 total" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } } ] },
+          { "matcher": { "id": "byName", "options": "p95 ttfb" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } } ] },
+          { "matcher": { "id": "byName", "options": "p50 ttfb" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Zero-result rate over time",
+      "description": "Fraction of completed asks per interval with candidateCount=0. Trending up means retrieval is finding nothing to answer from.",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask\" | candidateCount=\"0\" [$__interval])) / sum(count_over_time({service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask\" [$__interval]))",
+          "legendFormat": "zero-result rate",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 20, "pointSize": 5, "showPoints": "auto" },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "fixed", "fixedColor": "orange" }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Candidates fed to synthesis (avg, by scoped)",
+      "description": "Mean candidateCount per interval, split by scoped — retriever effectiveness over time. Scoped asks search one chat, so naturally return fewer candidates than all-chats.",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "avg by (scoped) (avg_over_time({service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask\" | unwrap candidateCount [$__interval]))",
+          "legendFormat": "scoped={{scoped}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "pointSize": 5, "showPoints": "auto" }, "unit": "short", "min": 0, "decimals": 1 },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "scoped=true" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] },
+          { "matcher": { "id": "byName", "options": "scoped=false" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } } ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Errors & aborts over time",
+      "description": "Rate of ask_error exceptions and of completed asks that were aborted mid-stream (client disconnect).",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        { "expr": "sum(count_over_time({service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask_error\" [$__interval]))", "legendFormat": "errors", "refId": "A" },
+        { "expr": "sum(count_over_time({service_name=\"catchup\", component=~\"$component\"} | json | evt=\"ask\" | aborted=\"true\" [$__interval]))", "legendFormat": "aborts", "refId": "B" }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 70, "stacking": { "mode": "none" } }, "unit": "short", "min": 0 },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "errors" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] },
+          { "matcher": { "id": "byName", "options": "aborts" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow" } } ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 11,
+      "type": "logs",
+      "title": "Ask logs (live)",
+      "description": "Live ask-component log stream. Completion lines show timings & candidate counts; ask_error lines carry the exception message.",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{service_name=\"catchup\", component=~\"$component\", level=~\"$level\"} | json | line_format \"{{.evt}}{{if .scoped}} scoped={{.scoped}}{{end}}{{if .candidateCount}} cands={{.candidateCount}}{{end}}{{if .ttfbMs}} ttfb={{.ttfbMs}}ms{{end}}{{if .totalMs}} total={{.totalMs}}ms{{end}}{{if .aborted}} aborted={{.aborted}}{{end}}{{if .message}} — {{.message}}{{end}}\"",
+          "refId": "A"
+        }
+      ],
+      "options": { "showLabels": false, "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    },
+    {
+      "id": 12,
+      "type": "text",
+      "title": "",
+      "gridPos": { "x": 0, "y": 28, "w": 24, "h": 2 },
+      "options": {
+        "mode": "markdown",
+        "content": "Ask / AMA observability — driven by `{service_name=\"catchup\", component=\"ask\"}` logs from `handleAsk` (`src/web/server.ts`). To browse all logs interactively, use **[Logs Drilldown](/a/grafana-lokiexplore-app/explore)** or **[Explore](/explore)**."
+      }
+    }
+  ]
+}

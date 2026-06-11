@@ -47,6 +47,11 @@ const SCOPED_TABLES_DELETE_ORDER = [
   "scheduler_state",
   "job_runs",
   "groups",
+  // T2 auth tables — without these the purge leaves auth rows behind and the
+  // tenants row stays undeletable (users.tenant_id FK).
+  "email_tokens",
+  "user_sessions",
+  "users",
 ];
 
 export async function createTenant(

@@ -4,13 +4,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type pg from "pg";
 import { askStream } from "../ask/ask.js";
+import type { Embedder } from "../ask/embedder.js";
+import { EmbeddingRetriever } from "../ask/embedding-retriever.js";
 import { LexicalRetriever } from "../ask/lexical-retriever.js";
+import { RecencyRetriever } from "../ask/recency-retriever.js";
 import type { Retriever } from "../ask/retriever.js";
+import type { AuthDeps } from "../auth/service.js";
 import { findGroupByName, listGroups } from "../db/repositories/groups.js";
 import { countReadableByGroup, getOldestSentAt } from "../db/repositories/messages.js";
 import { upsertWatermark } from "../db/repositories/read-watermarks.js";
 import { insertSummary, listSummariesByGroup } from "../db/repositories/summaries.js";
 import { insertTotalSummary } from "../db/repositories/total-summaries.js";
+import { DEFAULT_TENANT_ID, scopedPool } from "../db/tenant-context.js";
 import type { JobType } from "../jobs/job-types.js";
 import { buildStatusReport, DEFAULT_STALENESS_MS } from "../service/status.js";
 import { prepareSummary } from "../summarization/prepare.js";
@@ -19,6 +24,8 @@ import { persistCatchupResult } from "../summarization/run-summary.js";
 import type { Selection } from "../summarization/select.js";
 import type { StreamingSummarizer } from "../summarization/summarizer.js";
 import { generateTotalSummary } from "../summarization/total-summary.js";
+import { makeAuthRoutes } from "./auth-routes.js";
+import { makeOnboardingRoutes, type OnboardingRegistry } from "./onboarding-routes.js";
 import { sseFrame } from "./sse.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -45,53 +52,81 @@ export type ServerDeps = {
   backfillTargetWindow?: number;
   /** Optional structured logger (pino). Used to record backfill outcomes for the trace/dashboard. */
   logger?: { info: (obj: Record<string, unknown>, msg?: string) => void };
-  /** Retrievers for the ask flow. Defaults to [LexicalRetriever(pool)] when absent. */
+  /** Retrievers for the ask flow. Defaults to the lexical/recency/embedding set when absent. */
   askRetrievers?: Retriever[];
+  /**
+   * Embedder for semantic retrieval. When present, an EmbeddingRetriever is fused
+   * into the default set. When absent (e.g. Ollama not configured), the ask flow
+   * gracefully falls back to lexical (+ recency) only.
+   */
+  embedder?: Embedder;
+  /**
+   * T2 auth wiring. When absent, the server runs exactly as before (single-user, no
+   * login) except every /api request is tenant-scoped to the default tenant. When
+   * `required` is true (multi-tenant mode), /api/* outside /api/auth/* demands a valid
+   * session and runs scoped to THAT session's tenant.
+   */
+  auth?: {
+    deps: AuthDeps;
+    cookieSecure: boolean;
+    required: boolean;
+  };
+  /**
+   * T4 onboarding: the per-tenant WhatsApp session registry. When present, the
+   * /api/onboarding/* endpoints (QR stream + link + status) are served, scoped to the
+   * authenticated tenant. Absent → onboarding endpoints 404 (single-user CLI linking).
+   */
+  onboarding?: OnboardingRegistry;
 };
 
+/** SPA entry pages: / plus the landing paths used in verify/reset emails. */
+const SPA_PATHS = new Set(["/", "/verify", "/reset"]);
+
 export function createServer(deps: ServerDeps): http.Server {
-  return http.createServer((req, res) => {
+  const authRoutes = deps.auth
+    ? makeAuthRoutes({ deps: deps.auth.deps, cookieSecure: deps.auth.cookieSecure })
+    : null;
+  const onboardingRoutes = deps.onboarding
+    ? makeOnboardingRoutes({ registry: deps.onboarding })
+    : null;
+
+  const handleRequest = async (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    if (req.method === "GET" && url.pathname === "/") {
+    if (req.method === "GET" && SPA_PATHS.has(url.pathname)) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(fs.readFileSync(INDEX_HTML, "utf8"));
       return;
     }
-    if (req.method === "GET" && url.pathname === "/api/groups") {
-      listGroups(deps.pool)
-        .then((groups) => {
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify(groups));
-        })
-        .catch((err) => {
-          process.stderr.write(
-            `Error handling /api/groups: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
-          );
-          res.writeHead(500, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: "Internal server error." }));
-        });
+
+    // Auth endpoints answer for themselves (they are exactly the routes that must
+    // work without a session) and short-circuit the gate below.
+    if (authRoutes && (await authRoutes.handle(req, res, url))) return;
+
+    if (url.pathname.startsWith("/api/")) {
+      // Establish the request's tenant, then scope ALL data access to it. In
+      // single-user mode that's the default tenant — identical behavior to before,
+      // now explicitly attributed.
+      let tenantId = DEFAULT_TENANT_ID;
+      if (deps.auth?.required) {
+        const session = authRoutes ? await authRoutes.session(req) : null;
+        if (!session) {
+          res.writeHead(401, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "Not authenticated." }));
+          return;
+        }
+        tenantId = session.tenantId;
+      }
+      // Onboarding talks to the registry, not the DB pool — route it with the raw
+      // tenantId before the pool-scoped dispatch.
+      if (onboardingRoutes && (await onboardingRoutes.handle(req, res, url, tenantId))) return;
+      const scoped: ServerDeps = { ...deps, pool: scopedPool(deps.pool, () => tenantId) };
+      dispatchApi(url, req, res, scoped);
       return;
     }
-    if (req.method === "GET" && url.pathname === "/api/summarize") {
-      void handleSummarize(url, req, res, deps);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/api/total-summary") {
-      void handleTotalSummary(url, req, res, deps);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/api/ask") {
-      void handleAsk(url, req, res, deps);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/api/status") {
-      void handleStatus(res, deps);
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/api/summaries") {
-      void handleSummaries(url, res, deps);
-      return;
-    }
+
     // Generic static asset handler — must come after all /api/* routes
     if (req.method === "GET") {
       void handleStatic(url.pathname, res);
@@ -99,7 +134,64 @@ export function createServer(deps: ServerDeps): http.Server {
     }
     res.writeHead(404, { "content-type": "text/plain" });
     res.end("Not found");
+  };
+
+  return http.createServer((req, res) => {
+    handleRequest(req, res).catch((err) => {
+      process.stderr.write(
+        `Error handling ${req.url}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+      );
+      if (!res.headersSent) {
+        res.writeHead(500, { "content-type": "application/json" });
+      }
+      res.end(JSON.stringify({ error: "Internal server error." }));
+    });
   });
+}
+
+function dispatchApi(
+  url: URL,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: ServerDeps,
+): void {
+  if (req.method === "GET" && url.pathname === "/api/groups") {
+    listGroups(deps.pool)
+      .then((groups) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(groups));
+      })
+      .catch((err) => {
+        process.stderr.write(
+          `Error handling /api/groups: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+        );
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal server error." }));
+      });
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/summarize") {
+    void handleSummarize(url, req, res, deps);
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/total-summary") {
+    void handleTotalSummary(url, req, res, deps);
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/ask") {
+    void handleAsk(url, req, res, deps);
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/status") {
+    void handleStatus(res, deps);
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/summaries") {
+    void handleSummaries(url, res, deps);
+    return;
+  }
+  res.writeHead(404, { "content-type": "text/plain" });
+  res.end("Not found");
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -512,6 +604,23 @@ async function handleTotalSummary(
   }
 }
 
+/**
+ * Production retriever set for the ask flow. Lexical always runs. When an embedder
+ * is configured we also fuse in semantic (embedding) retrieval — the general fix
+ * for poor Hebrew lexical recall: a question can match a reply by MEANING even with
+ * zero shared words. For a chat-scoped question we also fuse in recency: NL
+ * questions like "מה גיא שאל אותי היום" rarely share content words with the replies,
+ * so lexical alone returns none of the relevant messages — recency supplies the
+ * actual recent context. We skip recency for all-chats questions, where "most
+ * recent across every chat" would just be noise.
+ */
+function defaultAskRetrievers(pool: pg.Pool, chat?: string, embedder?: Embedder): Retriever[] {
+  const retrievers: Retriever[] = [new LexicalRetriever(pool)];
+  if (embedder) retrievers.push(new EmbeddingRetriever(pool, embedder));
+  if (chat) retrievers.push(new RecencyRetriever(pool));
+  return retrievers;
+}
+
 async function handleAsk(
   url: URL,
   req: http.IncomingMessage,
@@ -538,7 +647,19 @@ async function handleAsk(
       return;
     }
     const chat = url.searchParams.get("chat") ?? undefined;
-    const retrievers = deps.askRetrievers ?? [new LexicalRetriever(deps.pool)];
+    const retrievers = deps.askRetrievers ?? defaultAskRetrievers(deps.pool, chat, deps.embedder);
+
+    // Observability: log on arrival (so a hung/slow ask is still visible in
+    // Loki) and again on completion with timings. component:"ask" is promoted
+    // to a Loki stream label by the logger, so the ask dashboard can filter on
+    // it; high-cardinality fields stay in the body.
+    const start = Date.now();
+    deps.logger?.info(
+      { component: "ask", evt: "ask_start", chat: chat ?? null, scoped: Boolean(chat) },
+      "ask start",
+    );
+    let firstTokenAt: number | null = null;
+    let candidateCount = 0;
 
     for await (const ev of askStream(
       { summarizer: deps.summarizer, retrievers, tokenBudget: deps.tokenBudget },
@@ -546,15 +667,43 @@ async function handleAsk(
       new Date(),
       { chat, signal: ac.signal },
     )) {
-      if (ac.signal.aborted) return;
-      if (ev.type === "token") send("token", { delta: ev.delta });
-      else if (ev.type === "citations") send("citations", { citations: ev.citations });
-      else send("done", { candidateCount: ev.candidateCount });
+      if (ac.signal.aborted) break;
+      if (ev.type === "phase") send("phase", { phase: ev.phase });
+      else if (ev.type === "token") {
+        if (firstTokenAt === null) firstTokenAt = Date.now();
+        send("token", { delta: ev.delta });
+      } else if (ev.type === "citations") send("citations", { citations: ev.citations });
+      else {
+        candidateCount = ev.candidateCount;
+        send("done", { candidateCount: ev.candidateCount });
+      }
     }
+    deps.logger?.info(
+      {
+        component: "ask",
+        evt: "ask",
+        chat: chat ?? null,
+        scoped: Boolean(chat),
+        candidateCount,
+        ttfbMs: firstTokenAt === null ? null : firstTokenAt - start,
+        totalMs: Date.now() - start,
+        aborted: ac.signal.aborted,
+      },
+      "ask done",
+    );
+    if (ac.signal.aborted) return;
     res.end();
   } catch (err) {
     process.stderr.write(
       `Error handling /api/ask: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`,
+    );
+    deps.logger?.info(
+      {
+        component: "ask",
+        evt: "ask_error",
+        message: err instanceof Error ? err.message : String(err),
+      },
+      "ask error",
     );
     // SSE headers are already sent (200) before the try; errors are signaled
     // in-band via an `error` event rather than an HTTP status.

@@ -138,16 +138,20 @@ program
     const nameResolverLog = getLogger("name-resolver");
     const config = loadConfig();
     const authDir = path.join(config.dataDir, "baileys-auth");
-    const dbUrl = config.databaseUrl;
 
     // Import lazily to avoid loading Baileys at startup for non-collect commands
-    const [{ startSession }, { handleIncomingMessage }, pg] = await Promise.all([
-      import("./collector/session.js"),
-      import("./collector/collector.js"),
-      import("pg"),
-    ]);
+    const [{ startSession }, { handleIncomingMessage }, { createAppPool }, tenantCtx] =
+      await Promise.all([
+        import("./collector/session.js"),
+        import("./collector/collector.js"),
+        import("./db/client.js"),
+        import("./db/tenant-context.js"),
+      ]);
 
-    const pool = new pg.default.Pool({ connectionString: dbUrl });
+    // T2 cutover: ingest runs on the RLS-enforced app pool, attributed to the default
+    // tenant (single-user mode; T3 makes this per-tenant via the session registry).
+    const appPool = createAppPool();
+    const pool = tenantCtx.scopedPool(appPool, () => tenantCtx.DEFAULT_TENANT_ID);
     let storedCount = 0;
 
     // SAFETY BANNER — make the outbound posture unmistakable before linking.
@@ -213,7 +217,7 @@ program
       collectorLog.info({ stored: storedCount }, "stopping collector");
       logLifecycle("shutdown", { proc: "collect", signal: "SIGINT" });
       session.stop();
-      pool
+      appPool
         .end()
         .catch(() => {})
         .finally(() => {
@@ -325,9 +329,20 @@ program
       process.stderr.write("Error: --limit must be a positive integer.\n");
       process.exit(1);
     }
-    const [{ OllamaSummarizer }, { LexicalRetriever }, { askStream }, pg] = await Promise.all([
+    const [
+      { OllamaSummarizer },
+      { OllamaEmbedder },
+      { LexicalRetriever },
+      { RecencyRetriever },
+      { EmbeddingRetriever },
+      { askStream },
+      pg,
+    ] = await Promise.all([
       import("./summarization/summarizer.js"),
+      import("./ask/embedder.js"),
       import("./ask/lexical-retriever.js"),
+      import("./ask/recency-retriever.js"),
+      import("./ask/embedding-retriever.js"),
       import("./ask/ask.js"),
       import("pg"),
     ]);
@@ -340,12 +355,24 @@ program
       repeatPenalty: config.summarization.repeatPenalty,
       numPredict: config.summarization.numPredict,
     });
+    const embedder = new OllamaEmbedder({
+      host: config.embedding.ollamaHost,
+      model: config.embedding.model,
+      dimension: config.embedding.dimension,
+    });
+    // Mirror the web server's default retriever set: lexical + semantic always,
+    // recency when the question is scoped to one chat.
+    const retrievers = [
+      new LexicalRetriever(pool),
+      new EmbeddingRetriever(pool, embedder),
+      ...(options.chat ? [new RecencyRetriever(pool)] : []),
+    ];
     try {
       let pendingCitations: { n: number; chat: string; sender: string; sentAt: Date }[] = [];
       for await (const ev of askStream(
         {
           summarizer,
-          retrievers: [new LexicalRetriever(pool)],
+          retrievers,
           tokenBudget: config.summarization.tokenBudget,
         },
         question,
@@ -410,10 +437,12 @@ program
     const [
       { createServer },
       { OllamaSummarizer },
+      { OllamaEmbedder },
       { RabbitMqJobBus },
       { PostgresJobRunRecorder },
-      { createDbClient },
-      pg,
+      { createDbClient, createAppPool, createOperatorPool },
+      { scopedPool, DEFAULT_TENANT_ID },
+      { createLogMailer },
       { backfillGroup },
       { isHealthy, getLastHeartbeatAt },
       { startScheduler },
@@ -427,10 +456,12 @@ program
     ] = await Promise.all([
       import("./web/server.js"),
       import("./summarization/summarizer.js"),
+      import("./ask/embedder.js"),
       import("./jobs/rabbitmq-bus.js"),
       import("./jobs/job-run-recorder.js"),
       import("./db/client.js"),
-      import("pg"),
+      import("./db/tenant-context.js"),
+      import("./auth/mailer.js"),
       import("./collector/backfill.js"),
       import("./service/liveness.js"),
       import("./scheduler/runner.js"),
@@ -450,7 +481,13 @@ program
       reconnect: getLogger("reconnect-sync"),
       cli: getLogger("cli"),
     };
-    const pool = new pg.default.Pool({ connectionString: config.databaseUrl });
+    // T2 cutover: this process talks to Postgres as the RLS-enforced catchup_app role.
+    // The web server scopes each request to its session's tenant; everything else here
+    // (schedulers, collector, backfill, reconnect recovery) is default-tenant work and
+    // runs through a default-scoped adapter — identical local behavior, now attributed.
+    const appPool = createAppPool();
+    const pool = scopedPool(appPool, () => DEFAULT_TENANT_ID);
+    const operatorPool = createOperatorPool();
     const summarizer = new OllamaSummarizer({
       host: config.summarization.ollamaHost,
       model: config.summarization.model,
@@ -458,6 +495,13 @@ program
       temperature: config.summarization.temperature,
       repeatPenalty: config.summarization.repeatPenalty,
       numPredict: config.summarization.numPredict,
+    });
+    // Semantic retrieval for the ask flow — embeds questions against stored message
+    // vectors. Local-only (Ollama), same privacy contract as summarization.
+    const embedder = new OllamaEmbedder({
+      host: config.embedding.ollamaHost,
+      model: config.embedding.model,
+      dimension: config.embedding.dimension,
     });
 
     // Build a RabbitMQ bus for best-effort queue depth queries.
@@ -532,13 +576,93 @@ program
         }
       : {};
 
+    // ── T3/T4: per-tenant WhatsApp session registry (multi-tenant mode) ──────
+    // Created BEFORE the server so /api/onboarding/* can drive it (link → QR →
+    // connected). Hosts the supervised sessions for every tenant except the default,
+    // whose rich legacy pipeline stays in the --collect block below.
+    let tenantRegistry:
+      | import("./collector/tenant-session-registry.js").TenantSessionRegistry
+      | null = null;
+    if (config.auth.enabled) {
+      try {
+        const [{ TenantSessionRegistry }, { makeTenantIngest }, { startSession }] =
+          await Promise.all([
+            import("./collector/tenant-session-registry.js"),
+            import("./collector/tenant-ingest.js"),
+            import("./collector/session.js"),
+          ]);
+        const registry = new TenantSessionRegistry({
+          authRoot: path.join(config.dataDir, "baileys-auth"),
+          startSession: (dir) => startSession(dir, config.whatsapp.allowSend),
+        });
+        const ingest = makeTenantIngest({
+          appPool,
+          dataDir: config.dataDir,
+          bus: brokerBus,
+          sessionGlue: (tenantId) => {
+            const s = registry.session(tenantId) as
+              | import("./collector/session.js").CollectorSession
+              | null;
+            if (!s) return {};
+            return {
+              downloadVoiceNote: (m) => s.downloadMedia(m),
+              downloadImage: (m) => s.downloadMedia(m),
+              downloadVideo: (m) => s.downloadMedia(m),
+              groupSubject: (jid) => s.groupSubject(jid),
+              lidForPn: (pn) => s.lidForPn(pn),
+              pnForLid: (lid) => s.pnForLid(lid),
+            };
+          },
+        });
+        registry.on(
+          "message",
+          (tenantId: string, msg: import("@whiskeysockets/baileys").WAMessage) => {
+            ingest(tenantId, msg).catch((err: unknown) => {
+              log.collector.warn({ err, tenantId }, "tenant ingest failed");
+            });
+          },
+        );
+        registry.on("connected", (tenantId: string) => {
+          log.collector.info({ tenantId }, "tenant session connected");
+        });
+        registry.on("logged-out", (tenantId: string) => {
+          log.collector.error({ tenantId }, "tenant session logged out — re-link required");
+        });
+        // Reconnect tenants already linked on disk (the default tenant is handled by
+        // the legacy --collect path, never doubled). New links arrive via onboarding.
+        const started = await registry.startDiscovered({ exclude: [DEFAULT_TENANT_ID] });
+        if (started.length > 0) {
+          log.collector.info({ tenants: started }, "tenant session(s) reconnected");
+        }
+        tenantRegistry = registry;
+      } catch (err) {
+        log.collector.error({ err }, "tenant session registry startup error (server continues)");
+      }
+    }
+
     const server = createServer({
-      pool,
+      pool: appPool, // raw app pool — createServer scopes it per request
       summarizer,
+      embedder,
       tokenBudget: config.summarization.tokenBudget,
       model: config.summarization.model,
       getQueueDepths,
       logger: webLogger,
+      onboarding: tenantRegistry ?? undefined,
+      auth: {
+        deps: {
+          appPool,
+          operatorPool,
+          mailer: createLogMailer(getLogger("auth")),
+          now: () => new Date(),
+          sessionTtlSeconds: config.auth.sessionTtlSeconds,
+          emailTokenTtlSeconds: config.auth.emailTokenTtlSeconds,
+          tosVersion: config.auth.tosVersion,
+          publicBaseUrl: config.auth.publicBaseUrl,
+        },
+        cookieSecure: config.auth.cookieSecure,
+        required: config.auth.enabled,
+      },
       ...collectDeps,
     });
     server.on("error", (err: Error) => {
@@ -846,10 +970,12 @@ program
       // Stop collector wiring (if started)
       liveHandle?.stop();
       backfillHandle?.stop();
+      tenantRegistry?.stopAll();
       server.close();
       brokerBus.close().catch(() => {});
       dbClient.end().catch(() => {});
-      pool
+      operatorPool.end().catch(() => {});
+      appPool
         .end()
         .catch(() => {})
         // Flush the shutdown event + any batched lines before exiting, with a
@@ -913,7 +1039,8 @@ program
       for (const { messageId, kind } of rows) {
         const jobType = kind === "video" ? "analyze.video" : "analyze.image";
         if (!allowedTypes.has(jobType)) continue;
-        await bus.enqueue(jobType, { messageId: String(messageId) });
+        const { currentTenantId } = await import("./db/tenant-context.js");
+        await bus.enqueue(jobType, { messageId: String(messageId), tenantId: currentTenantId() });
         enqueued++;
       }
 
@@ -1036,6 +1163,67 @@ program
       await pool.end();
     }
     process.exit(failed ? 1 : 0);
+  });
+
+program
+  .command("embed-backfill")
+  .description(
+    "Embed stored messages for semantic (meaning-based) ask retrieval. Recent-first, batched, resumable — safe to re-run; already-embedded messages are skipped.",
+  )
+  .option("--limit <n>", "Max messages to embed this run", "500")
+  .option("--batch <n>", "Messages per model call", "32")
+  .option("--chat <name>", "Only embed messages in this chat")
+  .action(async (options: { limit?: string; batch?: string; chat?: string }) => {
+    const limit = Number(options.limit ?? "500");
+    const batch = Number(options.batch ?? "32");
+    if (!Number.isInteger(limit) || limit <= 0) {
+      process.stderr.write("Error: --limit must be a positive integer.\n");
+      process.exit(1);
+    }
+    if (!Number.isInteger(batch) || batch <= 0) {
+      process.stderr.write("Error: --batch must be a positive integer.\n");
+      process.exit(1);
+    }
+
+    const config = loadConfig();
+    const [{ OllamaEmbedder }, { runEmbeddingBackfill }, embRepo, pgMod] = await Promise.all([
+      import("./ask/embedder.js"),
+      import("./ask/embedding-backfill.js"),
+      import("./db/repositories/message-embeddings.js"),
+      import("pg"),
+    ]);
+
+    const pool = new pgMod.default.Pool({ connectionString: config.databaseUrl });
+    const embedder = new OllamaEmbedder({
+      host: config.embedding.ollamaHost,
+      model: config.embedding.model,
+      dimension: config.embedding.dimension,
+    });
+
+    try {
+      const before = await embRepo.countEmbeddedMessages(pool);
+      const { embedded } = await runEmbeddingBackfill(
+        {
+          selectPending: (l) =>
+            embRepo.selectMessagesNeedingEmbedding(pool, { limit: l, chat: options.chat }),
+          embed: (texts) => embedder.embed(texts),
+          upsert: (messageId, embedding) =>
+            embRepo.upsertEmbedding(pool, { messageId, embedding, model: embedder.model }),
+          log: (m) => process.stdout.write(`${m}\n`),
+        },
+        { limit, batchSize: batch },
+      );
+      const after = await embRepo.countEmbeddedMessages(pool);
+      console.log(
+        `Embedded ${embedded} message(s) this run (${embedder.model}). Total embedded: ${after} (was ${before}).`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`Error: embed-backfill failed: ${message}\n`);
+      process.exitCode = 1;
+    } finally {
+      await pool.end();
+    }
   });
 
 program

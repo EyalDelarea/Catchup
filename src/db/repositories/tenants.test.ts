@@ -78,4 +78,40 @@ describe("purgeTenantData (FR-013)", () => {
     const keepRows = await admin.query(`SELECT 1 FROM groups WHERE name = 'keep-g'`);
     expect(keepRows.rows).toHaveLength(1);
   });
+
+  it("removes the tenant's auth rows (users/sessions/email tokens) so the tenant row itself can be deleted", async () => {
+    const victim = randomUUID();
+    await admin.query(
+      `INSERT INTO tenants (id, name, status) VALUES ($1, 'AuthVictim', 'active')`,
+      [victim],
+    );
+    const {
+      rows: [u],
+    } = await admin.query(
+      `INSERT INTO users (tenant_id, email, password_hash) VALUES ($1, 'victim@purge.test', 'h') RETURNING id`,
+      [victim],
+    );
+    await admin.query(
+      `INSERT INTO user_sessions (tenant_id, user_id, token_hash, expires_at)
+       VALUES ($1, $2, 'purge-session-hash', now() + interval '1 hour')`,
+      [victim, u.id],
+    );
+    await admin.query(
+      `INSERT INTO email_tokens (tenant_id, user_id, kind, token_hash, expires_at)
+       VALUES ($1, $2, 'verify', 'purge-email-hash', now() + interval '1 hour')`,
+      [victim, u.id],
+    );
+
+    await purgeTenantData(admin, victim);
+
+    for (const table of ["users", "user_sessions", "email_tokens"]) {
+      const left = await admin.query(`SELECT 1 FROM ${table} WHERE tenant_id = $1`, [victim]);
+      expect(left.rows).toHaveLength(0);
+    }
+    // The whole point of the purge: the tenant row is now deletable (no FK holds).
+    await admin.query(`DELETE FROM tenants WHERE id = $1`, [victim]);
+    expect((await admin.query(`SELECT 1 FROM tenants WHERE id = $1`, [victim])).rows).toHaveLength(
+      0,
+    );
+  });
 });

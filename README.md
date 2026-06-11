@@ -398,6 +398,8 @@ flowchart TB
 
 The **Jobs Status (live)** Grafana dashboard shows per-job-type throughput, latency, failure rates, and queue depths in real time. Use it to monitor bulk imports, transcription backlogs, and vision analysis progress.
 
+The **Ask / AMA** dashboard (`catchup-ask`) tracks the "שאל אותי הכל" feature: request volume (chat-scoped vs all-chats), zero-result rate (the "feature feels broken" signal), time-to-first-token and total latency, retriever effectiveness, and errors/aborts — plus a live `component="ask"` log stream. Use it to spot slow or empty answers. All dashboards are auto-provisioned from `ops/grafana/` — see [`ops/grafana/CLAUDE.md`](ops/grafana/CLAUDE.md) to add or edit one.
+
 ### Ports
 
 | Service | Port | Notes |

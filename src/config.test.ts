@@ -76,6 +76,45 @@ describe("loadConfig opsSweep block", () => {
   });
 });
 
+describe("loadConfig auth block (T2 multi-tenant)", () => {
+  it("defaults to single-user mode: auth disabled, insecure cookie for local http", () => {
+    const cfg = loadConfig({});
+    expect(cfg.auth.enabled).toBe(false);
+    expect(cfg.auth.cookieSecure).toBe(false);
+    expect(cfg.auth.sessionTtlSeconds).toBe(30 * 24 * 3600);
+    expect(cfg.auth.emailTokenTtlSeconds).toBe(3600);
+    expect(cfg.auth.tosVersion).toBe("1");
+    expect(cfg.auth.publicBaseUrl).toBe("http://localhost:8787");
+  });
+
+  it("only enables multi-tenant auth when MULTI_TENANT is exactly 'true' (same convention as allowSend)", () => {
+    expect(loadConfig({ MULTI_TENANT: "true" }).auth.enabled).toBe(true);
+    expect(loadConfig({ MULTI_TENANT: "1" }).auth.enabled).toBe(false);
+    expect(loadConfig({ MULTI_TENANT: "TRUE" }).auth.enabled).toBe(false);
+  });
+
+  it("cookieSecure defaults to TRUE when multi-tenant is on (internet-facing), still overridable", () => {
+    expect(loadConfig({ MULTI_TENANT: "true" }).auth.cookieSecure).toBe(true);
+    expect(
+      loadConfig({ MULTI_TENANT: "true", SESSION_COOKIE_SECURE: "false" }).auth.cookieSecure,
+    ).toBe(false);
+    expect(loadConfig({ SESSION_COOKIE_SECURE: "true" }).auth.cookieSecure).toBe(true);
+  });
+
+  it("honors TTL, ToS version and public base URL overrides", () => {
+    const cfg = loadConfig({
+      SESSION_TTL_DAYS: "7",
+      EMAIL_TOKEN_TTL_MINUTES: "15",
+      TOS_VERSION: "2026-06-10",
+      PUBLIC_BASE_URL: "https://catchup.example.com",
+    });
+    expect(cfg.auth.sessionTtlSeconds).toBe(7 * 24 * 3600);
+    expect(cfg.auth.emailTokenTtlSeconds).toBe(15 * 60);
+    expect(cfg.auth.tosVersion).toBe("2026-06-10");
+    expect(cfg.auth.publicBaseUrl).toBe("https://catchup.example.com");
+  });
+});
+
 describe("loadConfig transcription block", () => {
   it("provides sensible defaults when env is empty", () => {
     const cfg = loadConfig({});

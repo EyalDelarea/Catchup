@@ -20,7 +20,7 @@ import { renderMarkdown } from "./lib/markdown.js";
 import { deriveHealth } from "./lib/health.js";
 import { shouldStartBackgroundRefresh } from "./lib/open-state.js";
 import { PHASE_LABELS, PHASES, phaseFill, activeZoneIndex, phaseCaption, scanFill } from "./lib/phase-loader.js";
-import { appendToken, beginQuestion, createConversation, failAnswer, finishAnswer } from "./lib/ama-conversation.js";
+import { appendToken, beginQuestion, createConversation, failAnswer, finishAnswer, loadConversation, saveConversation, setPhase } from "./lib/ama-conversation.js";
 import { DEMO_GROUPS, DEMO_SUMMARY, DEMO_SUMMARIES, DEMO_TOTAL_HIGHLIGHTS, DEMO_TOTAL_PERCHAT } from "./lib/demo-data.js";
 
 /** Off by default. `?demo=1` previews dummy data; `?demo=tube` shows the loader. */
@@ -42,8 +42,19 @@ let totalLoaderTimer = null;
 let healthInterval = null;
 /** Cached groups list. */
 let cachedGroups = [];
-/** Active AMA conversation (recreated each time the panel opens). */
+/** Active AMA conversation (restored from sessionStorage when the panel opens). */
 let amaConversation = createConversation();
+/** Scope of the active AMA conversation, for persistence keying. */
+let amaScope = null;
+
+/** sessionStorage, or null if the browser blocks access (private mode, etc.). */
+function amaStorage() {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
 
 /* ── 2. Routing ──────────────────────────────────────────── */
 
@@ -1009,7 +1020,8 @@ function runTotal({ since }) {
  */
 function renderAma(scope) {
   teardownStream();
-  amaConversation = createConversation();
+  amaScope = scope ?? null;
+  amaConversation = loadConversation(amaStorage(), amaScope);
   const sub = scope ? `על "${escHtml(formatGroupName(scope))}"` : "מחפש בכל השיחות שלך";
   paneMain.innerHTML = `
     <div class="ama-panel">
@@ -1036,12 +1048,19 @@ function renderAma(scope) {
   setView("ama");
   markActiveRow(scope);
 
+  // Replace the empty-state hint with the restored thread, if there is one.
+  if (amaConversation.messages.length) renderAmaMessages();
+
   document.getElementById("ama-back-btn")?.addEventListener("click", () => history.back());
   document.getElementById("ama-form")?.addEventListener("submit", (e) => {
     e.preventDefault();
     submitAmaQuestion(scope);
   });
 }
+
+/** No SSE activity for this long → treat the request as stuck and surface it. */
+const AMA_STALL_MS = 120_000;
+let amaStallTimer = null;
 
 /** Send the typed question to /api/ask and stream the answer into the panel. */
 function submitAmaQuestion(scope) {
@@ -1052,13 +1071,33 @@ function submitAmaQuestion(scope) {
   if (!reply) return;
   if (input) input.value = "";
   renderAmaMessages();
+  saveConversation(amaStorage(), amaScope, amaConversation);
 
   const settle = () => {
+    if (amaStallTimer) { clearTimeout(amaStallTimer); amaStallTimer = null; }
     teardownStream();
     renderAmaMessages();
+    saveConversation(amaStorage(), amaScope, amaConversation);
   };
+  // Reset on every event; if the server goes silent for too long (a hung or
+  // overloaded model), fail visibly instead of spinning "חושב…" forever.
+  const armStall = () => {
+    if (amaStallTimer) clearTimeout(amaStallTimer);
+    amaStallTimer = setTimeout(() => {
+      if (reply.pending) failAnswer(reply, "אין תגובה מהשרת. נסה שוב.");
+      settle();
+    }, AMA_STALL_MS);
+  };
+  armStall();
+
   activeEventSource = askStream({ q, chat: scope ?? undefined }, {
+    phase: (d) => {
+      armStall();
+      setPhase(reply, d.phase);
+      renderAmaMessages();
+    },
     token: (d) => {
+      armStall();
       appendToken(reply, d.delta);
       renderAmaMessages();
     },
@@ -1080,7 +1119,9 @@ function renderAmaMessages() {
       return `<div class="ama-bubble ama-bubble--user">${escHtml(m.text)}</div>`;
     }
     if (m.pending && !m.text) {
-      return `<div class="ama-bubble ama-bubble--ai ama-bubble--pending">חושב…</div>`;
+      const label =
+        m.phase === "searching" ? "מחפש בהודעות…" : m.phase === "synthesizing" ? "מנסח תשובה…" : "חושב…";
+      return `<div class="ama-bubble ama-bubble--ai ama-bubble--pending">${label}</div>`;
     }
     const err = m.error ? `<span class="ama-bubble__err">${escHtml(m.error)}</span>` : "";
     return `<div class="ama-bubble ama-bubble--ai">${escHtml(m.text)}${err}${renderAmaSources(m.citations)}</div>`;
@@ -1155,7 +1196,230 @@ function resolveInitialRoute() {
   return { view: "feed" };
 }
 
+// ── T2 auth gate (multi-tenant mode) ─────────────────────────────────────────
+// Single-user local mode: /api/* is open → the gate is a no-op. Multi-tenant mode
+// (MULTI_TENANT=true server-side): /api/* returns 401 without a session → show the
+// login/register pane. /verify + /reset are the emailed-link landing pages.
+
+async function authGate() {
+  const token = new URLSearchParams(location.search).get("token");
+  if (location.pathname === "/verify" && token) {
+    await renderVerifyResult(token);
+    return false;
+  }
+  if (location.pathname === "/reset" && token) {
+    renderResetForm(token);
+    return false;
+  }
+  const me = await fetch("/api/auth/me").catch(() => null);
+  if (me && me.ok) {
+    // Authenticated (multi-tenant): the tenant must have a linked WhatsApp session
+    // before the app is useful. Gate on onboarding status; show the QR pane if not.
+    const ob = await fetch("/api/onboarding/status").catch(() => null);
+    if (ob && ob.ok) {
+      const { status } = await ob.json();
+      if (status !== "connected") {
+        renderOnboarding(status);
+        return false;
+      }
+    }
+    return true;
+  }
+  // No session. Distinguish single-user (APIs open) from multi-tenant (gated).
+  const probe = await fetch("/api/status").catch(() => null);
+  if (probe && probe.status !== 401) return true;
+  renderAuthPane("login");
+  return false;
+}
+
+/**
+ * T4 onboarding pane: link a WhatsApp account by scanning a QR. Opens the
+ * /api/onboarding/qr SSE stream (server renders the QR to a data URL); when the
+ * session reports "connected" we reload into the app.
+ */
+function renderOnboarding(initialStatus) {
+  authShell(`
+    <p class="auth-card__sub">כדי להתחיל, חברו את חשבון הוואטסאפ שלכם.</p>
+    <div id="qr-box" class="qr-box" aria-live="polite">
+      <div class="qr-spinner" aria-hidden="true"></div>
+      <p id="qr-hint" class="qr-hint">מכינים קוד QR…</p>
+    </div>
+    <ol class="qr-steps">
+      <li>פתחו וואטסאפ בטלפון → הגדרות → מכשירים מקושרים</li>
+      <li>הקישו "קישור מכשיר" וסרקו את הקוד שלמעלה</li>
+    </ol>
+    <p id="qr-status" class="qr-status"></p>
+    <button type="button" id="auth-logout" class="auth-link">התנתקות</button>
+  `);
+  const logout = document.getElementById("auth-logout");
+  if (logout)
+    logout.onclick = async () => {
+      await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+      location.href = "/";
+    };
+
+  if (initialStatus === "logged-out" || initialStatus === "failed") {
+    setOnboardingStatus(
+      initialStatus === "logged-out"
+        ? "החיבור נותק. סרקו שוב כדי לקשר מחדש."
+        : "החיבור נכשל. מנסים שוב…",
+    );
+  }
+
+  const es = new EventSource("/api/onboarding/qr");
+  activeEventSource = es;
+  es.addEventListener("qr", (e) => {
+    const { dataUrl } = JSON.parse(e.data);
+    const box = document.getElementById("qr-box");
+    if (box && dataUrl) {
+      box.innerHTML = `<img class="qr-img" src="${dataUrl}" alt="קוד QR לקישור וואטסאפ" width="264" height="264" />`;
+    }
+  });
+  es.addEventListener("connected", () => {
+    es.close();
+    setOnboardingStatus("✅ מחובר! טוען את האפליקציה…");
+    setTimeout(() => location.reload(), 800);
+  });
+  es.addEventListener("logged-out", () => {
+    setOnboardingStatus("הקישור נדחה. רעננו ונסו שוב.");
+  });
+  es.onerror = () => setOnboardingStatus("שגיאת חיבור לשרת. רעננו את הדף.");
+}
+
+function setOnboardingStatus(text) {
+  const el = document.getElementById("qr-status");
+  if (el) el.textContent = text;
+}
+
+function authShell(innerHtml) {
+  document.getElementById("layout").innerHTML = `
+    <div class="auth-pane">
+      <div class="auth-card">
+        <h1 class="auth-card__title">סיכום וואטסאפ</h1>
+        ${innerHtml}
+      </div>
+    </div>
+  `;
+}
+
+function renderAuthPane(mode) {
+  const isLogin = mode === "login";
+  authShell(`
+    <div class="auth-tabs">
+      <button id="tab-login" class="auth-tab ${isLogin ? "auth-tab--active" : ""}">התחברות</button>
+      <button id="tab-register" class="auth-tab ${isLogin ? "" : "auth-tab--active"}">הרשמה</button>
+    </div>
+    <form id="auth-form" class="auth-form">
+      <label class="auth-label">אימייל
+        <input id="auth-email" class="auth-input" type="email" required autocomplete="email" />
+      </label>
+      <label class="auth-label">סיסמה (8 תווים לפחות)
+        <input id="auth-password" class="auth-input" type="password" required minlength="8"
+               autocomplete="${isLogin ? "current-password" : "new-password"}" />
+      </label>
+      ${
+        isLogin
+          ? `<button type="button" id="auth-forgot" class="auth-link">שכחתי סיסמה</button>`
+          : `<label class="auth-consent"><input id="auth-consent" type="checkbox" required />
+               אני מסכים/ה לתנאי השימוש: ההודעות שלי (כולל של אנשי הקשר שלי) יאוחסנו ויעובדו
+               בשרת המופעל ע"י מנהל המערכת לצורך סיכומים. ניתן לבקש מחיקה מלאה בכל עת.</label>`
+      }
+      <p id="auth-error" class="auth-error" hidden></p>
+      <button type="submit" class="auth-submit">${isLogin ? "התחברות" : "הרשמה"}</button>
+    </form>
+  `);
+  document.getElementById("tab-login").onclick = () => renderAuthPane("login");
+  document.getElementById("tab-register").onclick = () => renderAuthPane("register");
+  const forgot = document.getElementById("auth-forgot");
+  if (forgot) forgot.onclick = () => renderForgotForm();
+  document.getElementById("auth-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const body = {
+      email: document.getElementById("auth-email").value.trim(),
+      password: document.getElementById("auth-password").value,
+    };
+    if (!isLogin) body.consent = document.getElementById("auth-consent").checked;
+    const r = await fetch(`/api/auth/${isLogin ? "login" : "register"}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => null);
+    if (r && (r.status === 200 || r.status === 201)) {
+      location.href = "/";
+      return;
+    }
+    const err = document.getElementById("auth-error");
+    err.textContent = r ? ((await r.json().catch(() => ({}))).error ?? "שגיאה") : "שגיאת רשת";
+    err.hidden = false;
+  };
+}
+
+function renderForgotForm() {
+  authShell(`
+    <form id="auth-form" class="auth-form">
+      <p>נשלח קישור לאיפוס סיסמה אם האימייל רשום אצלנו (חפשו בלוג של השרת בהתקנה עצמית).</p>
+      <label class="auth-label">אימייל
+        <input id="auth-email" class="auth-input" type="email" required />
+      </label>
+      <button type="submit" class="auth-submit">שליחת קישור איפוס</button>
+      <button type="button" id="auth-back" class="auth-link">חזרה להתחברות</button>
+    </form>
+  `);
+  document.getElementById("auth-back").onclick = () => renderAuthPane("login");
+  document.getElementById("auth-form").onsubmit = async (e) => {
+    e.preventDefault();
+    await fetch("/api/auth/request-reset", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: document.getElementById("auth-email").value.trim() }),
+    }).catch(() => null);
+    authShell(`<p>אם האימייל רשום — נשלח קישור איפוס.</p><a class="auth-link" href="/">חזרה</a>`);
+  };
+}
+
+async function renderVerifyResult(token) {
+  const r = await fetch("/api/auth/verify", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token }),
+  }).catch(() => null);
+  const ok = r && r.ok;
+  authShell(`
+    <p>${ok ? "✅ האימייל אומת בהצלחה!" : "❌ קישור האימות לא תקין או שפג תוקפו."}</p>
+    <a class="auth-submit auth-submit--link" href="/">המשך לאפליקציה</a>
+  `);
+}
+
+function renderResetForm(token) {
+  authShell(`
+    <form id="auth-form" class="auth-form">
+      <label class="auth-label">סיסמה חדשה (8 תווים לפחות)
+        <input id="auth-password" class="auth-input" type="password" required minlength="8"
+               autocomplete="new-password" />
+      </label>
+      <p id="auth-error" class="auth-error" hidden></p>
+      <button type="submit" class="auth-submit">איפוס סיסמה</button>
+    </form>
+  `);
+  document.getElementById("auth-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const r = await fetch("/api/auth/reset", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token, password: document.getElementById("auth-password").value }),
+    }).catch(() => null);
+    if (r && r.ok) {
+      authShell(`<p>✅ הסיסמה אופסה. התחברו מחדש.</p><a class="auth-submit auth-submit--link" href="/">להתחברות</a>`);
+      return;
+    }
+    const err = document.getElementById("auth-error");
+    err.textContent = "קישור האיפוס לא תקין או שפג תוקפו.";
+    err.hidden = false;
+  };
+}
+
 async function boot() {
+  if (!(await authGate())) return;
   renderShell();
   if (DEMO) applyHealth(true);
   else startHealthPolling();
