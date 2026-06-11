@@ -14,7 +14,8 @@
  * Teardown: EventSource is closed when leaving a streaming view
  */
 
-import { askStream, getGroups, getMessages, getStatus, getSummaries, summarizeStream } from "./lib/api.js";
+import { askStream, createScopeCategory, getGroups, getMessages, getScopeCategories, getScopes, getStatus, getSummaries, putScopes, summarizeStream } from "./lib/api.js";
+import { activeCount, filterScopes, groupByCategory, partitionRemoved, sectionCount } from "./lib/scopes.js";
 import { formatAgo, presetToSince, validateRangeInput } from "./lib/time.js";
 import { renderMarkdown } from "./lib/markdown.js";
 import { deriveHealth } from "./lib/health.js";
@@ -96,6 +97,9 @@ function navigate(view, arg) {
       `#thread=${encodeURIComponent(arg.chat)}&m=${arg.aroundId}`,
     );
     renderThread(arg.chat, arg.aroundId);
+  } else if (view === "sources") {
+    history.pushState({ view: "sources" }, "", "#sources");
+    renderSources();
   } else {
     history.pushState({ view: "feed" }, "", location.pathname);
     setView("feed");
@@ -110,6 +114,8 @@ window.addEventListener("popstate", (e) => {
     renderDetail(state.group, false);
   } else if (state?.view === "total") {
     renderTotal(false);
+  } else if (state?.view === "sources") {
+    renderSources();
   } else if (state?.view === "ama") {
     renderAma(state.scope ?? null);
   } else if (state?.view === "thread" && state.chat) {
@@ -189,7 +195,10 @@ function renderShell() {
         placeholder="🔍  חיפוש קבוצה…" aria-label="חיפוש קבוצה"
         autocomplete="off" autocorrect="off" spellcheck="false" />
     </div>
-    <div class="seclabel">הקבוצות שלי</div>
+    <div class="seclabel seclabel--row">
+      <span>הקבוצות שלי</span>
+      <button class="manage-sources" id="manage-sources" type="button">נהל צ׳אטים ›</button>
+    </div>
     <div class="feed-list" id="feed-list" role="list" aria-live="polite">
       ${buildSkeletonCards(3)}
     </div>
@@ -198,6 +207,7 @@ function renderShell() {
   document.getElementById("ama-card").addEventListener("click", () => navigate("ama"));
   document.getElementById("total-card").addEventListener("click", () => navigate("total"));
   document.getElementById("theme-toggle")?.addEventListener("click", toggleTheme);
+  document.getElementById("manage-sources")?.addEventListener("click", () => navigate("sources"));
   const input = document.getElementById("search-input");
   if (input) input.addEventListener("input", () => renderGroupList(cachedGroups, input.value));
 }
@@ -1334,6 +1344,195 @@ async function renderThread(chat, aroundId) {
   if (target) {
     target.scrollIntoView({ block: "center" });
     target.classList.add("cmsg--pulse");
+  }
+}
+
+/* ── 7c. Sources (chat scopes) ───────────────────────────── */
+
+const SEG_LABEL = { all: "הכול", included: "מוזנים", excluded: "מוחרגים" };
+const sourcesState = { scopes: [], categories: [], query: "", segment: "all" };
+
+/** The Sources control center (§7): whitelist/blacklist + categorize chats. */
+async function renderSources() {
+  teardownStream();
+  setView("ama"); // reuse the single-pane slot
+  paneMain.innerHTML = `<div class="sources-panel"><p class="thread-loading">טוען צ׳אטים…</p></div>`;
+  try {
+    const [scopes, categories] = await Promise.all([getScopes(), getScopeCategories()]);
+    sourcesState.scopes = scopes;
+    sourcesState.categories = categories;
+  } catch {
+    paneMain.innerHTML = `<div class="sources-panel"><p class="error-state">שגיאה בטעינת הצ׳אטים.</p></div>`;
+    return;
+  }
+  paintSources();
+}
+
+function paintSources() {
+  const { scopes, categories, query, segment } = sourcesState;
+  const { removed } = partitionRemoved(scopes);
+  const counts = activeCount(scopes);
+  const filtered = filterScopes(scopes, { query, segment });
+  const sections = groupByCategory(filtered, categories);
+
+  paneMain.innerHTML = `
+    <div class="sources-panel">
+      <div class="sources-head">
+        <button class="back-btn" id="sources-back" aria-label="חזרה">
+          <span class="back-btn__arrow" aria-hidden="true">›</span> חזרה
+        </button>
+        <div class="sources-head__title">צ׳אטים</div>
+      </div>
+      <p class="sources-callout">אתם בוחרים מה CatchApp רואה ·
+        <span class="mono" dir="ltr">${counts.active}/${counts.total}</span> פעילים</p>
+      <div class="sources-toolbar">
+        <input id="sources-search" class="src-search" type="search" placeholder="🔍  חיפוש צ׳אט…"
+          aria-label="חיפוש צ׳אט" value="${escHtml(query)}" autocomplete="off" />
+        <div class="src-seg" role="group" aria-label="סינון">
+          ${["all", "included", "excluded"]
+            .map(
+              (seg) =>
+                `<button class="src-seg__btn${segment === seg ? " is-active" : ""}" data-seg="${seg}" type="button">${SEG_LABEL[seg]}</button>`,
+            )
+            .join("")}
+        </div>
+        <button class="src-addcat" id="sources-addcat" type="button">+ קבוצה</button>
+      </div>
+      ${sections.map(buildSourcesSection).join("")}
+      ${filtered.length === 0 ? `<p class="empty-state">לא נמצאו צ׳אטים תואמים.</p>` : ""}
+      ${removed.length ? buildRemovedSection(removed) : ""}
+    </div>`;
+  wireSources();
+}
+
+function buildSourcesSection(section) {
+  const title = section.category ? escHtml(section.category.name) : "ללא קטגוריה";
+  const n = sectionCount(section.scopes);
+  const anyIncluded = section.scopes.some((s) => s.included);
+  const bulkLabel = anyIncluded ? "כבה הכול" : "הפעל הכול";
+  return `
+    <div class="src-section">
+      <div class="src-section__head">
+        <span class="src-section__title">${title} <span class="src-section__count mono" dir="ltr">${n}</span></span>
+        ${section.scopes.length ? `<button class="src-bulk" data-bulk="${anyIncluded ? "off" : "on"}" data-cat="${section.category?.id ?? ""}" type="button">${bulkLabel}</button>` : ""}
+      </div>
+      ${section.scopes.map(buildSourceRow).join("") || `<p class="src-empty-cat">אין צ׳אטים בקטגוריה זו</p>`}
+    </div>`;
+}
+
+function buildSourceRow(s) {
+  const cats = sourcesState.categories
+    .map(
+      (c) =>
+        `<option value="${c.id}"${s.categoryId === c.id ? " selected" : ""}>${escHtml(c.name)}</option>`,
+    )
+    .join("");
+  return `
+    <div class="src-row" data-group="${escHtml(s.group)}">
+      <button class="src-switch${s.included ? " is-on" : ""}" data-act="toggle" type="button"
+        role="switch" aria-checked="${s.included}" aria-label="${s.included ? "מוזן" : "מוחרג"}">
+        <span class="src-switch__knob"></span>
+      </button>
+      <div class="src-row__body">
+        <div class="src-row__name">${escHtml(formatGroupName(s.group))}</div>
+        <div class="src-row__meta mono" dir="ltr">${s.messageCount}</div>
+      </div>
+      <select class="src-cat" data-act="cat" aria-label="קטגוריה">
+        <option value=""${s.categoryId == null ? " selected" : ""}>ללא</option>
+        ${cats}
+      </select>
+      <button class="src-remove" data-act="remove" type="button" aria-label="הסר">✕</button>
+    </div>`;
+}
+
+function buildRemovedSection(removed) {
+  return `
+    <div class="src-section src-section--removed">
+      <div class="src-section__head"><span class="src-section__title">הוסרו <span class="mono" dir="ltr">${removed.length}</span></span></div>
+      ${removed
+        .map(
+          (s) => `
+        <div class="src-row src-row--removed" data-group="${escHtml(s.group)}">
+          <div class="src-row__name">${escHtml(formatGroupName(s.group))}</div>
+          <button class="src-restore" data-act="restore" type="button">שחזר</button>
+        </div>`,
+        )
+        .join("")}
+    </div>`;
+}
+
+/** Apply a scope change locally + persist, then repaint. Optimistic. */
+async function applyScopeChange(updates) {
+  for (const u of updates) {
+    const row = sourcesState.scopes.find((s) => s.group === u.group);
+    if (!row) continue;
+    if (u.included !== undefined) row.included = u.included;
+    if (u.categoryId !== undefined) row.categoryId = u.categoryId;
+    if (u.removed !== undefined) row.removed = u.removed;
+  }
+  paintSources();
+  try {
+    await putScopes(updates);
+  } catch {
+    // Refetch to resync if the write failed.
+    renderSources();
+  }
+}
+
+function wireSources() {
+  document.getElementById("sources-back")?.addEventListener("click", () => history.back());
+
+  const search = document.getElementById("sources-search");
+  if (search) {
+    search.addEventListener("input", () => {
+      sourcesState.query = search.value;
+      paintSources();
+      document.getElementById("sources-search")?.focus();
+    });
+  }
+  for (const btn of document.querySelectorAll(".src-seg__btn")) {
+    btn.addEventListener("click", () => {
+      sourcesState.segment = btn.dataset.seg;
+      paintSources();
+    });
+  }
+  document.getElementById("sources-addcat")?.addEventListener("click", async () => {
+    const name = (prompt("שם הקבוצה החדשה:") || "").trim();
+    if (!name) return;
+    try {
+      await createScopeCategory(name);
+      sourcesState.categories = await getScopeCategories();
+      paintSources();
+    } catch {
+      /* ignore */
+    }
+  });
+  for (const btn of document.querySelectorAll(".src-bulk")) {
+    btn.addEventListener("click", () => {
+      const on = btn.dataset.bulk === "on";
+      const catId = btn.dataset.cat === "" ? null : Number(btn.dataset.cat);
+      const updates = sourcesState.scopes
+        .filter((s) => !s.removed && (s.categoryId ?? null) === catId)
+        .map((s) => ({ group: s.group, included: on }));
+      if (updates.length) applyScopeChange(updates);
+    });
+  }
+  for (const row of document.querySelectorAll(".src-row[data-group]")) {
+    const group = row.dataset.group;
+    row.querySelector('[data-act="toggle"]')?.addEventListener("click", () => {
+      const s = sourcesState.scopes.find((x) => x.group === group);
+      applyScopeChange([{ group, included: !s.included }]);
+    });
+    row.querySelector('[data-act="remove"]')?.addEventListener("click", () =>
+      applyScopeChange([{ group, removed: true }]),
+    );
+    row.querySelector('[data-act="restore"]')?.addEventListener("click", () =>
+      applyScopeChange([{ group, removed: false }]),
+    );
+    row.querySelector('[data-act="cat"]')?.addEventListener("change", (e) => {
+      const val = e.target.value;
+      applyScopeChange([{ group, categoryId: val === "" ? null : Number(val) }]);
+    });
   }
 }
 
