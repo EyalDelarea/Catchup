@@ -13,6 +13,7 @@ import {
   verifyEmail,
 } from "../auth/service.js";
 import { EmailTakenError } from "../db/repositories/users.js";
+import { makeRateLimiter, type RateLimiter } from "./rate-limit.js";
 
 /**
  * The /api/auth/* HTTP surface — a thin adapter over src/auth/service.ts. Pure
@@ -25,7 +26,28 @@ export type AuthRoutesOptions = {
   deps: AuthDeps;
   /** Secure attribute on the session cookie (config.auth.cookieSecure). */
   cookieSecure: boolean;
+  /**
+   * Per-IP+route throttling for the mutating auth endpoints. Defaults to 10 requests per
+   * 60s. Pass a prebuilt limiter (or tighter limits) in tests. Set `trustForwardedFor`
+   * only when a trusted reverse proxy sets X-Forwarded-For, otherwise it is spoofable.
+   */
+  rateLimit?: {
+    limiter?: RateLimiter;
+    max?: number;
+    windowMs?: number;
+    trustForwardedFor?: boolean;
+  };
 };
+
+/** Client IP for rate-limit keying. Honors X-Forwarded-For only when explicitly trusted. */
+function clientIp(req: http.IncomingMessage, trustForwardedFor: boolean): string {
+  if (trustForwardedFor) {
+    const fwd = req.headers["x-forwarded-for"];
+    const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return req.socket.remoteAddress ?? "unknown";
+}
 
 export type ResolvedSession = { sessionId: string; tenantId: string; userId: string };
 
@@ -37,6 +59,17 @@ const MIN_PASSWORD_LEN = 8;
 
 export function makeAuthRoutes(opts: AuthRoutesOptions) {
   const { deps, cookieSecure } = opts;
+
+  // Throttle mutating auth requests per IP+route. Reuses the injectable clock so windows
+  // are deterministic in tests.
+  const trustForwardedFor = opts.rateLimit?.trustForwardedFor ?? false;
+  const rateLimiter =
+    opts.rateLimit?.limiter ??
+    makeRateLimiter({
+      max: opts.rateLimit?.max ?? 10,
+      windowMs: opts.rateLimit?.windowMs ?? 60_000,
+      now: () => deps.now().getTime(),
+    });
 
   const setSession = (res: http.ServerResponse, rawToken: string): void => {
     res.setHeader(
@@ -105,6 +138,15 @@ export function makeAuthRoutes(opts: AuthRoutesOptions) {
       json(res, 404, { error: "Not found." });
       return;
     }
+
+    // Throttle the mutating, unauthenticated POST surface (register/login/reset/...).
+    const decision = rateLimiter.check(`${clientIp(req, trustForwardedFor)} ${url.pathname}`);
+    if (!decision.allowed) {
+      res.setHeader("retry-after", String(decision.retryAfterSec));
+      json(res, 429, { error: "Too many requests. Please slow down and try again shortly." });
+      return;
+    }
+
     const body = await readJsonBody(req);
     if (body === null) {
       json(res, 400, { error: "Invalid JSON body." });

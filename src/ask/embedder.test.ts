@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { OllamaEmbedder, toVectorLiteral } from "./embedder.js";
-
-describe("toVectorLiteral", () => {
-  it("formats a number array as a pgvector literal", () => {
-    expect(toVectorLiteral([0.1, -0.2, 3])).toBe("[0.1,-0.2,3]");
-    expect(toVectorLiteral([])).toBe("[]");
-  });
-});
+import { OllamaEmbedder } from "./embedder.js";
 
 describe("OllamaEmbedder", () => {
   const okResponse = (embeddings: number[][]) =>

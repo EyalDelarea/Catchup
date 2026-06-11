@@ -14,14 +14,13 @@ import {
 import { createTenant } from "../db/repositories/tenants.js";
 import {
   createUser,
-  EmailTakenError,
   findUserForLogin,
   getUserById,
   markEmailVerified,
   setPasswordHash,
 } from "../db/repositories/users.js";
 import { withTenant } from "../db/tenant-context.js";
-import { hashPassword, verifyPassword } from "./password.js";
+import { hashPassword, spendDummyVerify, verifyPassword } from "./password.js";
 import { generateToken, hashToken } from "./tokens.js";
 
 /**
@@ -95,10 +94,10 @@ export async function register(
     );
     userId = user.id;
   } catch (err) {
-    // Roll the just-created tenant back so a taken email leaves no orphan tenant.
-    if (err instanceof EmailTakenError) {
-      await deps.operatorPool.query(`DELETE FROM tenants WHERE id = $1`, [tenant.id]);
-    }
+    // Roll the just-created tenant back so ANY failure to create its owner user leaves
+    // no orphan tenant — a taken email, but also transient DB errors. The cleanup is
+    // best-effort so it never masks the original failure.
+    await deps.operatorPool.query(`DELETE FROM tenants WHERE id = $1`, [tenant.id]).catch(() => {});
     throw err;
   }
 
@@ -118,9 +117,16 @@ export async function login(
   input: { email: string; password: string },
 ): Promise<{ rawToken: string; user: AuthedUser } | null> {
   const user = await findUserForLogin(deps.operatorPool, input.email);
-  // Verify even when the user is missing? We still hit argon2 only when we have a hash; a
-  // missing user returns null. (Timing-uniformity hardening can come in T6.)
-  if (!user || !(await verifyPassword(user.passwordHash, input.password))) {
+  // Equalize timing across the missing-user and wrong-password branches: a missing user
+  // still spends one argon2 verify (against a dummy hash) so response time can't be used
+  // to enumerate which emails are registered.
+  let passwordOk = false;
+  if (user) {
+    passwordOk = await verifyPassword(user.passwordHash, input.password);
+  } else {
+    await spendDummyVerify(input.password);
+  }
+  if (!user || !passwordOk) {
     await audit(deps, {
       tenantId: user?.tenantId ?? null,
       actorEmail: input.email.toLowerCase(),
@@ -284,12 +290,21 @@ async function issueEmailToken(
     }),
   );
   const link = `${deps.publicBaseUrl}/${path}?token=${rawToken}`;
-  // Look the user's email up on the operator pool (pre/non-tenant-bound send).
-  const user = await getUserEmail(deps, tenantId, userId);
-  await deps.mailer.send(user, subject, `${subject}\n\n${link}\n`);
+  // Resolve the recipient. Reaching here with no email means the just-issued token's
+  // user can't be loaded — a real inconsistency; fail fast rather than mailing an empty
+  // address (which a downstream SMTP transport would reject or silently drop).
+  const email = await getUserEmail(deps, tenantId, userId);
+  if (!email) {
+    throw new Error(`cannot send ${kind} email: no resolvable recipient for user ${userId}`);
+  }
+  await deps.mailer.send(email, subject, `${subject}\n\n${link}\n`);
 }
 
-async function getUserEmail(deps: AuthDeps, tenantId: string, userId: string): Promise<string> {
+async function getUserEmail(
+  deps: AuthDeps,
+  tenantId: string,
+  userId: string,
+): Promise<string | null> {
   const u = await withTenant(deps.appPool, tenantId, (c) => getUserById(c, userId));
-  return u?.email ?? "";
+  return u?.email ?? null;
 }

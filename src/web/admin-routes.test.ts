@@ -112,6 +112,13 @@ describe("GET /api/admin/audit", () => {
     // The operator viewing the trail is itself audited.
     expect(auditEvents.some((e) => e.action === "operator.access")).toBe(true);
   });
+
+  it("does not 500 on a non-numeric ?limit (falls back to the default)", async () => {
+    await startServer(true);
+    const r = await fetch(`${base}/api/admin/audit?limit=abc`);
+    expect(r.status).toBe(200);
+    expect(Array.isArray(await r.json())).toBe(true);
+  });
 });
 
 describe("GET /api/admin/health", () => {

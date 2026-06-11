@@ -213,6 +213,39 @@ describe("attachCollector", () => {
     expect(heartbeatCallCountAfterStop).toBe(heartbeatCallCount);
   });
 
+  it("reconnect does not leak heartbeat intervals (only one stays alive)", () => {
+    vi.useFakeTimers();
+    try {
+      const { session, bus, setConnected, recordHeartbeat, handleMessage } = makeFakeDeps();
+
+      attachCollector({
+        session: session as unknown as CollectorSession,
+        pool: fakePool,
+        bus,
+        dataDir: "/tmp/data",
+        setConnected,
+        recordHeartbeat,
+        handleMessage,
+        heartbeatMs: 1_000,
+      });
+
+      // Simulate an auto-reconnect cycle: the session re-emits 'connected' after a drop.
+      session.emit("connected");
+      session.emit("disconnected");
+      session.emit("connected");
+
+      // Ignore the immediate per-start heartbeats; we only care about interval ticks.
+      recordHeartbeat.mockClear();
+      vi.advanceTimersByTime(1_000);
+
+      // Exactly one interval should be alive. Before the fix, the orphaned interval from
+      // the first 'connected' survived, so this would be 2.
+      expect(recordHeartbeat).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stop() before any connection does not throw", () => {
     const { session, bus, setConnected, recordHeartbeat, handleMessage } = makeFakeDeps();
 

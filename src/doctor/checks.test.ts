@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   type CheckResult,
   checkComposeServices,
+  checkDefaultPasswords,
   checkDocker,
   checkFfmpeg,
   checkOllama,
@@ -162,6 +163,38 @@ describe("checkFfmpeg", () => {
   it("returns not-ok with a fix when probe throws", async () => {
     const result = await checkFfmpeg(throws);
     assertFail(result, "ffmpeg on PATH");
+  });
+});
+
+// ── checkDefaultPasswords ─────────────────────────────────────────────────────
+
+describe("checkDefaultPasswords", () => {
+  it("is ok when neither role accepts the default password (rotated)", async () => {
+    const result = await checkDefaultPasswords(fail, fail, { multiTenant: true });
+    assertOk(result, "DB roles use non-default passwords");
+    expect(result.level).toBeUndefined();
+  });
+
+  it("warns (non-fatal) when a role still accepts the default password", async () => {
+    const result = await checkDefaultPasswords(ok, fail, { multiTenant: false });
+    expect(result.ok).toBe(false);
+    expect(result.level).toBe("warn");
+    expect(result.detail).toContain("catchup_app");
+    expect(result.detail).not.toContain("catchup_operator");
+    expect(result.fix).toBeTruthy();
+  });
+
+  it("names both roles and emphasizes multi-tenant exposure when enabled", async () => {
+    const result = await checkDefaultPasswords(ok, ok, { multiTenant: true });
+    expect(result.level).toBe("warn");
+    expect(result.detail).toContain("catchup_app");
+    expect(result.detail).toContain("catchup_operator");
+    expect(result.detail).toContain("multi-tenant");
+  });
+
+  it("treats a probe error as inconclusive (ok), not a hard failure", async () => {
+    const result = await checkDefaultPasswords(throws, throws, { multiTenant: true });
+    assertOk(result, "DB roles use non-default passwords");
   });
 });
 

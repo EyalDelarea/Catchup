@@ -114,14 +114,16 @@ describe("CLI contract — doctor command (FR-016)", () => {
     const r = run(["doctor"]);
     // Output must have multiple lines — one per check
     const lines = r.stdout.split("\n").filter((l) => l.trim().length > 0);
-    expect(lines.length).toBeGreaterThanOrEqual(7); // 7 checks
+    expect(lines.length).toBeGreaterThanOrEqual(7); // at least the 7 core checks
   });
 
-  it("each output line is either ✅ or ❌ format", () => {
+  it("each output line is ✅, ⚠️ or ❌ format", () => {
     const r = run(["doctor"]);
     const lines = r.stdout.split("\n").filter((l) => l.trim().length > 0);
     for (const line of lines) {
-      expect(line).toMatch(/^[✅❌]/);
+      // ⚠️ is the advisory level (e.g. the default-DB-password check). Use an alternation,
+      // not a character class — ⚠️ is two code points (⚠ + variation selector).
+      expect(line).toMatch(/^(✅|⚠️|❌)/);
     }
   });
 

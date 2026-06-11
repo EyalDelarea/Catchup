@@ -139,7 +139,10 @@ export function attachCollector(deps: AttachCollectorDeps): LiveServiceHandle {
       console.error("[live-service] setConnected(true) failed:", err);
     });
 
-    // Start heartbeat loop
+    // Start heartbeat loop. The session re-emits 'connected' on every auto-reconnect,
+    // so stop any prior interval first — otherwise each reconnect orphans the previous
+    // timer and they accumulate, all writing heartbeats concurrently.
+    heartbeatHandle?.stop();
     heartbeatHandle = startHeartbeat({
       pool: pool as pg.Pool,
       intervalMs: heartbeatMs,
@@ -148,6 +151,10 @@ export function attachCollector(deps: AttachCollectorDeps): LiveServiceHandle {
   };
 
   const onDisconnected = () => {
+    // Stop the heartbeat while disconnected — it resumes on the next 'connected'.
+    heartbeatHandle?.stop();
+    heartbeatHandle = null;
+
     void _setConnected(pool, false).catch((err) => {
       console.error("[live-service] setConnected(false) failed:", err);
     });
