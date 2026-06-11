@@ -1321,6 +1321,8 @@ async function renderAdminDashboard() {
       </header>
       <div id="admin-health" class="admin-health"></div>
       <div id="admin-body"><p class="admin-loading">טוען נתוני דיירים…</p></div>
+      <h2 class="admin-subtitle">יומן ביקורת</h2>
+      <div id="admin-audit"><p class="admin-loading">טוען יומן…</p></div>
     </div>
   `;
 
@@ -1368,6 +1370,45 @@ async function renderAdminDashboard() {
     <table class="admin-table">
       <thead><tr><th>דייר</th><th>חיבור וואטסאפ</th><th>קבוצות</th><th>הודעות</th><th>סיכום אחרון</th></tr></thead>
       <tbody>${rows}</tbody>
+    </table>
+  `;
+
+  // ── Audit trail ──
+  const AUDIT_LABELS = {
+    "auth.register": "הרשמה",
+    "auth.login": "התחברות",
+    "auth.login_failed": "התחברות נכשלה",
+    "auth.logout": "התנתקות",
+    "auth.verify": "אימות אימייל",
+    "auth.reset": "איפוס סיסמה",
+    "onboarding.link": "קישור וואטסאפ",
+    "operator.access": "גישת מנהל",
+    "tenant.deleted": "דייר נמחק",
+    "tenant.purged": "נתוני דייר נמחקו",
+  };
+  const auditRes = await fetch("/api/admin/audit?limit=50").catch(() => null);
+  const auditBox = document.getElementById("admin-audit");
+  if (!auditRes || !auditRes.ok) {
+    auditBox.innerHTML = `<p class="admin-loading">לא ניתן לטעון את היומן.</p>`;
+    return;
+  }
+  const events = await auditRes.json();
+  if (events.length === 0) {
+    auditBox.innerHTML = `<p class="admin-loading">אין אירועים עדיין.</p>`;
+    return;
+  }
+  auditBox.innerHTML = `
+    <table class="admin-table">
+      <thead><tr><th>מתי</th><th>אירוע</th><th>מי</th></tr></thead>
+      <tbody>${events
+        .map(
+          (e) => `<tr>
+            <td>${fmtAgo(e.at)}</td>
+            <td>${AUDIT_LABELS[e.action] || escape(e.action)}</td>
+            <td>${escape(e.actorEmail || "—")}</td>
+          </tr>`,
+        )
+        .join("")}</tbody>
     </table>
   `;
 }
