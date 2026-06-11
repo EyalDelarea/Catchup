@@ -13,6 +13,7 @@ import { upsertGroup } from "./groups.js";
 import {
   countReadableByGroup,
   getMessageIdByExternalId,
+  getMessagesAround,
   getNewestAnchor,
   getOldestSentAt,
   insertMessages,
@@ -653,6 +654,37 @@ describe("messages read queries", () => {
 
       const { rows } = await pool.query("SELECT media_filename FROM messages WHERE id=$1", [id]);
       expect(rows[0].media_filename).toBe("IMG-001.jpg");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // getMessagesAround
+  // -------------------------------------------------------------------------
+
+  describe("getMessagesAround", () => {
+    it("returns a window centered on the anchor, ascending, with sender + text", async () => {
+      const groupId = await seedGroup("around-window");
+      const ids: number[] = [];
+      for (let i = 1; i <= 5; i++) {
+        ids.push(await seedMessageWithExternalId(groupId, `AROUND-${i}`));
+      }
+      const [, m2, m3, m4, m5] = ids;
+
+      const rows = await getMessagesAround(pool, groupId, m3!, 4);
+
+      expect(rows.map((r) => r.id)).toEqual([m2, m3, m4, m5]);
+      const anchor = rows.find((r) => r.id === m3)!;
+      expect(typeof anchor.text).toBe("string");
+      expect(anchor.text.length).toBeGreaterThan(0);
+      expect(typeof anchor.sender).toBe("string");
+      expect(typeof anchor.fromMe).toBe("boolean");
+    });
+
+    it("returns [] when the anchor is in a different group", async () => {
+      const g1 = await seedGroup("around-g1");
+      const g2 = await seedGroup("around-g2");
+      const id = await seedMessageWithExternalId(g1, "AROUND-OTHER");
+      expect(await getMessagesAround(pool, g2, id, 4)).toEqual([]);
     });
   });
 });
