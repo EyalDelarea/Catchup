@@ -1,11 +1,19 @@
 import { spawn } from "node:child_process";
 import type { AppConfig } from "../config.js";
+import {
+  APP_ROLE,
+  APP_ROLE_PASSWORD,
+  OPERATOR_ROLE,
+  OPERATOR_ROLE_PASSWORD,
+} from "../db/migrations/1748649600024_create_app_roles.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type CheckResult = {
   name: string;
   ok: boolean;
+  /** A non-ok result with level "warn" is advisory — surfaced but not a hard failure. */
+  level?: "warn";
   detail?: string;
   fix?: string;
 };
@@ -104,6 +112,44 @@ export async function checkFfmpeg(probe: () => Promise<boolean>): Promise<CheckR
   }
 }
 
+/**
+ * 8. DB roles aren't still using the committed default passwords.
+ *
+ * You can't read a role's password hash as a non-superuser, so each probe instead TRIES to
+ * connect with the committed default — a successful connection means the password was never
+ * rotated. This is advisory (level "warn"): weak local-dev passwords are fine, but a
+ * BYPASSRLS operator role reachable with a public default password on an exposed Postgres is
+ * a full cross-tenant compromise.
+ */
+export async function checkDefaultPasswords(
+  probeApp: () => Promise<boolean>,
+  probeOperator: () => Promise<boolean>,
+  opts: { multiTenant: boolean },
+): Promise<CheckResult> {
+  const name = "DB roles use non-default passwords";
+  try {
+    const [appDefault, opDefault] = await Promise.all([probeApp(), probeOperator()]);
+    if (!appDefault && !opDefault) return { name, ok: true };
+    const roles = [appDefault ? APP_ROLE : null, opDefault ? OPERATOR_ROLE : null]
+      .filter((r): r is string => r !== null)
+      .join(", ");
+    const emphasis = opts.multiTenant
+      ? "multi-tenant mode is ON — rotate before exposing Postgres"
+      : "fine for local dev; rotate before any networked / multi-tenant deploy";
+    return {
+      name,
+      ok: false,
+      level: "warn",
+      detail: `${roles} still accept the committed default password (${emphasis})`,
+      fix: `ALTER ROLE ${roles} WITH PASSWORD '<strong-secret>', then set APP_DATABASE_URL / OPERATOR_DATABASE_URL`,
+    };
+  } catch {
+    // A probe error (rather than a clean false) shouldn't masquerade as "rotated" or as a
+    // hard failure — treat the check as inconclusive/ok; checkPostgres covers DB outages.
+    return { name, ok: true };
+  }
+}
+
 // ── Runner ────────────────────────────────────────────────────────────────────
 
 /**
@@ -194,6 +240,36 @@ async function realOllamaProbe(ollamaHost: string, model: string): Promise<boole
   }
 }
 
+/**
+ * Real default-password probe: try to connect as `role` using `password` against the same
+ * host/db as `databaseUrl`. Resolves true iff the connection succeeds (password unchanged).
+ */
+async function realDefaultPasswordProbe(
+  databaseUrl: string,
+  role: string,
+  password: string,
+): Promise<boolean> {
+  try {
+    const { default: pg } = await import("pg");
+    const u = new URL(databaseUrl);
+    u.username = role;
+    u.password = password;
+    const pool = new pg.Pool({
+      connectionString: u.toString(),
+      max: 1,
+      connectionTimeoutMillis: 3000,
+    });
+    try {
+      await pool.query("SELECT 1");
+      return true;
+    } finally {
+      await pool.end();
+    }
+  } catch {
+    return false;
+  }
+}
+
 /** Real Python probe: spawn pythonPath -c "import faster_whisper" */
 async function realPythonProbe(pythonPath: string): Promise<boolean> {
   return spawnProbe(pythonPath, ["-c", "import faster_whisper"]);
@@ -222,5 +298,11 @@ export function defaultChecks(config: AppConfig): Array<() => Promise<CheckResul
       ),
     () => checkPython(() => realPythonProbe(config.transcription.pythonPath)),
     () => checkFfmpeg(() => realFfmpegProbe(config.transcription.ffmpegPath)),
+    () =>
+      checkDefaultPasswords(
+        () => realDefaultPasswordProbe(config.databaseUrl, APP_ROLE, APP_ROLE_PASSWORD),
+        () => realDefaultPasswordProbe(config.databaseUrl, OPERATOR_ROLE, OPERATOR_ROLE_PASSWORD),
+        { multiTenant: config.auth.enabled },
+      ),
   ];
 }

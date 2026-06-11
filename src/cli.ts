@@ -1416,6 +1416,12 @@ program
         let line = `✅ ${result.name}`;
         if (result.detail) line += ` — ${result.detail}`;
         console.log(line);
+      } else if (result.level === "warn") {
+        // Advisory — surfaced but not a hard failure (doesn't affect the exit code).
+        let line = `⚠️  ${result.name}`;
+        if (result.detail) line += ` — ${result.detail}`;
+        if (result.fix) line += ` — fix: ${result.fix}`;
+        console.log(line);
       } else {
         allOk = false;
         let line = `❌ ${result.name}`;
