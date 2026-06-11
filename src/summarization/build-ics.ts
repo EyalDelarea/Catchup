@@ -14,7 +14,10 @@ function escapeText(s: string): string {
 
 /** Format a Date as an iCal UTC timestamp: YYYYMMDDTHHMMSSZ. */
 function icsStamp(d: Date): string {
-  return d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  return d
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}/, "");
 }
 
 /**
