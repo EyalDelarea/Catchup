@@ -33,6 +33,35 @@ export type TotalSummaryRow = {
   createdAt: Date;
 };
 
+/** A single total summary by id, or null. Used by the S6 generation chain. */
+export async function getTotalSummaryById(
+  client: pg.Pool | pg.PoolClient,
+  id: number,
+): Promise<TotalSummaryRow | null> {
+  const { rows } = await client.query<{
+    id: string;
+    range_kind: string;
+    parameters: Record<string, unknown>;
+    output: TotalSummaryOutput;
+    model: string;
+    created_at: Date;
+  }>(
+    `SELECT id, range_kind, parameters, output, model, created_at
+     FROM total_summaries WHERE id = $1`,
+    [id],
+  );
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    id: Number(r.id),
+    rangeKind: r.range_kind,
+    parameters: r.parameters,
+    output: r.output,
+    model: r.model,
+    createdAt: r.created_at,
+  };
+}
+
 /** Total summaries, newest-first, limited to `limit` rows. */
 export async function listTotalSummaries(
   client: pg.Pool | pg.PoolClient,
