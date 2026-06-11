@@ -14,9 +14,10 @@
  * Teardown: EventSource is closed when leaving a streaming view
  */
 
-import { askStream, createScopeCategory, getGroups, getMessages, getPreferences, getScopeCategories, getScopes, getStatus, getSummaries, putPreferences, putScopes, summarizeStream } from "./lib/api.js";
+import { actOnSuggestion, askStream, createScopeCategory, getGroups, getMessages, getPreferences, getScopeCategories, getScopes, getStatus, getSummaries, getToday, putPreferences, putScopes, summarizeStream } from "./lib/api.js";
 import { activeCount, filterScopes, groupByCategory, partitionRemoved, sectionCount } from "./lib/scopes.js";
 import { DIGEST_CHOICES, ENGINE_KINDS, PROACT_LEVELS, isDigestSelected, normalizeEngineConfig, toggleDigestTime } from "./lib/prefs.js";
+import { buildDeck, clampIndex, commitActionFor, emptyTally, greeting, indexAfterRemoval, isSuggestion, leavingVariant, peekCount, recordTally, removeCardById, segmentFills, suggestionConfig, tallyBits, tileCounts, TILE_KINDS } from "./lib/today.js";
 import { formatAgo, presetToSince, validateRangeInput } from "./lib/time.js";
 import { renderMarkdown } from "./lib/markdown.js";
 import { deriveHealth } from "./lib/health.js";
@@ -77,11 +78,14 @@ function setView(view) {
 
 /**
  * Navigate to a view, pushing a history entry.
- * @param {"feed"|"detail"|"total"|"ama"|"thread"|"sources"|"settings"} view
+ * @param {"feed"|"detail"|"total"|"ama"|"thread"|"sources"|"settings"|"today"} view
  * @param {string} [arg] — group name (detail) or AMA scope (ama)
  */
 function navigate(view, arg) {
-  if (view === "detail" && arg) {
+  if (view === "today") {
+    history.pushState({ view: "today" }, "", "#today");
+    renderToday();
+  } else if (view === "detail" && arg) {
     history.pushState({ view: "detail", group: arg }, "", `#group=${encodeURIComponent(arg)}`);
     renderDetail(arg, true);
   } else if (view === "total") {
@@ -114,7 +118,9 @@ function navigate(view, arg) {
 window.addEventListener("popstate", (e) => {
   teardownStream();
   const state = e.state;
-  if (state?.view === "detail" && state.group) {
+  if (state?.view === "today") {
+    renderToday();
+  } else if (state?.view === "detail" && state.group) {
     renderDetail(state.group, false);
   } else if (state?.view === "total") {
     renderTotal(false);
@@ -176,6 +182,12 @@ function renderShell() {
       <h1 class="feed-title">הקבוצות שלי</h1>
     </div>
     <div class="core" role="group" aria-label="פעולות ראשיות">
+      <button class="feat feat--today" id="today-card" type="button" aria-label="הסיכום היומי">
+        <span class="feat__ico" aria-hidden="true">✦</span>
+        <span class="feat__title">היום</span>
+        <span class="feat__sub">הסיכום היומי שלך</span>
+        <span class="feat__hint">פתח את הסיכום ›</span>
+      </button>
       <button class="feat feat--ama" id="ama-card" type="button" aria-label="שאל אותי הכל">
         <span class="feat__ico" aria-hidden="true">✨</span>
         <span class="feat__title">שאל אותי הכל</span>
@@ -211,6 +223,7 @@ function renderShell() {
     </div>
   `;
 
+  document.getElementById("today-card")?.addEventListener("click", () => navigate("today"));
   document.getElementById("ama-card").addEventListener("click", () => navigate("ama"));
   document.getElementById("total-card").addEventListener("click", () => navigate("total"));
   document.getElementById("theme-toggle")?.addEventListener("click", toggleTheme);
@@ -1796,6 +1809,365 @@ function setDisplayMode(value) {
   }
 }
 
+/* ── 7e. Today (suggestion deck §2) ───────────────────────── */
+
+/**
+ * Today-screen state. `deck` is the live card list (read-only info cards lead,
+ * actionable suggestion cards follow); acting on a suggestion drops it from the
+ * deck. `acted` (count of suggestion actions) distinguishes a cleared deck →
+ * DoneState from an empty-on-load deck → EmptyToday. Pure transitions live in
+ * lib/today.js; this layer is DOM assembly + delegated wiring only.
+ */
+const todayState = {
+  deck: [],
+  index: 0,
+  leaving: null,
+  tally: emptyTally(),
+  acted: 0,
+  counts: { task: 0, meeting: 0, followup: 0, recap: 0 },
+  engineOn: true,
+};
+
+/** True when the user asked the OS to minimize motion. */
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}
+
+/** Fetch-on-entry: load the deck, then paint. A 404/empty/error → empty state. */
+async function renderToday() {
+  teardownStream();
+  setView("ama"); // reuse the single-pane slot, like Sources / Settings
+  markActiveRow(null);
+  paneMain.innerHTML = `<div class="today"><p class="thread-loading">טוען את הסיכום…</p></div>`;
+
+  let data = null;
+  try {
+    data = DEMO ? null : await getToday();
+  } catch {
+    data = null; // endpoint not built yet / network → render the empty state
+  }
+
+  todayState.deck = buildDeck(data);
+  todayState.index = 0;
+  todayState.leaving = null;
+  todayState.tally = emptyTally();
+  todayState.acted = 0;
+  todayState.counts = tileCounts(data?.suggestions ?? []);
+  todayState.engineOn = true;
+
+  // Only the empty state needs the engine on/off hint — fetch it lazily.
+  if (todayState.deck.length === 0 && !DEMO) {
+    try {
+      todayState.engineOn = normalizeEngineConfig((await getPreferences()).engineConfig).on;
+    } catch {
+      /* keep the optimistic default */
+    }
+  }
+  paintToday();
+}
+
+function paintToday() {
+  const total = todayState.deck.length;
+  const hasSuggestionsLeft = todayState.deck.some(isSuggestion);
+
+  let body;
+  if (total === 0) {
+    body = todayState.acted > 0 ? buildDoneState(todayState.tally) : buildEmptyToday(todayState.engineOn);
+  } else if (!hasSuggestionsLeft && todayState.acted > 0) {
+    body = buildDoneState(todayState.tally);
+  } else {
+    body = buildStoryStack();
+  }
+
+  paneMain.innerHTML = `
+    <div class="today">
+      ${buildTodayHeader(new Date())}
+      <div class="today-note">${icon("sparkle", { size: 13 })}<span>הצעות חכמות שנבנות מהשיחות — ומתחדדות לפי הבחירות שלך</span></div>
+      ${body}
+      <div class="today-foot">${buildTodayFoot(total, hasSuggestionsLeft)}</div>
+      ${buildTiles()}
+    </div>`;
+  wireToday();
+}
+
+function buildTodayHeader(now) {
+  const greet = greeting(now.getHours());
+  let dateStr = "";
+  try {
+    const wd = now.toLocaleDateString("he-IL", { weekday: "long" });
+    dateStr = `${escHtml(wd)} · <span class="mono" dir="ltr">${now.getDate()}.${now.getMonth() + 1}</span>`;
+  } catch {
+    /* leave date blank if Intl is unavailable */
+  }
+  return `
+    <nav class="detail-nav today-nav" aria-label="ניווט">
+      <button class="back-btn" id="today-back" aria-label="חזרה">
+        <span class="back-btn__arrow" aria-hidden="true">›</span> חזרה
+      </button>
+    </nav>
+    <div class="today-head">
+      <div>
+        <div class="kicker">הסיכום היומי</div>
+        <div class="greet">${escHtml(greet)}</div>
+      </div>
+      <div class="date">${dateStr}</div>
+    </div>`;
+}
+
+/** The Stories stack: peek cards behind + the active card + the flash slot. */
+function buildStoryStack() {
+  const i = clampIndex(todayState.index, todayState.deck.length);
+  const card = todayState.deck[i];
+  const backs = peekCount(todayState.deck.length);
+  const backCards = Array.from({ length: backs }, (_, k) => `<div class="story-back" style="--d:${backs - k}"></div>`).join("");
+  const cardHtml = isSuggestion(card)
+    ? buildSuggestionCard(card, i, todayState.deck.length)
+    : buildInfoCard(card, i, todayState.deck.length);
+  return `
+    <div class="story-stack">
+      ${backCards}
+      ${cardHtml}
+      <div class="story-flash" id="today-flash" role="status" aria-live="polite"></div>
+    </div>`;
+}
+
+/** Shared card chrome: segment strip, nav tap-zones, body, footer. */
+function buildCardChrome(index, total, kindCls, inner, footer) {
+  const segs = segmentFills(index, total).map((on) => `<i>${on ? "<b></b>" : ""}</i>`).join("");
+  return `
+    <div class="story ${kindCls} entering">
+      <div class="segs" aria-hidden="true">${segs}</div>
+      <div class="nav-zone next" data-nav="next" aria-hidden="true"><div class="navhint l">${icon("chevL", { size: 18 })}</div></div>
+      <div class="nav-zone prev" data-nav="prev" aria-hidden="true"><div class="navhint r">${icon("chevR", { size: 18 })}</div></div>
+      ${inner}
+      ${footer}
+    </div>`;
+}
+
+function buildSuggestionCard(card, index, total) {
+  const cfg = suggestionConfig(card.kind);
+  const draftVal = card.draft ?? card.proposedText;
+  let editor;
+  if (cfg.editable) {
+    editor = `<div class="cl-draft sg-draft">${icon("pencil", { size: 15 })}<input class="sg-draft__input" value="${escHtml(draftVal)}" aria-label="עריכת ההצעה" /></div>`;
+  } else {
+    const lines = String(card.proposedText).split("\n").map((s) => s.trim()).filter(Boolean);
+    const items = (lines.length ? lines : [card.proposedText]).map((l) => `<li>${escHtml(l)}</li>`).join("");
+    editor = `<div class="sg-recap"><ul>${items}</ul></div>`;
+  }
+  const inner = `
+    <div class="scard">
+      <div class="topline">
+        <span class="sg-spark">${icon(cfg.icon, { size: 18 })}</span>
+        <span class="kicker sg-kicker">${escHtml(cfg.kicker)}</span>
+        <span class="sg-tag">${icon("sparkle", { size: 11 })}מותאם אישית</span>
+      </div>
+      <h3>${escHtml(cfg.title(formatGroupName(card.chat)))}</h3>
+      <div class="body">${escHtml(cfg.prompt)}</div>
+      ${editor}
+      <div class="sg-reason">${icon("bolt", { size: 15 })}<span><b>למה הצעתי את זה:</b> ${escHtml(card.reason)}</span></div>
+      <div class="metarow">${buildSrcChip(card)}</div>
+    </div>
+    <div class="sg-learn">${icon("sparkle", { size: 13 })}<span>אלמד מהבחירה שלך כדי לדייק הצעות בעתיד</span></div>`;
+  const footer = `
+    <div class="actions sg-actions sg-editfirst">
+      <button class="btn btn-primary" type="button" data-act="commit" data-id="${card.id}">${icon(cfg.commitIcon)}${escHtml(cfg.commitLabel)}</button>
+      <div class="sg-links">
+        <button type="button" data-act="snooze" data-id="${card.id}">${icon("moon", { size: 14 })}נודניק</button>
+        <span aria-hidden="true">·</span>
+        <button type="button" data-act="discard" data-id="${card.id}">${icon("x", { size: 14 })}התעלם</button>
+      </div>
+    </div>`;
+  return buildCardChrome(index, total, "s-suggest", inner, footer);
+}
+
+function buildInfoCard(card, index, total) {
+  const isHi = card.variant === "highlights";
+  const kicker = isHi ? "מבט על היום" : "סיכום צ׳אט";
+  const title = isHi ? "עיקרי היום בכל הצ׳אטים" : formatGroupName(card.chat);
+  const inner = `
+    <div class="scard">
+      <div class="topline">
+        <span class="sg-spark">${icon(isHi ? "sparkle" : "message", { size: 18 })}</span>
+        <span class="kicker">${escHtml(kicker)}</span>
+        <span class="badge accent">מידע</span>
+      </div>
+      <h3>${escHtml(title)}</h3>
+      <div class="body body--scroll">${escHtml(card.body)}</div>
+    </div>`;
+  // Read-only: no accept/snooze/discard — just a hint to swipe on.
+  const footer = `<div class="actions info-actions"><span class="info-hint">${icon("sparkle", { size: 14 })}סקירה — החליקו להמשך</span></div>`;
+  return buildCardChrome(index, total, "s-info", inner, footer);
+}
+
+/** Source chip — a button that jumps to the cited message (S2), or a plain
+ *  label when the suggestion has no source message. */
+function buildSrcChip(card) {
+  const label = escHtml(formatGroupName(card.chat));
+  if (card.sourceMessageId == null) {
+    return `<span class="src">${icon("arrowL", { size: 13 })}<span>${label}</span></span>`;
+  }
+  return `<button type="button" class="src" data-src-jump="1" data-chat="${escHtml(card.chat)}" data-id="${card.sourceMessageId}">${icon("arrowL", { size: 13 })}<span>${label}</span></button>`;
+}
+
+function buildDoneState(tally) {
+  const bits = tallyBits(tally);
+  const suffix = bits.length ? `. ${bits.join(" · ")}.` : ".";
+  return `
+    <div class="done-state surface">
+      <div>
+        <div class="done-badge">${icon("check", { size: 30 })}</div>
+        <h3>סיימת להיום ✦</h3>
+        <p>עברת על כל היום שלך בפחות מדקה${escHtml(suffix)}</p>
+        <div class="done-learn">${icon("sparkle", { size: 13 })}<span>ההצעות של מחר יתחדדו לפי מה שבחרת היום</span></div>
+      </div>
+    </div>`;
+}
+
+function buildEmptyToday(engineOn) {
+  return `
+    <div class="done-state surface">
+      <div>
+        <div class="done-badge">${icon(engineOn ? "check" : "sliders", { size: 28 })}</div>
+        <h3>${engineOn ? "הכול נקי לבוקר" : "מנוע ההצעות כבוי"}</h3>
+        <p>${engineOn ? "אין כרגע מה לעדכן בצ׳אטים שבחרת. ניהנה מהשקט ✦" : "הפעילו את ההצעות החכמות כדי לראות סיכום יומי."}</p>
+        <button class="btn btn-soft" id="today-empty-cta" type="button">${icon(engineOn ? "filter" : "sliders")}${engineOn ? "ניהול הצ׳אטים" : "להגדרות המנוע"}</button>
+      </div>
+    </div>`;
+}
+
+function buildTodayFoot(total, hasSuggestionsLeft) {
+  if (total === 0) {
+    if (todayState.acted > 0) return `<span>${total} · הכול עודכן</span>`;
+    return `<span>${todayState.engineOn ? "0 הצעות · הכול שקט" : "מנוע ההצעות כבוי"}</span>`;
+  }
+  if (!hasSuggestionsLeft) {
+    return `<span>${todayState.acted > 0 ? "הכול עודכן · קריאה של דקה" : "סקירה יומית · קריאה של דקה"}</span>`;
+  }
+  return `<span>נשארו ${total} ${total === 1 ? "כרטיס" : "כרטיסים"} · קריאה של דקה</span>`;
+}
+
+/** Quick tiles (2×2): per-kind counts + an action tile linking to Ask. */
+function buildTiles() {
+  const meta = {
+    task: { icon: "checks", lbl: "משימות להיום" },
+    meeting: { icon: "calendar", lbl: "פגישות היום" },
+    followup: { icon: "user", lbl: "פולואו-אפים" },
+  };
+  const tiles = TILE_KINDS.map((k) => {
+    const m = meta[k];
+    return `<div class="tile surface"><span class="tile__ico" aria-hidden="true">${icon(m.icon)}</span><div class="tnum">${todayState.counts[k]}</div><div class="tlbl">${escHtml(m.lbl)}</div></div>`;
+  }).join("");
+  const action = `<button class="tile tile-action surface" id="today-ask-tile" type="button"><span class="tile__ico" aria-hidden="true">${icon("sparkle")}</span><div class="taction">שאל את הצ׳אט${icon("chevL", { size: 15 })}</div><div class="tlbl">שאל על כל ההיסטוריה</div></button>`;
+  return `<div class="today-divide" aria-hidden="true"></div><div class="tiles">${tiles}${action}</div>`;
+}
+
+function wireToday() {
+  document.getElementById("today-back")?.addEventListener("click", () => history.back());
+  document.getElementById("today-empty-cta")?.addEventListener("click", () => navigate(todayState.engineOn ? "sources" : "settings"));
+  document.getElementById("today-ask-tile")?.addEventListener("click", () => navigate("ama"));
+
+  const stack = document.querySelector(".today .story-stack");
+  if (!stack) return;
+
+  // Preserve a draft edit across navigation (re-render reads card.draft).
+  stack.querySelector(".sg-draft__input")?.addEventListener("input", (e) => {
+    const card = todayState.deck[clampIndex(todayState.index, todayState.deck.length)];
+    if (card && isSuggestion(card)) card.draft = e.target.value;
+  });
+
+  // Tap zones — navigation only (Stories pattern), never an action.
+  for (const zone of stack.querySelectorAll(".nav-zone")) {
+    zone.addEventListener("click", () => {
+      if (todayState.leaving) return;
+      const len = todayState.deck.length;
+      todayState.index =
+        zone.dataset.nav === "next" ? clampIndex(todayState.index + 1, len) : clampIndex(todayState.index - 1, len);
+      paintToday();
+    });
+  }
+
+  // Source-jump chip → S2 thread view.
+  stack.querySelector("[data-src-jump]")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const chip = e.currentTarget;
+    const id = Number(chip.dataset.id);
+    if (chip.dataset.chat && Number.isFinite(id)) navigate("thread", { chat: chip.dataset.chat, aroundId: id });
+  });
+
+  // Act buttons (commit / snooze / discard).
+  for (const btn of stack.querySelectorAll("[data-act]")) {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onTodayAct(btn.dataset.act, Number(btn.dataset.id));
+    });
+  }
+}
+
+/** Commit / snooze / discard a suggestion: PUT (best-effort), animate it out,
+ *  drop it from the deck, then flash a confirmation toast. */
+function onTodayAct(act, id) {
+  if (todayState.leaving) return;
+  const card = todayState.deck.find((c) => c.id === id);
+  if (!card || !isSuggestion(card)) return;
+
+  let action;
+  let finalText;
+  let flash;
+  if (act === "commit") {
+    const input = document.querySelector(".today .sg-draft__input");
+    const draftValue = input ? input.value : (card.draft ?? card.proposedText);
+    const res = commitActionFor(card, draftValue);
+    action = res.action;
+    finalText = res.finalText;
+    flash = suggestionConfig(card.kind).flash;
+  } else if (act === "snooze") {
+    action = "snooze";
+    flash = "נדחה למאוחר יותר";
+  } else if (act === "discard") {
+    action = "discard";
+    flash = "הוסר — אלמד מזה";
+  } else {
+    return;
+  }
+
+  // Fire-and-forget — the engine endpoint may not exist yet; UI must not block.
+  if (!DEMO) actOnSuggestion(id, action, action === "edit" ? finalText : undefined).catch(() => {});
+
+  const removedIndex = todayState.deck.findIndex((c) => c.id === id);
+  todayState.tally = recordTally(todayState.tally, action);
+  todayState.acted += 1;
+
+  const finishLeave = () => {
+    const newDeck = removeCardById(todayState.deck, id);
+    todayState.index = indexAfterRemoval(todayState.index, removedIndex, newDeck.length);
+    todayState.deck = newDeck;
+    todayState.leaving = null;
+    paintToday();
+    showTodayFlash(flash);
+    // A committed recap opens the chat's summary once the card has left.
+    if (act === "commit" && card.kind === "recap" && card.chat) navigate("detail", card.chat);
+  };
+
+  const storyEl = document.querySelector(".today .story");
+  if (storyEl && !prefersReducedMotion()) {
+    todayState.leaving = leavingVariant(action);
+    storyEl.classList.remove("entering");
+    storyEl.classList.add("leaving", leavingVariant(action));
+    setTimeout(finishLeave, 300);
+  } else {
+    finishLeave();
+  }
+}
+
+function showTodayFlash(text) {
+  const el = document.getElementById("today-flash");
+  if (!el || !text) return;
+  el.textContent = text;
+  el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), 1100);
+}
+
 /* ── 8. Helpers ──────────────────────────────────────────── */
 
 function formatGroupName(name) {
@@ -1830,6 +2202,10 @@ function escHtml(str) {
 
 function resolveInitialRoute() {
   const hash = location.hash;
+  if (hash === "#today") {
+    history.replaceState({ view: "today" }, "", hash);
+    return { view: "today" };
+  }
   let m = hash.match(/^#group=(.+)$/);
   if (m) {
     const group = decodeURIComponent(m[1]);
@@ -2221,7 +2597,9 @@ async function boot() {
   const route = resolveInitialRoute();
   await loadGroupsIntoList();
 
-  if (route.view === "detail") {
+  if (route.view === "today") {
+    renderToday();
+  } else if (route.view === "detail") {
     renderDetail(route.group, true);
   } else if (route.view === "total") {
     renderTotal(true);
