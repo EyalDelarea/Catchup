@@ -229,14 +229,35 @@ function toggleTheme() {
   document.getElementById("theme-toggle")?.addEventListener("click", toggleTheme);
 }
 
-/** Fetch groups and populate the list. */
+/** Fetch groups and populate the list, filtered to included (non-excluded/removed) chats. */
 async function loadGroupsIntoList() {
   if (DEMO) { cachedGroups = DEMO_GROUPS; renderGroupList(cachedGroups, ""); return; }
+  let groups;
   try {
-    cachedGroups = await getGroups();
+    groups = await getGroups();
   } catch {
     const list = document.getElementById("feed-list");
     if (list) list.innerHTML = `<p class="error-state">שגיאה בטעינת הקבוצות. אנא רעננו את הדף.</p>`;
+    return;
+  }
+  // Scope filter (S4 §3): hide excluded/removed chats. Resilient — on any scope
+  // failure, fall back to showing all groups (default-on).
+  try {
+    const excluded = new Set(
+      (await getScopes()).filter((s) => !s.included || s.removed).map((s) => s.group),
+    );
+    groups = groups.filter((g) => !excluded.has(g.name));
+  } catch {
+    /* show all on scope-load failure */
+  }
+  cachedGroups = groups;
+  if (cachedGroups.length === 0) {
+    const list = document.getElementById("feed-list");
+    if (list) {
+      list.innerHTML =
+        `<p class="empty-state">אין צ׳אטים מוזנים. <button class="manage-sources" id="empty-manage">נהל צ׳אטים ›</button></p>`;
+      document.getElementById("empty-manage")?.addEventListener("click", () => navigate("sources"));
+    }
     return;
   }
   renderGroupList(cachedGroups, "");
