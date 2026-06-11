@@ -1,5 +1,6 @@
 import type http from "node:http";
 import type { SessionHealth } from "../collector/tenant-session-registry.js";
+import { type AuditEntry, listAudit } from "../db/repositories/audit.js";
 import { listTenantStats } from "../db/repositories/operator-stats.js";
 
 /**
@@ -20,12 +21,15 @@ export interface AdminRegistry {
 export type AdminRoutesOptions = {
   operatorPool: import("pg").Pool;
   registry: AdminRegistry;
+  /** T6: optional audit sink so operator access to the cross-tenant view is itself logged. */
+  recordAudit?: (entry: AuditEntry) => Promise<void>;
 };
 
-export type AdminContext = { isOperator: boolean };
+/** The acting operator, when known — used to attribute the operator.access audit event. */
+export type AdminContext = { isOperator: boolean; operatorEmail?: string | null };
 
 export function makeAdminRoutes(opts: AdminRoutesOptions) {
-  const { operatorPool, registry } = opts;
+  const { operatorPool, registry, recordAudit } = opts;
 
   const handle = async (
     req: http.IncomingMessage,
@@ -38,6 +42,14 @@ export function makeAdminRoutes(opts: AdminRoutesOptions) {
       json(res, 403, { error: "Operator access required." });
       return true;
     }
+    // Every operator touch of the cross-tenant surface is itself audited (best-effort).
+    if (recordAudit) {
+      void recordAudit({
+        actorEmail: ctx.operatorEmail ?? null,
+        action: "operator.access",
+        metadata: { path: url.pathname },
+      }).catch(() => {});
+    }
     try {
       if (req.method === "GET" && url.pathname === "/api/admin/tenants") {
         json(res, 200, await tenantsView());
@@ -45,6 +57,12 @@ export function makeAdminRoutes(opts: AdminRoutesOptions) {
       }
       if (req.method === "GET" && url.pathname === "/api/admin/health") {
         json(res, 200, await healthView());
+        return true;
+      }
+      if (req.method === "GET" && url.pathname === "/api/admin/audit") {
+        const limit = Number(url.searchParams.get("limit") ?? "50");
+        const tenantId = url.searchParams.get("tenant") ?? undefined;
+        json(res, 200, await listAudit(operatorPool, { limit, tenantId }));
         return true;
       }
       json(res, 404, { error: "Not found." });

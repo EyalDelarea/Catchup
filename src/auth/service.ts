@@ -1,4 +1,5 @@
 import type pg from "pg";
+import type { AuditEntry } from "../db/repositories/audit.js";
 import {
   consumeTokenByHash,
   createEmailToken,
@@ -50,7 +51,22 @@ export type AuthDeps = {
   tosVersion: string;
   /** Base URL used to build verify/reset links in emails. */
   publicBaseUrl: string;
+  /**
+   * Optional audit sink (T6). When present, security-relevant auth events are recorded.
+   * A sink failure must never break the auth operation (audited best-effort).
+   */
+  recordAudit?: (entry: AuditEntry) => Promise<void>;
 };
+
+/** Best-effort audit: never let an audit-sink failure break the auth operation. */
+async function audit(deps: AuthDeps, entry: AuditEntry): Promise<void> {
+  if (!deps.recordAudit) return;
+  try {
+    await deps.recordAudit(entry);
+  } catch {
+    // Swallow — auditing is observability, not a precondition for auth.
+  }
+}
 
 export type AuthedUser = { id: string; tenantId: string; email: string; emailVerified: boolean };
 
@@ -87,6 +103,12 @@ export async function register(
   }
 
   await issueEmailToken(deps, tenant.id, userId, "verify", "Verify your Catchup email", "verify");
+  await audit(deps, {
+    tenantId: tenant.id,
+    actorUserId: userId,
+    actorEmail: input.email.toLowerCase(),
+    action: "auth.register",
+  });
   return { tenantId: tenant.id, userId };
 }
 
@@ -98,8 +120,14 @@ export async function login(
   const user = await findUserForLogin(deps.operatorPool, input.email);
   // Verify even when the user is missing? We still hit argon2 only when we have a hash; a
   // missing user returns null. (Timing-uniformity hardening can come in T6.)
-  if (!user) return null;
-  if (!(await verifyPassword(user.passwordHash, input.password))) return null;
+  if (!user || !(await verifyPassword(user.passwordHash, input.password))) {
+    await audit(deps, {
+      tenantId: user?.tenantId ?? null,
+      actorEmail: input.email.toLowerCase(),
+      action: "auth.login_failed",
+    });
+    return null;
+  }
 
   const rawToken = generateToken();
   await withTenant(deps.appPool, user.tenantId, (c) =>
@@ -109,6 +137,12 @@ export async function login(
       expiresAt: expiry(deps.now(), deps.sessionTtlSeconds),
     }),
   );
+  await audit(deps, {
+    tenantId: user.tenantId,
+    actorUserId: user.id,
+    actorEmail: user.email,
+    action: "auth.login",
+  });
   return {
     rawToken,
     user: {
@@ -148,20 +182,36 @@ export async function currentUser(
 }
 
 export async function logout(deps: AuthDeps, rawToken: string): Promise<void> {
-  // Operator pool: deleting by hash is tenant-agnostic and idempotent.
+  // Resolve first (for the audit actor) then delete by hash — both tenant-agnostic.
+  const s = await findSessionByTokenHash(deps.operatorPool, hashToken(rawToken));
   await deleteSessionByTokenHash(deps.operatorPool, hashToken(rawToken));
+  if (s) {
+    await audit(deps, {
+      tenantId: s.tenantId,
+      actorUserId: s.userId,
+      action: "auth.logout",
+    });
+  }
 }
 
 /** Redeem a verification token → mark the user's email verified. Returns true on success. */
 export async function verifyEmail(deps: AuthDeps, rawToken: string): Promise<boolean> {
   const tok = await findActiveTokenByHash(deps.operatorPool, hashToken(rawToken));
   if (!tok || tok.kind !== "verify") return false;
-  return withTenant(deps.appPool, tok.tenantId, async (c) => {
+  const ok = await withTenant(deps.appPool, tok.tenantId, async (c) => {
     const consumed = await consumeTokenByHash(c, hashToken(rawToken));
     if (!consumed) return false;
     await markEmailVerified(c, tok.userId);
     return true;
   });
+  if (ok) {
+    await audit(deps, {
+      tenantId: tok.tenantId,
+      actorUserId: tok.userId,
+      action: "auth.verify",
+    });
+  }
+  return ok;
 }
 
 /**
@@ -190,7 +240,7 @@ export async function resetPassword(
   const tok = await findActiveTokenByHash(deps.operatorPool, hashToken(rawToken));
   if (!tok || tok.kind !== "reset") return false;
   const newHash = await hashPassword(newPassword);
-  return withTenant(deps.appPool, tok.tenantId, async (c) => {
+  const ok = await withTenant(deps.appPool, tok.tenantId, async (c) => {
     const consumed = await consumeTokenByHash(c, hashToken(rawToken));
     if (!consumed) return false;
     await setPasswordHash(c, tok.userId, newHash);
@@ -198,6 +248,14 @@ export async function resetPassword(
     await deleteSessionsForUser(c, tok.userId);
     return true;
   });
+  if (ok) {
+    await audit(deps, {
+      tenantId: tok.tenantId,
+      actorUserId: tok.userId,
+      action: "auth.reset",
+    });
+  }
+  return ok;
 }
 
 /** Thrown when registration is attempted without accepting the consent/ToS gate. */

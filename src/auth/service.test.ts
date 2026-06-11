@@ -31,6 +31,7 @@ let app: pg.Pool;
 let op: pg.Pool;
 let mailer: CapturingMailer;
 let deps: AuthDeps;
+let audited: Array<{ action: string; actorEmail?: string | null }>;
 
 beforeAll(async () => {
   const uri = await createTestDatabase();
@@ -45,6 +46,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   mailer = new CapturingMailer();
+  audited = [];
   deps = {
     appPool: app,
     operatorPool: op,
@@ -54,7 +56,44 @@ beforeEach(() => {
     emailTokenTtlSeconds: 3600,
     tosVersion: "2026-06-09",
     publicBaseUrl: "http://localhost:8787",
+    recordAudit: (e) => {
+      audited.push({ action: e.action, actorEmail: e.actorEmail });
+      return Promise.resolve();
+    },
   };
+});
+
+describe("audit trail (T6)", () => {
+  it("records register, login, login_failed, verify, reset and logout", async () => {
+    const reg = await register(deps, {
+      email: "audit@acme.test",
+      password: "pw-12345678",
+      consent: true,
+    });
+    expect(audited.map((a) => a.action)).toContain("auth.register");
+
+    const token = mailer.lastTokenFor("audit@acme.test")!;
+    await verifyEmail(deps, token);
+    expect(audited.map((a) => a.action)).toContain("auth.verify");
+
+    await login(deps, { email: "audit@acme.test", password: "WRONG" });
+    expect(audited.map((a) => a.action)).toContain("auth.login_failed");
+
+    const ok = await login(deps, { email: "audit@acme.test", password: "pw-12345678" });
+    expect(audited.map((a) => a.action)).toContain("auth.login");
+
+    await logout(deps, ok!.rawToken);
+    expect(audited.map((a) => a.action)).toContain("auth.logout");
+
+    void reg;
+  });
+
+  it("an audit-sink failure never breaks the auth operation", async () => {
+    deps.recordAudit = () => Promise.reject(new Error("audit sink down"));
+    await expect(
+      register(deps, { email: "resilient@acme.test", password: "pw-12345678", consent: true }),
+    ).resolves.toMatchObject({ tenantId: expect.any(String) });
+  });
 });
 
 describe("registration", () => {

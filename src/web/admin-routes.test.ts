@@ -19,12 +19,18 @@ let tenantA: string;
 let server: http.Server;
 let base: string;
 
+const auditEvents: Array<{ action: string }> = [];
+
 // `isOperator` is decided by the server (session email ∈ operatorEmails); admin-routes
 // receives it as a boolean so the gate is trivially testable.
 function startServer(isOperator: boolean, registrySnapshot: SessionHealth[] = []): Promise<void> {
   const routes = makeAdminRoutes({
     operatorPool: op,
     registry: { snapshot: () => registrySnapshot },
+    recordAudit: (e) => {
+      auditEvents.push({ action: e.action });
+      return Promise.resolve();
+    },
   });
   server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -89,6 +95,22 @@ describe("GET /api/admin/tenants", () => {
     // A tenant with no live session reports "offline", not undefined.
     const other = body.find((t) => t.tenantId !== tenantA);
     expect(other?.sessionStatus).toBe("offline");
+  });
+});
+
+describe("GET /api/admin/audit", () => {
+  it("returns the audit trail and records the operator's own access (T6)", async () => {
+    await op.query(
+      `INSERT INTO audit_log (action, actor_email) VALUES ('auth.login', 'seed@audit.test')`,
+    );
+    auditEvents.length = 0;
+    await startServer(true);
+    const r = await fetch(`${base}/api/admin/audit?limit=10`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as Array<{ action: string }>;
+    expect(body.some((e) => e.action === "auth.login")).toBe(true);
+    // The operator viewing the trail is itself audited.
+    expect(auditEvents.some((e) => e.action === "operator.access")).toBe(true);
   });
 });
 
