@@ -5,6 +5,7 @@ import {
   checkDefaultPasswords,
   checkDocker,
   checkFfmpeg,
+  checkIndexIntegrity,
   checkOllama,
   checkPostgres,
   checkPython,
@@ -84,6 +85,32 @@ describe("checkPostgres", () => {
   it("returns not-ok with a fix when probe throws", async () => {
     const result = await checkPostgres(throws);
     assertFail(result, "Postgres reachable + migrations applied");
+  });
+});
+
+// ── checkIndexIntegrity ───────────────────────────────────────────────────────
+
+describe("checkIndexIntegrity", () => {
+  const NAME = "DB indexes pass integrity check (amcheck)";
+
+  it("returns ok when all indexes pass amcheck", async () => {
+    const result = await checkIndexIntegrity(ok);
+    assertOk(result, NAME);
+  });
+
+  it("returns not-ok with detail + fix when an index is corrupt", async () => {
+    const result = await checkIndexIntegrity(fail);
+    assertFail(result, NAME);
+    expect(result.detail).toMatch(/XX002|collation/);
+    // Corruption is a hard failure, not advisory — no warn level.
+    expect(result.level).toBeUndefined();
+  });
+
+  it("treats a probe error as inconclusive (ok), not corrupt", async () => {
+    // The probe never throws in practice, but a throw must not masquerade as
+    // corruption (which would hard-fail doctor on an environment quirk).
+    const result = await checkIndexIntegrity(throws);
+    assertOk(result, NAME);
   });
 });
 
