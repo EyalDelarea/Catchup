@@ -14,7 +14,6 @@ import {
 import { createTenant } from "../db/repositories/tenants.js";
 import {
   createUser,
-  EmailTakenError,
   findUserForLogin,
   getUserById,
   markEmailVerified,
@@ -121,9 +120,12 @@ export async function login(
   // Equalize timing across the missing-user and wrong-password branches: a missing user
   // still spends one argon2 verify (against a dummy hash) so response time can't be used
   // to enumerate which emails are registered.
-  const passwordOk = user
-    ? await verifyPassword(user.passwordHash, input.password)
-    : (await spendDummyVerify(input.password), false);
+  let passwordOk = false;
+  if (user) {
+    passwordOk = await verifyPassword(user.passwordHash, input.password);
+  } else {
+    await spendDummyVerify(input.password);
+  }
   if (!user || !passwordOk) {
     await audit(deps, {
       tenantId: user?.tenantId ?? null,

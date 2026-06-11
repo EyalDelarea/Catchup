@@ -46,7 +46,6 @@ describe("dispatchApi same-origin enforcement", () => {
   let base: string;
 
   const noopSummarizer: StreamingSummarizer = {
-    // biome-ignore lint/correctness/useYield: cross-origin requests never reach the summarizer.
     async *summarizeStream() {},
   };
 

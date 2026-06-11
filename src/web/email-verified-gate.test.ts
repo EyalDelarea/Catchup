@@ -1,4 +1,3 @@
-import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -26,7 +25,6 @@ class CapturingMailer implements Mailer {
 }
 
 const noopSummarizer: StreamingSummarizer = {
-  // biome-ignore lint/correctness/useYield: the gate test never reaches summarization.
   async *summarizeStream() {},
 };
 
