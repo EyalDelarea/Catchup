@@ -4,7 +4,8 @@ export type JobType =
   | "analyze.image"
   | "analyze.video"
   | "summarize.group"
-  | "summarize.total";
+  | "summarize.total"
+  | "suggest.generate";
 
 /**
  * Single source of truth for all valid job types at runtime.
@@ -20,6 +21,7 @@ export const ALL_JOB_TYPES = [
   "analyze.video",
   "summarize.group",
   "summarize.total",
+  "suggest.generate",
 ] as const satisfies readonly JobType[];
 
 /**
@@ -37,6 +39,7 @@ export interface JobPayloads {
   "analyze.video": TenantStamped & { messageId: string };
   "summarize.group": TenantStamped & { groupId: string };
   "summarize.total": TenantStamped & { since: string };
+  "suggest.generate": TenantStamped & { totalSummaryId: number };
 }
 
 export interface Job<T extends JobType = JobType> {
