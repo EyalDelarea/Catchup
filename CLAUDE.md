@@ -1,10 +1,18 @@
 # CLAUDE.md
 
-Grounding for agent sessions on **Catchup** — a local-first, single-user WhatsApp
-summarizer. Privacy is a hard constraint: all inference (LLM, speech-to-text,
-vision) runs locally via Ollama + faster-whisper; message content never leaves
-the device. Hebrew is first-class (RTL UI, Hebrew models). See `PROJECT_OVERVIEW.md`
-and `README.md` for the full picture.
+Grounding for agent sessions on **Catchup** — a local-first WhatsApp summarizer.
+Privacy is a hard constraint: all inference (LLM, speech-to-text, vision) runs
+locally via Ollama + faster-whisper; message content never leaves the device.
+Hebrew is first-class (RTL UI, Hebrew models). See `PROJECT_OVERVIEW.md` and
+`README.md` for the full picture.
+
+**Two run modes.** Default is **single-user local** (no login; everything runs as the
+default tenant; RLS dormant — the app connects as the DB owner). Setting **`MULTI_TENANT=true`**
+turns on the shipped multi-tenant platform: login + open registration, the app connects as
+the restricted `catchup_app` role so RLS is enforced, and every request/job/ingest is scoped
+via `withTenant()`. Auth lives in `src/auth/`; the operator (BYPASSRLS) pool handles the few
+pre-tenant reads + the `/admin` cross-tenant dashboard. **Keep single-user the zero-config
+default** — never make multi-tenant behavior mandatory.
 
 ## Stack
 
@@ -73,7 +81,11 @@ code** — run `npm run check --write` before committing.
   the filename so parallel branches can't collide; never hand-number. (`migrations.test.ts`
   fails CI on any duplicate number as a backstop.)
 - Tenancy is enforced via `tenant_id` columns + Postgres RLS — new tenant-scoped tables
-  must carry `tenant_id` and respect the RLS pattern (see migrations 021–025).
+  must carry `tenant_id` and respect the RLS pattern. Reference migrations (by name, since
+  timestamp prefixes are stable but numbers shift): `add_tenant_id_columns`, `create_app_roles`,
+  `enable_rls`, and `tenant_guc_empty_string_hardening` (the GUC `NULLIF(...,'')::uuid` guard —
+  don't regress it). Global tables that no tenant owns (`service_status`, `audit_log`) stay
+  un-scoped on purpose. Access scoped tables through `withTenant()`, never a raw owner pool.
 
 ## Code style
 

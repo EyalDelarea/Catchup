@@ -8,10 +8,16 @@
 
 ## 1. One-line summary
 
-**Catchup** is a **local-first, single-user personal WhatsApp summarizer.** You wake up
+**Catchup** is a **local-first personal WhatsApp summarizer.** You wake up
 to 200 unread messages; Catchup reads them for you — overnight, on your own machine — so
 you open your phone to *the gist*, not the scroll. **Nothing leaves your machine** except
 the read-only WhatsApp link itself. No cloud API keys, no hosted service, no data sharing.
+
+It runs **single-user by default** (no login — the original product). An **optional
+multi-tenant mode** (`MULTI_TENANT=true`) turns one self-hosted instance into an
+operator-run platform serving several isolated accounts, each behind its own login, with
+all inference still 100% local. See §7 (shipped features) and the README's "Multi-tenant"
+section. Multi-tenant is fully shipped; single-user remains the zero-config default.
 
 ---
 
@@ -105,7 +111,8 @@ starts the worker + web server + live collector together.
 |---|---|
 | `collector/` | Baileys live collector, message mapping, name resolution, **outbound-guard** (hardened so it can never send), backfill, session. |
 | `importer/` | WhatsApp `.txt`/`.zip` parsing, normalization, dedupe, bulk import, media extraction. |
-| `db/` | Postgres client, migrations, repositories (tenants, groups, messages, summaries, transcripts, media-analyses, job-runs, watermarks, scheduler-state, status-snapshots, service-status). **Tenancy foundation (019):** a `tenants` table + mandatory `tenant_id` on every tenant-scoped table, isolated by Postgres RLS (policy keys off the `app.tenant_id` GUC) plus an app-layer `withTenant()`. Existing single-user data runs as a fixed default tenant; the live app still connects as the owner until the per-request cutover (T2). |
+| `db/` | Postgres client, migrations, repositories (tenants, users, sessions, email-tokens, audit-log, groups, messages, summaries, transcripts, media-analyses, job-runs, watermarks, scheduler-state, status-snapshots, service-status). **Tenancy:** a `tenants` table + mandatory `tenant_id` on every tenant-scoped table, isolated by Postgres RLS (policy keys off the `app.tenant_id` GUC) plus an app-layer `withTenant()`. In single-user mode the app connects as the DB owner and all data runs as the fixed default tenant (RLS dormant by design). In `MULTI_TENANT=true` mode the cutover is **live**: the app connects as the restricted `catchup_app` role and every request/job/ingest is scoped via `withTenant()`, so isolation is enforced. Two pools: `catchup_app` (NOBYPASSRLS, runtime) + `catchup_operator` (BYPASSRLS, pre-tenant lookups + operator dashboard). |
+| `auth/` | Multi-tenant auth brain (`service.ts`): argon2id password hashing, opaque session/email tokens (SHA-256 at rest), cookie helpers, register/login/verify/reset/logout. Cross-tenant pre-tenant reads (login lookup, session resolution) quarantined to the operator pool; everything else runs in `withTenant()`. No-op unless `MULTI_TENANT=true`. |
 | `jobs/` | Job bus abstraction — in-memory bus (tests) + RabbitMQ bus (prod), job types, run recorder. |
 | `workers/` | Worker process + handlers: `import-file`, `transcribe-voicenote`, `analyze-media`, `summarize-group`. |
 | `transcription/` | Python `faster-whisper` worker (`worker.py`), Node wrapper, ivrit-whisper integration. |
@@ -136,6 +143,8 @@ starts the worker + web server + live collector together.
 | 010 | Gemma-4 multi-frame video | multi-frame video understanding via gemma4 |
 | 011 | Scheduled pre-summaries | twice-daily proactive summaries + instant-open + abort-on-disconnect + Grafana Jobs Status dashboard |
 | 012 | Ops sweep | self-healing dead jobs + observable status history |
+| Ask | RAG querying ("AMA") | hybrid lexical + semantic (bge-m3) retrieval, gemma `[n]` citations, SSE answers — constitution amended to permit it |
+| 019 + T1–T6 | **Multi-tenant platform (opt-in)** | tenancy substrate (RLS) · auth + open registration (argon2, verify/reset) · per-tenant WhatsApp orchestration + fair-share scheduling · web QR onboarding · operator cross-tenant dashboard · append-only audit log. **Off unless `MULTI_TENANT=true`; single-user stays the default.** |
 
 Spec-kit artifacts for each live under `specs/<NNN-feature>/` (`spec.md`, `plan.md`, `tasks.md`).
 
@@ -161,10 +170,16 @@ model was *slower and lower quality* — the harness prevented a regression. Con
 
 ## 9. Privacy & safety posture
 
-- **100% local inference.** The only network touch is the read-only WhatsApp link.
+- **100% local inference.** The only network touch is the read-only WhatsApp link — true in
+  single-user *and* multi-tenant mode (an operator instance still sends nothing to any cloud).
 - **Outbound hardening.** `sendMessage`/`relayMessage` throw; presence, read receipts,
   typing indicators are silenced to no-ops. Cannot be accidentally bypassed. Sending
   requires explicit `WHATSAPP_ALLOW_SEND=true`.
+- **Tenant isolation (multi-tenant mode).** When `MULTI_TENANT=true`, one tenant can never
+  read or modify another's data — enforced in two independent layers (Postgres RLS via the
+  restricted `catchup_app` role + app-layer `withTenant()`). Cross-tenant reads are
+  quarantined to a separate operator pool; operator access is itself audited. The operator
+  can hard-delete any tenant's data, and the append-only audit trail survives the purge.
 - **Media pruning.** Media files are deleted after captioning by default (`RETAIN_MEDIA=false`).
 - **Unofficial library disclaimer.** Baileys is reverse-engineered; not affiliated with
   WhatsApp/Meta; personal use only, at your own risk.
@@ -173,12 +188,16 @@ model was *slower and lower quality* — the harness prevented a regression. Con
 
 ## 10. Governance / constitution (constraints any new idea must respect)
 
-The project is governed by a versioned **Constitution** (`.specify/memory/constitution.md`,
-currently **v1.4.0**) with five core principles:
+The project is governed by a versioned **Constitution** (`.specify/memory/constitution.md` —
+gitignored; check the file for the exact current version). It was amended (MAJOR bump to
+**v2.0.0**) to permit **operator self-hosting with hard tenant isolation**, and separately to
+permit **RAG-based querying** (the Ask/AMA feature). Core principles:
 
-1. **Local-First & Private by Default** — runs entirely on the user's machine; no hosting,
-   multi-user, auth, or server-side accounts. Content stays local except user-triggered
-   LLM/STT calls.
+1. **Local-First & Private by Default** — all inference runs on the operator's own hardware;
+   no third-party cloud, content never leaves the box. The original prohibition on
+   hosting/multi-user/auth was **lifted in v2.0.0, scoped narrowly** to single-operator
+   self-hosting where tenant isolation is a hard, two-layer guarantee. Single-user local mode
+   remains the zero-config default.
 2. **Postgres Is the Source of Truth** — persist on ingestion; never query WhatsApp on
    demand for history (one bounded exception: anchor-based, count-capped, time-boxed,
    best-effort backfill that *populates* Postgres before any read).
@@ -191,15 +210,17 @@ currently **v1.4.0**) with five core principles:
 Workflow: all non-trivial work flows through **spec-kit**
 (`/speckit-constitution → specify → clarify → plan → tasks → implement`).
 
-**Explicitly DEFERRED (forbidden without amending the constitution):** multi-user /
-hosting / SaaS, any authentication layer, managed/cloud services, extra brokers
-(Redis/Kafka), Telegram, WhatsApp bot commands, **posting summaries back to groups**,
-**RAG-based querying**, and broad unread-message tracking (badges/counts, read-state sync).
-The narrow catch-up watermark is the *only* permitted read-state.
+**Now PERMITTED (via amendments):** single-operator self-hosting + multi-tenancy + auth
+(scoped to hard two-layer tenant isolation, no third-party cloud); RAG-based querying
+(Ask/AMA). **Still explicitly DEFERRED (forbidden without amending the constitution):**
+managed/cloud/SaaS services, extra brokers (Redis/Kafka), Telegram, WhatsApp bot commands,
+**posting summaries back to groups**, and broad unread-message tracking (badges/counts,
+read-state sync). The narrow catch-up watermark is the *only* permitted read-state.
 
 > **For ideation:** any product idea that touches the deferred list collides with the
 > constitution and would need a formal amendment + rationale + version bump. Ideas that
-> stay local, single-user, and Postgres-sourced fit naturally.
+> keep all inference local and Postgres-sourced — single-user *or* within the
+> isolated-multi-tenant envelope — fit naturally.
 
 ---
 
