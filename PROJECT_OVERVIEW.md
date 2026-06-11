@@ -92,13 +92,18 @@ WhatsApp export (.txt/.zip) ──(importer)───┘                        
 | `serve [--port N] [--collect]` | Start the mobile web UI (default :8787). `--collect` also runs the live collector; the digest scheduler also starts here. |
 | `collect` | Standalone live collector (QR link on first run), stores incoming group messages. |
 | `summarize <name> [--last N] [--since DATE] [--out file]` | Generate a structured Hebrew summary of a chat from the CLI. |
+| `ask <question> [--chat name]` | Hybrid (lexical + semantic) RAG question-answering over stored messages, with `[n]` citations. |
 | `groups` | List all stored groups/chats with source + message counts. |
 | `transcribe [--group name]` | Run faster-whisper on pending (untranscribed) voice notes. |
 | `analyze-backlog [--limit N] [--types ...]` | Enqueue vision analysis (`analyze.image`/`analyze.video`) for media lacking a completed analysis. |
 | `digest-run [--all]` | Manually trigger the scheduled digest (enqueues `summarize.group` jobs). |
 | `ops-sweep` | Ops maintenance: self-heal dead jobs, record status history (feature 012). |
 | `import <file> [--name N] [--folder dir]` | Import a WhatsApp export (`.txt`/`.zip`); dedupes; `--folder` for bulk. |
-| `doctor` | Verify all 7 prerequisites (Docker, compose, Postgres+migrations, RabbitMQ, Ollama+model, faster-whisper, ffmpeg). |
+| `media-backfill [--limit N]` | Download + analyze media descriptors stored at ingest but not yet fetched. |
+| `embed-backfill [--limit N] [--batch N] [--chat name]` | Embed stored messages for semantic `ask` retrieval (recent-first, resumable). |
+| `full-sync` | Pull deep WhatsApp history on a freshly-linked session (onboarding push sync). |
+| `merge-duplicate-chats` | Merge duplicate group rows (e.g. LID/PN identity splits) into one. |
+| `doctor` | Verify prerequisites (Docker, compose, Postgres+migrations, RabbitMQ, Ollama+model, faster-whisper, ffmpeg) plus an advisory default-DB-password check. |
 
 `make dev` is the everyday entry point: brings up the Docker stack, applies migrations, and
 starts the worker + web server + live collector together.
@@ -114,7 +119,7 @@ starts the worker + web server + live collector together.
 | `db/` | Postgres client, migrations, repositories (tenants, users, sessions, email-tokens, audit-log, groups, messages, summaries, transcripts, media-analyses, job-runs, watermarks, scheduler-state, status-snapshots, service-status). **Tenancy:** a `tenants` table + mandatory `tenant_id` on every tenant-scoped table, isolated by Postgres RLS (policy keys off the `app.tenant_id` GUC) plus an app-layer `withTenant()`. In single-user mode the app connects as the DB owner and all data runs as the fixed default tenant (RLS dormant by design). In `MULTI_TENANT=true` mode the cutover is **live**: the app connects as the restricted `catchup_app` role and every request/job/ingest is scoped via `withTenant()`, so isolation is enforced. Two pools: `catchup_app` (NOBYPASSRLS, runtime) + `catchup_operator` (BYPASSRLS, pre-tenant lookups + operator dashboard). |
 | `auth/` | Multi-tenant auth brain (`service.ts`): argon2id password hashing, opaque session/email tokens (SHA-256 at rest), cookie helpers, register/login/verify/reset/logout. Cross-tenant pre-tenant reads (login lookup, session resolution) quarantined to the operator pool; everything else runs in `withTenant()`. No-op unless `MULTI_TENANT=true`. |
 | `jobs/` | Job bus abstraction — in-memory bus (tests) + RabbitMQ bus (prod), job types, run recorder. |
-| `workers/` | Worker process + handlers: `import-file`, `transcribe-voicenote`, `analyze-media`, `summarize-group`. |
+| `workers/` | Worker process + handlers: `import-file`, `transcribe-voicenote`, `analyze-media`, `summarize-group`, `summarize-total`. |
 | `transcription/` | Python `faster-whisper` worker (`worker.py`), Node wrapper, ivrit-whisper integration. |
 | `vision/` | Ollama image/video analyzer, media-kind detection, multi-frame video analysis. |
 | `summarization/` | Selection, catch-up prep, prompt assembly, Ollama summarizer, rendering. |
@@ -148,11 +153,10 @@ starts the worker + web server + live collector together.
 
 Spec-kit artifacts for each live under `specs/<NNN-feature>/` (`spec.md`, `plan.md`, `tasks.md`).
 
-**Current branch (`bench-inference-harness`):** an inference benchmark harness (`bench/`) for
-vision + summarization — measures real production request paths, median-of-runs, with a
-results report. Notable finding: on M3 Pro hardware, `gemma4:26b` behaves like an MoE
-(~5B active params, ~34 tok/s) and the research-recommended swap to a smaller 7B vision
-model was *slower and lower quality* — the harness prevented a regression. Config unchanged.
+**Inference benchmark harness (`bench/`):** measures real production request paths for vision +
+summarization, median-of-runs, with a results report. Notable finding: on M3 Pro hardware,
+`gemma4:26b` behaves like an MoE (~5B active params, ~34 tok/s) and the research-recommended swap
+to a smaller 7B vision model was *slower and lower quality* — the harness prevented a regression.
 
 ---
 
@@ -251,5 +255,5 @@ read-state sync). The narrow catch-up watermark is the *only* permitted read-sta
 - **Entry points:** `make dev` (everything) · `src/cli.ts` (CLI) · `src/web/server.ts` (UI)
   · `src/workers/worker.ts` (jobs).
 - **Default ports:** Web 8787 · Grafana 3000 · Postgres 5432 · RabbitMQ 5672/15672 · Loki 3100.
-- **Design docs:** `docs/` (per-feature `*-design.md`), `docs/ROADMAP.md`, spec-kit under `specs/`.
+- **Design docs:** spec-kit artifacts under `specs/<NNN-feature>/` (gitignored — local to each feature branch).
 ```

@@ -169,7 +169,7 @@ cp .env.example .env
 # 3. Install Python transcription dependencies
 python3 -m venv .venv
 .venv/bin/pip install -r src/transcription/requirements.txt
-# TRANSCRIPTION_PYTHON already defaults to ./.venv/bin/python
+# .env.example sets TRANSCRIPTION_PYTHON=./.venv/bin/python (the code default is python3)
 
 # 4. Pull the Ollama model (needs Ollama: https://ollama.com)
 ollama pull gemma4:26b
@@ -201,8 +201,9 @@ The doctor checks, in order:
 5. **Ollama reachable + model pulled** — hits `/api/tags` and checks that `SUMMARY_MODEL` is present
 6. **Python + faster-whisper importable** — spawns `python -c "import faster_whisper"`
 7. **ffmpeg on PATH** — spawns `ffmpeg -version`
+8. **DB roles use non-default passwords** — tries to connect as `catchup_app` / `catchup_operator` with the committed default passwords and warns if either still works (advisory)
 
-Each line prints `✅ <check>` or `❌ <check> — fix: <command>`. The process exits 1 if any check fails.
+Each line prints `✅ <check>`, `⚠️ <check>` (advisory — does not fail the run), or `❌ <check> — fix: <command>`. The process exits 1 only if a non-advisory check fails.
 
 ---
 
@@ -413,7 +414,7 @@ Copy `.env.example` to `.env`. All keys have defaults; the table below lists eve
 |---|---|---|
 | `DATABASE_URL` | `postgres://postgres:postgres@localhost:5432/whatsapp_sum` | Postgres connection string |
 | `DATA_DIR` | `./data` | Directory for auth state, media downloads, and exports |
-| `TRANSCRIPTION_PYTHON` | `./.venv/bin/python` | Python interpreter with `faster-whisper` installed |
+| `TRANSCRIPTION_PYTHON` | `python3` | Python interpreter with `faster-whisper` installed. `.env.example` sets this to `./.venv/bin/python` for the venv flow below. |
 | `TRANSCRIPTION_MODEL` | `ivrit-ai/whisper-large-v3-turbo-ct2` | HuggingFace model for Hebrew speech-to-text (downloaded on first use) |
 | `FFMPEG_PATH` | `ffmpeg` | Path to ffmpeg binary |
 | `OLLAMA_HOST` | `http://localhost:11434` | Local Ollama server base URL |
@@ -456,6 +457,15 @@ Copy `.env.example` to `.env`. All keys have defaults; the table below lists eve
 | `EMAIL_TOKEN_TTL_MINUTES` | `60` | Lifetime of email verification / password-reset tokens. |
 | `SESSION_COOKIE_SECURE` | *(= `MULTI_TENANT`)* | `Secure` attribute on the session cookie. Defaults to on when multi-tenant (HTTPS), off for local http dev. |
 | `TOS_VERSION` | `1` | Terms-of-service version stamped on a user row at registration (consent gate). |
+| `REQUIRE_EMAIL_VERIFICATION` | `false` | When `true`, app access (everything outside `/api/auth/*`) requires a verified email. Leave off until real SMTP is wired — the dev log mailer only surfaces the link locally, so enabling it without SMTP locks users out. |
+| `DEFAULT_TENANT_ID` | `00000000-0000-0000-0000-000000000001` | UUID of the tenant that owns all single-user / pre-multi-tenant data. Rarely changed. |
+| `CATCHUP_DIAG_NAMES` | *(unset)* | Set to `1` to log extra name-resolution diagnostics from the collector. Diagnostic only. |
+
+> **Rotate the DB role passwords before exposing Postgres.** The `catchup_app` and `catchup_operator`
+> roles are created by a migration with committed default passwords (fine for local dev). For any
+> networked / multi-tenant deploy, `ALTER ROLE … WITH PASSWORD '…'` and point `APP_DATABASE_URL` /
+> `OPERATOR_DATABASE_URL` at the new credentials — `npx tsx src/cli.ts doctor` warns while a role still
+> accepts its default.
 
 </details>
 
@@ -574,7 +584,7 @@ npm run migrate
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r src/transcription/requirements.txt
-# TRANSCRIPTION_PYTHON defaults to ./.venv/bin/python
+# .env.example sets TRANSCRIPTION_PYTHON=./.venv/bin/python (the code default is python3)
 ```
 
 </details>
