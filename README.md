@@ -45,6 +45,14 @@ In addition to per-chat summaries, Catchup can produce a single digest across **
 - **On demand in the web UI:** a pinned "📊 סיכום כללי" card sits at the top of the chat list; pick a range (24 h / 3 days / week) and the summary streams in live.
 - **Automatically:** the twice-daily scheduler produces a total summary alongside the per-chat digests, so it's ready when you wake up.
 
+### 💬 Ask anything (שאל אותי הכל)
+
+Beyond summaries, you can **ask free-form questions** about your history and get a cited answer — all locally. Catchup runs **hybrid RAG**: lexical (Postgres full-text) **plus** semantic (meaning-based) retrieval over locally-computed `bge-m3` embeddings, tuned for Hebrew recall, then has the local LLM answer with inline `[n]` citations back to the source messages.
+
+- **In the web UI:** the "שאל אותי הכל" box — ask across all chats or scope to one; the answer streams in with citations.
+- **From the CLI:** `npx tsx src/cli.ts ask "מה סוכם על הטיול?" --chat "משפחה"`.
+- Semantic search needs embeddings: they're computed automatically (`AUTO_EMBED`), or backfill existing history once with `embed-backfill` (see CLI commands).
+
 ---
 
 ## 🏢 Multi-tenant (self-hosted) — optional, off by default
@@ -277,6 +285,15 @@ npx tsx src/cli.ts summarize "Family" --last 50 --out summary.txt  # write to a 
 
 Generates a structured Hebrew markdown summary locally via Ollama. Voice-note transcripts are folded in automatically (run `transcribe` first if needed). An empty selection prints `Nothing to summarize for that selection.`
 
+### `ask` — ask a question about your history (local RAG)
+
+```bash
+npx tsx src/cli.ts ask "מה הוחלט לגבי התשלום?"
+npx tsx src/cli.ts ask "what did Dana say about the trip?" --chat "Family"   # scope to one chat
+```
+
+Free-form question answering over your stored messages using hybrid (lexical + semantic) retrieval and the local LLM, with `[n]` citations. `--chat` limits the search to a single chat by name. For meaning-based recall, embed your history first with `embed-backfill`.
+
 ### `groups` — list stored chats
 
 ```bash
@@ -329,6 +346,48 @@ Imports a WhatsApp export (`.txt` or `.zip`) into Postgres. Re-importing the sam
 
 To export a chat from WhatsApp: open the chat → tap the group/contact name → scroll down to **Export Chat** → choose **Without Media** (`.txt`) or **Include Media** (`.zip`).
 
+### `embed-backfill` — compute embeddings for semantic `ask`
+
+```bash
+npx tsx src/cli.ts embed-backfill
+```
+
+Embeds stored messages so `ask` can do meaning-based (not just keyword) retrieval. Recent-first, batched, and **resumable** — safe to re-run; already-embedded messages are skipped. New messages are embedded automatically (`AUTO_EMBED`); this is the one-time backfill for existing history.
+
+### `media-backfill` — download + analyze media stored without it
+
+```bash
+npx tsx src/cli.ts media-backfill
+```
+
+For messages saved with a media reference but no downloaded file (e.g. from onboarding), this scans a fresh linked session to download and analyze them. Note WhatsApp media URLs expire, so older media may be unrecoverable.
+
+### `full-sync` — one-time full-history sync
+
+```bash
+npx tsx src/cli.ts full-sync --all                 # every chat
+npx tsx src/cli.ts full-sync --group "Family"      # only whitelisted chats
+```
+
+Pulls deep history via a fresh linked device (scan the QR once) and persists it. Use `--all` for every chat or repeat `--group` to whitelist specific chats.
+
+### `merge-duplicate-chats` — unify @lid / phone duplicate chats
+
+```bash
+npx tsx src/cli.ts merge-duplicate-chats           # dry-run (reports what it would merge)
+npx tsx src/cli.ts merge-duplicate-chats --apply   # actually merge
+```
+
+WhatsApp can represent the same person as both an `@lid` and an `@s.whatsapp.net` chat, creating duplicates. This merges them. **Dry-run by default** — pass `--apply` to commit.
+
+### `ops-sweep` — re-drive dead jobs once
+
+```bash
+npx tsx src/cli.ts ops-sweep
+```
+
+Manually triggers one operational sweep: re-drives dead/stuck jobs and records a status snapshot. Runs automatically on a schedule (`OPS_SWEEP_ENABLED`); this forces one now.
+
 ### `doctor` — verify prerequisites
 
 ```bash
@@ -361,6 +420,15 @@ Copy `.env.example` to `.env`. All keys have defaults; the table below lists eve
 | `SUMMARY_MODEL` | `gemma4:26b` | Ollama model for generating summaries |
 | `SUMMARY_NUM_CTX` | `32768` | Context window size (Ollama defaults to 2048 — this must be raised) |
 | `SUMMARY_TOKEN_BUDGET` | `24000` | Max estimated input tokens before a selection is rejected as too large |
+| `SUMMARY_TEMPERATURE` | `0.7` | Sampling temperature for the summary model |
+| `SUMMARY_REPEAT_PENALTY` | `1.1` | Repeat penalty for the summary model |
+| `SUMMARY_NUM_PREDICT` | `4096` | Max tokens the summary model may generate |
+| `EMBEDDING_MODEL` | `bge-m3` | Ollama model for message embeddings (semantic `ask` retrieval) |
+| `EMBEDDING_DIM` | `1024` | Embedding vector dimension (must match the model) |
+| `AUTO_EMBED` | `true` | Auto-embed new messages so semantic `ask` works without a manual backfill. Set `false` to disable. |
+| `AUTO_EMBED_TIMES` | `03:00,15:00` | Comma-separated HH:MM times for the scheduled auto-embed runs |
+| `AUTO_EMBED_LIMIT` | `2000` | Max messages embedded per scheduled run |
+| `AUTO_EMBED_BATCH_SIZE` | `32` | Messages per embedding batch |
 | `VISION_MODEL` | `gemma4:26b` | Ollama model for image captioning and OCR |
 | `VISION_VIDEO_MODEL` | `gemma4:26b` | Ollama model for video analysis (defaults to `VISION_MODEL` if unset) |
 | `VISION_VIDEO_FPS` | `1` | Frames per second sampled from videos |
@@ -376,6 +444,9 @@ Copy `.env.example` to `.env`. All keys have defaults; the table below lists eve
 | `RETAIN_MEDIA` | `false` | Set `true` to keep media files on disk after analysis/transcription. By default files are pruned after captioning. |
 | `DIGEST_ENABLED` | `true` | Enable scheduled twice-daily pre-summarization (so opening a group feels instant) |
 | `DIGEST_TIMES` | `08:00,18:00` | Comma-separated HH:MM times (local timezone) for the digest runs |
+| `OPS_SWEEP_ENABLED` | `true` | Enable the scheduled ops sweep (re-drive dead jobs + snapshot status). Set `false` to disable. |
+| `OPS_SWEEP_TIMES` | `08:00,18:00` | Comma-separated HH:MM times for the ops sweep |
+| `OPS_REDRIVE_CAP` | `2` | Max auto re-drives of a stuck work-item before it's flagged instead |
 | `MULTI_TENANT` | `false` | **Master switch.** `false` = single-user local mode, no login (default). `true` = multi-tenant: login required, open registration, per-tenant scoping. |
 | `APP_DATABASE_URL` | *(falls back to `DATABASE_URL`)* | App-runtime connection as the restricted `catchup_app` (NOBYPASSRLS) role. Required to actually enforce RLS in multi-tenant mode. |
 | `OPERATOR_DATABASE_URL` | *(falls back to `DATABASE_URL`)* | Connection as the `catchup_operator` (BYPASSRLS) role — pre-tenant lookups + the cross-tenant operator dashboard. |
@@ -417,7 +488,9 @@ flowchart TB
 - **Postgres** is the sole source of truth. The broker carries only job references (IDs), never message content.
 - **Node.js** runs the CLI, web server, collector (Baileys), and worker.
 - **Python + faster-whisper** runs as a subprocess for Hebrew voice-note transcription (local, nothing sent to any API).
-- **Ollama** hosts the LLM and vision model locally.
+- **Ollama** hosts the LLM, vision, and embedding models locally.
+- **Ask / RAG** reads from the same Postgres: hybrid lexical (full-text) + semantic (`bge-m3` embedding) retrieval feeds the local LLM, which answers with `[n]` citations. No separate vector store — embeddings live in Postgres.
+- **Multi-tenant mode** (`MULTI_TENANT=true`, off by default) layers auth + per-tenant isolation over the same pipeline: the app connects as the restricted `catchup_app` role and every request/job is scoped via Postgres RLS + `withTenant()`. Single-user mode connects as the DB owner and skips all of it.
 - **Docker Compose** manages Postgres, RabbitMQ, Loki, and Grafana — the app itself runs on the host for GPU/CPU access.
 
 </details>
