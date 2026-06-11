@@ -27,9 +27,10 @@ export async function selectMessages(
   client: pg.Pool | pg.PoolClient,
   groupId: number,
   selection: Selection,
-): Promise<SelectedMessage[]> {
+): Promise<SelectedMessageWithCursor[]> {
   const base = `
     SELECT m.sent_at,
+           m.id,
            COALESCE(p.display_name, 'Unknown') AS sender,
            concat_ws(' — ',
              NULLIF(trim(m.text_content), ''),
@@ -49,23 +50,28 @@ export async function selectMessages(
           ) <> ''
   `;
 
-  let rows: { sent_at: Date; sender: string; content: string }[];
+  let rows: { sent_at: Date; id: string; sender: string; content: string }[];
 
   if ("last" in selection) {
-    const res = await client.query<{ sent_at: Date; sender: string; content: string }>(
+    const res = await client.query<{ sent_at: Date; id: string; sender: string; content: string }>(
       `${base} ORDER BY m.sent_at DESC, m.id DESC LIMIT $2`,
       [groupId, selection.last],
     );
     rows = res.rows.reverse(); // newest N -> chronological
   } else {
-    const res = await client.query<{ sent_at: Date; sender: string; content: string }>(
+    const res = await client.query<{ sent_at: Date; id: string; sender: string; content: string }>(
       `${base} AND m.sent_at >= $2 ORDER BY m.sent_at ASC, m.id ASC`,
       [groupId, selection.since],
     );
     rows = res.rows;
   }
 
-  return rows.map((r) => ({ sentAt: r.sent_at, sender: r.sender, content: r.content }));
+  return rows.map((r) => ({
+    sentAt: r.sent_at,
+    sender: r.sender,
+    content: r.content,
+    messageId: Number(r.id),
+  }));
 }
 
 /**
