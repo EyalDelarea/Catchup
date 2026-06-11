@@ -167,3 +167,57 @@ export function askStream(params, handlers = {}) {
 
   return es;
 }
+
+/**
+ * Fetch all chats with their scope state (Sources / onboarding).
+ * @returns {Promise<Array<{group: string, source: string, messageCount: number, lastMessageAt: string|null, included: boolean, categoryId: number|null, removed: boolean}>>}
+ */
+export function getScopes() {
+  return fetch("/api/scopes").then((r) => {
+    if (!r.ok) throw new Error(`scopes ${r.status}`);
+    return r.json();
+  });
+}
+
+/**
+ * Apply a batch of scope updates. Same-origin (cookies + JSON) so the CSRF guard passes.
+ * @param {Array<{group: string, included?: boolean, categoryId?: number|null, removed?: boolean}>} updates
+ * @returns {Promise<{updated: number}>}
+ */
+export function putScopes(updates) {
+  return fetch("/api/scopes", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ updates }),
+  }).then((r) => {
+    if (!r.ok) throw new Error(`putScopes ${r.status}`);
+    return r.json();
+  });
+}
+
+/**
+ * Fetch the tenant's scope categories.
+ * @returns {Promise<Array<{id: number, name: string, isSystem: boolean, sortOrder: number}>>}
+ */
+export function getScopeCategories() {
+  return fetch("/api/scope-categories").then((r) => {
+    if (!r.ok) throw new Error(`scope-categories ${r.status}`);
+    return r.json();
+  });
+}
+
+/**
+ * Create a scope category.
+ * @param {string} name
+ * @returns {Promise<{id: number, name: string, isSystem: boolean, sortOrder: number}>}
+ */
+export function createScopeCategory(name) {
+  return fetch("/api/scope-categories", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  }).then((r) => {
+    if (!r.ok) throw new Error(`createScopeCategory ${r.status}`);
+    return r.json();
+  });
+}
