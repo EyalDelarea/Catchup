@@ -114,3 +114,21 @@ export function dueCatchup(now: Date, lastRun: Date | null, times: TimeSlot[]): 
 
   return false;
 }
+
+/**
+ * Resolve the digest time slots for a tenant: the stored per-tenant `digest_times`
+ * (CSV HH:MM) when present and valid, otherwise the env default (`DIGEST_TIMES`).
+ * A null/empty/malformed stored value falls back to the env default — the
+ * single-user zero-config guardrail. Pure.
+ */
+export function resolveDigestTimes(stored: string | null, envDefault: string): TimeSlot[] {
+  if (stored !== null && stored.trim() !== "") {
+    try {
+      const slots = parseTimes(stored);
+      if (slots.length > 0) return slots;
+    } catch {
+      // malformed stored value → fall back to the env default
+    }
+  }
+  return parseTimes(envDefault);
+}

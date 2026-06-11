@@ -8,6 +8,7 @@ import { createAppPool, createDbClient, createOperatorPool } from "../db/client.
 import { countReadableSince, getNewestReadableSentAt } from "../db/repositories/messages.js";
 import { getLastRun, recordRun } from "../db/repositories/scheduler-state.js";
 import { getServiceStatus, isStale } from "../db/repositories/service-status.js";
+import { getTenantDigestTimes } from "../db/repositories/user-preferences.js";
 import { DEFAULT_TENANT_ID, scopedPool } from "../db/tenant-context.js";
 import { PostgresJobRunRecorder } from "../jobs/job-run-recorder.js";
 import { RabbitMqJobBus } from "../jobs/rabbitmq-bus.js";
@@ -15,7 +16,7 @@ import { logLifecycle } from "../logging/lifecycle.js";
 import { getBaseLogger, getLogger } from "../logging/log.js";
 import { enqueueScheduledRun } from "../scheduler/enqueue-run.js";
 import { startScheduler } from "../scheduler/runner.js";
-import { parseTimes } from "../scheduler/schedule.js";
+import { parseTimes, resolveDigestTimes } from "../scheduler/schedule.js";
 import { getLastHeartbeatAt, isHealthy } from "../service/liveness.js";
 import { selectActiveGroups } from "../summarization/select-active-groups.js";
 import { OllamaSummarizer } from "../summarization/summarizer.js";
@@ -264,7 +265,17 @@ export async function startServe(options: { port?: string; collect?: boolean }):
   // ── Scheduled digest runner ──────────────────────────────────────────────
   let schedulerHandle: { stop: () => void } = { stop: () => {} };
   try {
-    const parsedTimes = parseTimes(config.digest.times);
+    // Per-tenant digest times (S5): prefer the default tenant's saved
+    // user_preferences.digest_times, falling back to the env DIGEST_TIMES default.
+    // Read via the operator pool so it works regardless of run mode. Changes take
+    // effect on restart; live-on-PUT + multi-tenant per-tenant loops are follow-ups.
+    let storedDigestTimes: string | null = null;
+    try {
+      storedDigestTimes = await getTenantDigestTimes(operatorPool, DEFAULT_TENANT_ID);
+    } catch (err) {
+      log.scheduler.error({ err }, "reading saved digest times failed; using env default");
+    }
+    const parsedTimes = resolveDigestTimes(storedDigestTimes, config.digest.times);
     schedulerHandle = startScheduler({
       pool,
       bus: brokerBus,
@@ -277,7 +288,10 @@ export async function startServe(options: { port?: string; collect?: boolean }):
       enqueueRun: enqueueScheduledRun,
     });
     if (config.digest.enabled) {
-      log.scheduler.info({ times: config.digest.times }, "digest scheduler started");
+      log.scheduler.info(
+        { times: parsedTimes, source: storedDigestTimes ? "preferences" : "env" },
+        "digest scheduler started",
+      );
     }
   } catch (err) {
     // Scheduler startup failure must NOT crash the web server
