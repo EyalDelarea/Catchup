@@ -87,6 +87,8 @@ export type ServerDeps = {
     operatorPool: pg.Pool;
     registry: AdminRegistry;
     operatorEmails: string[];
+    /** T6: audit sink so operator access to the cross-tenant view is logged. */
+    recordAudit?: (entry: import("../db/repositories/audit.js").AuditEntry) => Promise<void>;
   };
 };
 
@@ -101,7 +103,11 @@ export function createServer(deps: ServerDeps): http.Server {
     ? makeOnboardingRoutes({ registry: deps.onboarding })
     : null;
   const adminRoutes = deps.admin
-    ? makeAdminRoutes({ operatorPool: deps.admin.operatorPool, registry: deps.admin.registry })
+    ? makeAdminRoutes({
+        operatorPool: deps.admin.operatorPool,
+        registry: deps.admin.registry,
+        recordAudit: deps.admin.recordAudit,
+      })
     : null;
 
   const handleRequest = async (
@@ -138,11 +144,15 @@ export function createServer(deps: ServerDeps): http.Server {
       // Computed here so a tenant session can never reach the admin pool.
       if (adminRoutes && url.pathname.startsWith("/api/admin/")) {
         let isOperator = false;
+        let operatorEmail: string | null = null;
         if (session && deps.auth && deps.admin) {
           const user = await currentUser(deps.auth.deps, session);
-          isOperator = user != null && deps.admin.operatorEmails.includes(user.email.toLowerCase());
+          if (user != null && deps.admin.operatorEmails.includes(user.email.toLowerCase())) {
+            isOperator = true;
+            operatorEmail = user.email;
+          }
         }
-        if (await adminRoutes.handle(req, res, url, { isOperator })) return;
+        if (await adminRoutes.handle(req, res, url, { isOperator, operatorEmail })) return;
       }
       // Onboarding talks to the registry, not the DB pool — route it with the raw
       // tenantId before the pool-scoped dispatch.
