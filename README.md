@@ -47,31 +47,65 @@ In addition to per-chat summaries, Catchup can produce a single digest across **
 
 ---
 
-## 🏢 Multi-tenant (self-hosted) — additive capability
+## 🏢 Multi-tenant (self-hosted) — optional, off by default
 
-Catchup is growing an **optional, self-hosted multi-tenant mode** so one operator-run instance can
-serve several WhatsApp accounts (your own businesses + trusted friends) — each fully isolated. This
-is **additive**: the single-user local mode above stays the default and behaves exactly as today.
+> **TL;DR — it is _not_ multi-tenant by default.** Out of the box Catchup is the single-user local
+> app described above, with **no login**. Multi-tenant mode is an **opt-in** you enable by setting
+> **`MULTI_TENANT=true`**. If you never set it, nothing changes — that's the backward-compat
+> guarantee.
+
+When enabled, one operator-run instance can serve several WhatsApp accounts (your own businesses +
+trusted friends) — each fully isolated behind its own login.
 
 **Still "local + private", redefined for an operator:** data never leaves the operator's own
 hardware, there is **no third-party cloud**, and **all inference (Whisper/Ollama) stays local** —
-nothing is sent to anyone. The new hard guarantee is **tenant isolation**: one tenant can never read
-or modify another's data, enforced in **two independent layers** (PostgreSQL row-level security +
-an application-layer active-tenant context). The operator is the data custodian and can hard-delete
-any tenant's data on request.
+nothing is sent to anyone. The hard guarantee is **tenant isolation**: one tenant can never read or
+modify another's data, enforced in **two independent layers** (PostgreSQL row-level security + an
+application-layer active-tenant context). The operator is the data custodian and can hard-delete any
+tenant's data on request.
 
 | Capability | Approach |
 |---|---|
 | Isolation | Postgres RLS **and** app-layer `withTenant()` (defense in depth) |
 | Auth | Email + password (argon2), email verification + reset |
 | Registration | Open self-registration behind a consent + ToS gate |
-| Internet access | Cloudflare Tunnel (no open ports, auto-HTTPS, hides home IP) |
 | Onboarding | Web: register → scan QR → connected; media/history backfilled in the background |
-| Observability | `tenant_id` on every log line + a dedicated audit log |
+| Operator view | Cross-tenant dashboard at `/admin` (gated by `OPERATOR_EMAILS` allowlist) |
+| Observability | `tenant_id` on every log line + an append-only audit log |
+| Internet access | Cloudflare Tunnel (no open ports, auto-HTTPS, hides home IP) |
 
-**Status:** delivered in stacked slices — **T1 (tenancy data substrate) is merged**; auth +
-registration, per-tenant WhatsApp orchestration, onboarding, dashboards, and observability are
-landing as a stack of gated PRs on top of it. Single-user local users need to do nothing.
+**Status: ✅ shipped.** All slices are merged: tenancy substrate (RLS), auth + open registration,
+per-tenant WhatsApp orchestration with fair-share scheduling, web QR onboarding, the operator
+dashboard, and the audit log. Single-user local users need to do nothing.
+
+<details>
+<summary><strong>Enabling multi-tenant mode</strong> — the minimum env to flip it on</summary>
+
+<br/>
+
+Multi-tenant mode connects the app as the restricted `catchup_app` role so RLS is actually enforced
+(single-user dev connects as the DB owner, which bypasses RLS — fine locally). The roles are created
+by migration; set strong passwords with `ALTER ROLE` on the box, then:
+
+```bash
+MULTI_TENANT=true \
+APP_DATABASE_URL=postgres://catchup_app:STRONG_PW@localhost:5432/whatsapp_sum \
+OPERATOR_DATABASE_URL=postgres://catchup_operator:STRONG_PW@localhost:5432/whatsapp_sum \
+OPERATOR_EMAILS=you@example.com \
+PUBLIC_BASE_URL=https://catchup.example.com \
+node dist/cli.js serve --collect
+```
+
+- **`APP_DATABASE_URL`** → the `catchup_app` (NOBYPASSRLS) role — all in-tenant traffic; this is what
+  makes isolation real rather than dormant.
+- **`OPERATOR_DATABASE_URL`** → the `catchup_operator` (BYPASSRLS) role — used only for the handful of
+  pre-tenant reads (login lookup, session resolution) and the cross-tenant operator dashboard.
+- **`OPERATOR_EMAILS`** → comma-separated allowlist; a logged-in user whose email is listed is the
+  operator and may reach `/admin`. Empty = no operator dashboard.
+
+See the [Configuration](#️-configuration) table for the full list of auth/session keys.
+
+</details>
 
 ---
 
@@ -342,6 +376,15 @@ Copy `.env.example` to `.env`. All keys have defaults; the table below lists eve
 | `RETAIN_MEDIA` | `false` | Set `true` to keep media files on disk after analysis/transcription. By default files are pruned after captioning. |
 | `DIGEST_ENABLED` | `true` | Enable scheduled twice-daily pre-summarization (so opening a group feels instant) |
 | `DIGEST_TIMES` | `08:00,18:00` | Comma-separated HH:MM times (local timezone) for the digest runs |
+| `MULTI_TENANT` | `false` | **Master switch.** `false` = single-user local mode, no login (default). `true` = multi-tenant: login required, open registration, per-tenant scoping. |
+| `APP_DATABASE_URL` | *(falls back to `DATABASE_URL`)* | App-runtime connection as the restricted `catchup_app` (NOBYPASSRLS) role. Required to actually enforce RLS in multi-tenant mode. |
+| `OPERATOR_DATABASE_URL` | *(falls back to `DATABASE_URL`)* | Connection as the `catchup_operator` (BYPASSRLS) role — pre-tenant lookups + the cross-tenant operator dashboard. |
+| `OPERATOR_EMAILS` | *(empty)* | Comma-separated allowlist of emails permitted to reach `/admin`. Empty = operator dashboard disabled. Multi-tenant only. |
+| `PUBLIC_BASE_URL` | `http://localhost:8787` | Base URL used to build verification/reset links in emails. Set to your public HTTPS URL in production. |
+| `SESSION_TTL_DAYS` | `30` | Session (login cookie) lifetime in days. |
+| `EMAIL_TOKEN_TTL_MINUTES` | `60` | Lifetime of email verification / password-reset tokens. |
+| `SESSION_COOKIE_SECURE` | *(= `MULTI_TENANT`)* | `Secure` attribute on the session cookie. Defaults to on when multi-tenant (HTTPS), off for local http dev. |
+| `TOS_VERSION` | `1` | Terms-of-service version stamped on a user row at registration (consent gate). |
 
 </details>
 
