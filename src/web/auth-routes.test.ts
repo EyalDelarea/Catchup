@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { AuthDeps, Mailer } from "../auth/service.js";
 import { appPool, createTestDatabase, operatorPool } from "../test/db.js";
 import { makeAuthRoutes } from "./auth-routes.js";
+import { makeRateLimiter } from "./rate-limit.js";
 
 /**
  * Integration tests for the /api/auth/* HTTP surface, against the REAL repos and
@@ -84,6 +85,9 @@ beforeAll(async () => {
   const routes = makeAuthRoutes({
     deps: authDeps(),
     cookieSecure: false,
+    // These tests fire far more than the production default (10/min) at the same routes;
+    // rate limiting is exercised separately below, so give the shared server lots of room.
+    rateLimit: { max: 100_000, windowMs: 60_000 },
   });
   server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -248,5 +252,51 @@ describe("verify / reset flows over HTTP", () => {
     expect(
       (await post("/api/auth/login", { email: "r@http.test", password: "new-pw-67890" })).status,
     ).toBe(200);
+  });
+});
+
+describe("rate limiting", () => {
+  let rlServer: http.Server;
+  let rlBase: string;
+
+  beforeAll(async () => {
+    // A dedicated server with a tight limiter (2/window) and a fixed clock, so the window
+    // never elapses during the test.
+    const routes = makeAuthRoutes({
+      deps: authDeps(),
+      cookieSecure: false,
+      rateLimit: { limiter: makeRateLimiter({ max: 2, windowMs: 60_000, now: () => 1_000 }) },
+    });
+    rlServer = http.createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      void routes.handle(req, res, url).then((handled) => {
+        if (!handled) {
+          res.writeHead(404);
+          res.end("nope");
+        }
+      });
+    });
+    await new Promise<void>((r) => rlServer.listen(0, r));
+    rlBase = `http://localhost:${(rlServer.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((r) => rlServer.close(() => r()));
+  });
+
+  it("429s a mutating auth route once the per-IP budget is exceeded", async () => {
+    const hit = () =>
+      fetch(`${rlBase}/api/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "x@y.test", password: "whatever-123" }),
+      });
+
+    // First two are within budget (401 — no such user); the third is throttled.
+    expect((await hit()).status).toBe(401);
+    expect((await hit()).status).toBe(401);
+    const throttled = await hit();
+    expect(throttled.status).toBe(429);
+    expect(throttled.headers.get("retry-after")).toBe("60");
   });
 });
