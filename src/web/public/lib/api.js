@@ -267,3 +267,54 @@ export function putPreferences(patch) {
     return r.json();
   });
 }
+
+/**
+ * @typedef {{
+ *   id: number,
+ *   kind: "task"|"meeting"|"followup"|"recap",
+ *   chat: string,
+ *   proposedText: string,
+ *   reason: string,
+ *   sourceMessageId: number|null
+ * }} Suggestion
+ */
+
+/**
+ * Fetch today's suggestion deck (§2 Today). `suggestions` is the pending deck —
+ * already scope-filtered + capped server-side. `info` carries the read-only
+ * cross-chat highlights for the info cards. Throws on a non-OK response; the
+ * Today view treats that (e.g. a 404 while the engine endpoint is still being
+ * built) as an empty deck and renders the empty state.
+ * @returns {Promise<{
+ *   suggestions: Suggestion[],
+ *   info: { highlights: string, perChat: Array<{ chat: string, summary: string }> }
+ * }>}
+ */
+export function getToday() {
+  return fetch("/api/suggestions").then((r) => {
+    if (!r.ok) throw new Error(`suggestions ${r.status}`);
+    return r.json();
+  });
+}
+
+/**
+ * Act on a single suggestion. Same-origin (cookies + JSON) so the CSRF guard
+ * passes. `accept` commits the suggestion's `proposedText`; `edit` commits
+ * `finalText` (the user's edited draft); `snooze` defers it; `discard` removes
+ * it from the deck. Returns the updated suggestion.
+ * @param {number} id
+ * @param {"accept"|"edit"|"snooze"|"discard"} action
+ * @param {string} [finalText] - required for `edit`; the committed draft text
+ * @returns {Promise<Suggestion>}
+ */
+export function actOnSuggestion(id, action, finalText) {
+  const body = finalText === undefined ? { action } : { action, finalText };
+  return fetch(`/api/suggestions/${id}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  }).then((r) => {
+    if (!r.ok) throw new Error(`actOnSuggestion ${r.status}`);
+    return r.json();
+  });
+}
