@@ -109,7 +109,9 @@ describe("summarizeAndPersist — new messages (generated)", () => {
     expect(deps.insertSummary).toHaveBeenCalledOnce();
     const [, input] = (deps.insertSummary as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(input.groupId).toBe(groupId);
+    // overview stays the full text (back-compat) and the row is now structured.
     expect(input.output.overview).toBe("A great summary");
+    expect(input.output.version).toBe(2);
     expect(input.summaryType).toBe("watermark");
     expect(input.model).toBe("test-model");
   });

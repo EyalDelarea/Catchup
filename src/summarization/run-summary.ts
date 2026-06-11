@@ -1,8 +1,9 @@
 import type pg from "pg";
 import type { Cursor } from "../db/repositories/read-watermarks.js";
 import type { InsertSummaryInput } from "../db/repositories/summaries.js";
+import { parseStructuredSummary } from "./parse-structured.js";
 import type { PreparedCatchup } from "./prepare-catchup.js";
-import type { SummaryPrompt } from "./summarizer.js";
+import type { SummaryOutput, SummaryPrompt } from "./summarizer.js";
 
 export type { InsertSummaryInput };
 
@@ -16,7 +17,8 @@ export type CatchupResultToPersist = {
   groupId: number;
   summaryType: "watermark";
   parameters: Record<string, unknown>;
-  fullText: string;
+  /** The parsed structured summary to persist (or legacy {overview} prose). */
+  output: SummaryOutput;
   model: string;
   newWatermark: Cursor;
   insertSummary: (pool: pg.Pool, input: InsertSummaryInput) => Promise<number>;
@@ -38,7 +40,7 @@ export async function persistCatchupResult(opts: CatchupResultToPersist): Promis
     groupId,
     summaryType,
     parameters,
-    fullText,
+    output,
     model,
     newWatermark,
     insertSummary,
@@ -49,7 +51,7 @@ export async function persistCatchupResult(opts: CatchupResultToPersist): Promis
     groupId,
     summaryType,
     parameters,
-    output: { overview: fullText.trim() },
+    output,
     model,
   });
 
@@ -123,6 +125,7 @@ export async function summarizeAndPersist(
 
   // kind === "ready"
   const fullText = await summarize(prepared.prompt);
+  const output = parseStructuredSummary(fullText, prepared.indexMap);
 
   // Shared commit step: summary first, watermark second (no partial state).
   await persistCatchupResult({
@@ -130,7 +133,7 @@ export async function summarizeAndPersist(
     groupId: prepared.groupId,
     summaryType: prepared.summaryType,
     parameters: prepared.parameters,
-    fullText,
+    output,
     model,
     newWatermark: prepared.newWatermark,
     insertSummary,
