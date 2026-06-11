@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { toVectorLiteral } from "../../ask/embedder.js";
+import { toVectorLiteral } from "../vector.js";
 
 /** A message that still needs an embedding, with its display/embeddable content. */
 export type PendingEmbedding = {

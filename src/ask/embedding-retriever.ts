@@ -1,5 +1,6 @@
 import type pg from "pg";
-import { type Embedder, toVectorLiteral } from "./embedder.js";
+import { toVectorLiteral } from "../db/vector.js";
+import type { Embedder } from "./embedder.js";
 import type { Candidate, RetrieveQuery, Retriever } from "./retriever.js";
 
 /**

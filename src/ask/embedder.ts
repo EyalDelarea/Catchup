@@ -94,8 +94,3 @@ export class OllamaEmbedder implements Embedder {
     return vectors;
   }
 }
-
-/** pgvector text literal for a vector: `[0.1,0.2,...]`. Used as a `$n::vector` param. */
-export function toVectorLiteral(embedding: number[]): string {
-  return `[${embedding.join(",")}]`;
-}
