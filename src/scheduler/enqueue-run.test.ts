@@ -13,6 +13,7 @@
 
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { upsertScope } from "../db/repositories/chat-scopes.js";
 import { upsertGroup } from "../db/repositories/groups.js";
 import { insertMessages } from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
@@ -143,6 +144,31 @@ describe("enqueueScheduledRun", () => {
     expect(result.enqueued).toBeGreaterThanOrEqual(1);
     expect(result.skipped).toBeGreaterThanOrEqual(1);
     expect(result.enqueued + result.skipped).toBeGreaterThanOrEqual(2);
+  });
+
+  it("skips excluded/removed chats but keeps un-scoped (default-on), even with all:true", async () => {
+    const bus = makeFakeBus();
+    const ts = new Date("2026-06-05T07:00:00Z");
+
+    const unscoped = await seedGroup(pool, "scope-unscoped");
+    await seedMessage(pool, unscoped, "scope-uns-1", ts);
+    const excluded = await seedGroup(pool, "scope-excluded");
+    await seedMessage(pool, excluded, "scope-exc-1", ts);
+    const removed = await seedGroup(pool, "scope-removed");
+    await seedMessage(pool, removed, "scope-rem-1", ts);
+
+    await upsertScope(pool, { groupId: excluded, included: false });
+    await upsertScope(pool, { groupId: removed, removed: true });
+
+    // all:true ignores the watermark but must NOT resurrect excluded/removed chats.
+    await enqueueScheduledRun(pool, bus, { all: true });
+
+    const ids = bus.calls
+      .filter((c) => c.type === "summarize.group")
+      .map((c) => String(c.payload["groupId"]));
+    expect(ids).toContain(String(unscoped));
+    expect(ids).not.toContain(String(excluded));
+    expect(ids).not.toContain(String(removed));
   });
 
   it("returns enqueued=0, skipped=all when every group is up to date", async () => {

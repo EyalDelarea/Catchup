@@ -1,5 +1,6 @@
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { upsertScope } from "../db/repositories/chat-scopes.js";
 import { upsertGroup } from "../db/repositories/groups.js";
 import { insertMessages } from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
@@ -75,5 +76,23 @@ describe("selectActiveGroups", () => {
     ]);
     const groups = await selectActiveGroups(pool, { since });
     expect(groups.find((g) => g.name === "SystemOnly")).toBeUndefined();
+  });
+
+  it("excludes scope-excluded and removed chats, keeps un-scoped (default-on)", async () => {
+    const since = new Date("2026-06-07T00:00:00.000Z");
+    const ts = new Date("2026-06-07T09:00:00.000Z");
+    const keep = await upsertGroup(pool, { name: "ScopeKeep", source: "import" });
+    const drop = await upsertGroup(pool, { name: "ScopeDrop", source: "import" });
+    const gone = await upsertGroup(pool, { name: "ScopeGone", source: "import" });
+    await seed(keep, ts, "sk1");
+    await seed(drop, ts, "sd1");
+    await seed(gone, ts, "sg1");
+    await upsertScope(pool, { groupId: drop, included: false });
+    await upsertScope(pool, { groupId: gone, removed: true });
+
+    const names = (await selectActiveGroups(pool, { since })).map((g) => g.name);
+    expect(names).toContain("ScopeKeep");
+    expect(names).not.toContain("ScopeDrop");
+    expect(names).not.toContain("ScopeGone");
   });
 });

@@ -8,6 +8,7 @@
  */
 
 import type pg from "pg";
+import { listIncludedGroupIds } from "../db/repositories/chat-scopes.js";
 import { currentTenantId } from "../db/tenant-context.js";
 import type { JobBus } from "../jobs/job-bus.js";
 
@@ -79,10 +80,13 @@ export async function enqueueScheduledRun(
   let skipped = 0;
 
   try {
-    const { rows } = await pool.query<{ id: string }>(`SELECT id FROM groups ORDER BY id ASC`);
+    // Only included chats are summarized (S4 scope filter). A group with no scope
+    // row is included (default-on); explicitly excluded/removed chats are skipped.
+    // `opts.all` ignores the watermark, NOT the scope — a forced run must not
+    // resurrect excluded chats.
+    const includedIds = await listIncludedGroupIds(pool);
 
-    for (const row of rows) {
-      const groupId = Number(row.id);
+    for (const groupId of includedIds) {
       try {
         const changed = opts?.all === true || (await hasNewMessages(pool, groupId));
         if (!changed) {

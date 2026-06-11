@@ -7,6 +7,9 @@ export type ActiveGroup = { id: number; name: string };
  * least one content-bearing, non-system message on/after `since`. Uses the same
  * transcript/media content predicate as selectMessages so "active" matches what
  * would actually be summarized. Ordered by name for stable display.
+ *
+ * Scope-filtered (S4): a chat explicitly excluded or removed in `chat_scopes` is
+ * left out of the cross-chat total; a chat with no scope row stays in (default-on).
  */
 export async function selectActiveGroups(
   client: pg.Pool | pg.PoolClient,
@@ -26,6 +29,10 @@ export async function selectActiveGroups(
             NULLIF(trim(a.description), ''),
             NULLIF(trim(t.transcript), '')
           ) <> ''
+      AND NOT EXISTS (
+        SELECT 1 FROM chat_scopes cs
+        WHERE cs.group_id = g.id AND (NOT cs.included OR cs.removed_at IS NOT NULL)
+      )
     GROUP BY g.id, g.name
     ORDER BY g.name ASC
     `,
