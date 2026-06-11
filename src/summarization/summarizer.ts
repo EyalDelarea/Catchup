@@ -2,10 +2,44 @@ import http from "node:http";
 import https from "node:https";
 import { URL } from "node:url";
 
-export type SummaryOutput = {
+/** A summary bullet, optionally linked to the message it was drawn from. */
+export type SummaryBullet = {
+  text: string;
+  /** messages.id of the single most relevant source line, when resolvable. */
+  sourceMessageId?: number;
+};
+
+/** Fielded summary (S3+). Discriminated by `version: 2`. */
+export type StructuredSummary = {
+  version: 2;
+  /** 1–2 line TL;DR (## תקציר). Always present. */
+  overview: string;
+  /** נושאים עיקריים */
+  topics: SummaryBullet[];
+  /** החלטות ומשימות */
+  decisions: SummaryBullet[];
+  /** שאלות פתוחות */
+  openQuestions: SummaryBullet[];
+  /** Explicit owner/task items (overlaps the meetings/to-dos slice). */
+  actionItems: SummaryBullet[];
+  /** Verbatim model markdown — backs "העתק סיכום" + the render fallback. */
+  raw: string;
+};
+
+/** Legacy prose shape — rows written before S3. */
+export type LegacySummary = {
   /** Prose summary in the conversation's language ("what you missed"). */
   overview: string;
 };
+
+/**
+ * Persisted/served summary output. The engine streams prose and returns a
+ * {@link LegacySummary}; the /api/summarize handler parses it into a
+ * {@link StructuredSummary} before persisting. Discriminate with
+ * `"version" in output && output.version === 2`, never on field presence
+ * (a structured summary may have all arrays empty).
+ */
+export type SummaryOutput = StructuredSummary | LegacySummary;
 
 export type SummaryPrompt = {
   system: string;
