@@ -366,9 +366,10 @@ async function runDetailWithCacheFirst(group) {
 
   if (cached) {
     detailState.cachedSummaryText = cached.output.overview;
+    detailState.summaryText = cached.output.overview; // so copy works on the cached card
     detailState.showingCachedCard = true;
     const statusText = `מהמטמון • נוצר ב־${fmtTime(cached.createdAt)}`;
-    setSummaryRegion(buildSummaryCardDone(cached.output.overview, statusText, false));
+    setSummaryRegion(buildStructuredSummaryCard(cached.output, statusText, false));
     const openedGroup = group;
     setTimeout(() => {
       if (shouldStartBackgroundRefresh({
@@ -458,6 +459,13 @@ function wireDetailButtons(group) {
   document.getElementById("range-go")?.addEventListener("click", () => onRangeSubmit());
   document.getElementById("range-cancel")?.addEventListener("click", () => closeRangeSheet());
   document.getElementById("ama-bar-group")?.addEventListener("click", () => navigate("ama", group));
+  // Source-jump: a structured-summary bullet → the chat thread, pulsing the source.
+  document.getElementById("summary-region")?.addEventListener("click", (e) => {
+    const jump = e.target.closest?.(".sum-jump");
+    if (!jump || !detailState.group) return;
+    const id = Number(jump.dataset.id);
+    if (Number.isFinite(id)) navigate("thread", { chat: detailState.group, aroundId: id });
+  });
 }
 
 function onChipClick(chip) {
@@ -642,7 +650,15 @@ function onDone(data) {
   if (data.summarizeMs) parts.push(`סיכום ${(data.summarizeMs / 1000).toFixed(1)}ש׳`);
   showUpdatingChip(false);
   detailState.showingCachedCard = false;
-  setSummaryRegion(buildSummaryCardDone(detailState.summaryText, parts.join(" • "), !!data.stale));
+  // Prefer the structured summary carried on `done`; keep summaryText as the full
+  // markdown so the copy button still copies the verbatim summary.
+  if (data.summary?.overview) detailState.summaryText = data.summary.overview;
+  const statusText = parts.join(" • ");
+  setSummaryRegion(
+    data.summary
+      ? buildStructuredSummaryCard(data.summary, statusText, !!data.stale)
+      : buildSummaryCardDone(detailState.summaryText, statusText, !!data.stale),
+  );
   teardownStream();
   if (detailState.group) loadHistory(detailState.group);
 }
@@ -729,6 +745,56 @@ function buildSummaryCardDone(text, statusText, stale) {
     <div class="glass-card summary-card">
       <div class="summary-card__meta"><span>${escHtml(statusText)}</span></div>
       <div class="summary-card__body summary-card__body--rendered">${renderMarkdown(text)}</div>
+      <div class="summary-actions">
+        <button class="copy-btn" id="copy-btn" aria-label="העתק סיכום">📋 העתק סיכום</button>
+      </div>
+    </div>
+  `;
+}
+
+/** Render a section's bullets; those with a sourceMessageId become source-jump buttons. */
+function renderSumBullets(bullets) {
+  return bullets
+    .map((b) => {
+      const text = escHtml(b.text);
+      if (b.sourceMessageId) {
+        return `<li><button type="button" class="sum-jump" data-id="${b.sourceMessageId}">` +
+          `<span class="sum-jump__text">${text}</span>` +
+          `<span class="sum-jump__icon" aria-hidden="true">↩︎</span></button></li>`;
+      }
+      return `<li class="sum-item">${text}</li>`;
+    })
+    .join("");
+}
+
+/**
+ * Structured summary-first card (§3). Falls back to the markdown card for legacy
+ * (version !== 2) or missing structure, so nothing ever fails to render.
+ * @param {{version:number, overview:string, tldr:string, topics:Array, decisions:Array, openQuestions:Array}} summary
+ */
+function buildStructuredSummaryCard(summary, statusText, stale) {
+  if (!summary || summary.version !== 2) {
+    return buildSummaryCardDone(summary?.overview ?? "", statusText, stale);
+  }
+  const section = (title, bullets) =>
+    bullets && bullets.length
+      ? `<div class="sum-section"><h4 class="sum-section__title">${title}</h4>` +
+        `<ul class="sum-list">${renderSumBullets(bullets)}</ul></div>`
+      : "";
+  const tldr = summary.tldr
+    ? `<div class="sum-section sum-section--tldr"><p class="sum-tldr">${escHtml(summary.tldr)}</p></div>`
+    : "";
+  return `
+    ${stale ? `
+      <div class="stale-note" role="alert">
+        <span aria-hidden="true">⚠️</span><span>נתונים עלולים להיות לא עדכניים</span>
+      </div>` : ""}
+    <div class="glass-card summary-card sum-card">
+      <div class="summary-card__meta"><span>${escHtml(statusText)}</span></div>
+      ${tldr}
+      ${section("נושאים עיקריים", summary.topics)}
+      ${section("החלטות ומשימות", summary.decisions)}
+      ${section("שאלות פתוחות", summary.openQuestions)}
       <div class="summary-actions">
         <button class="copy-btn" id="copy-btn" aria-label="העתק סיכום">📋 העתק סיכום</button>
       </div>

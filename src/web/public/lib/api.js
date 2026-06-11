@@ -39,11 +39,16 @@ export function getStatus() {
  *
  * @param {string} group  - Exact group display name
  * @param {number} [limit] - Optional positive integer (default 50, max 200 server-side)
+ * `output` is normalized: `overview` is always the full markdown; v2 rows also
+ * carry `tldr` + sectioned bullets (`{text, sourceMessageId?}`), v1 rows are
+ * sectioned best-effort with no source links.
+ * @param {string} group  - Exact group display name
+ * @param {number} [limit] - Optional positive integer (default 50, max 200 server-side)
  * @returns {Promise<Array<{
  *   id: number,
  *   summaryType: "last_n"|"since"|"watermark",
  *   parameters: Record<string, unknown>,
- *   output: { overview: string },
+ *   output: { version: 1|2, overview: string, tldr: string, topics: Array<{text:string, sourceMessageId?:number}>, decisions: Array<object>, openQuestions: Array<object>, actionItems: Array<object> },
  *   model: string,
  *   createdAt: string
  * }>>}
