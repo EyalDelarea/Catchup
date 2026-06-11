@@ -45,6 +45,11 @@ const PATHS = {
   user: '<circle cx="12" cy="8" r="3.5"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/>',
   flame: '<path d="M12 3s5 4 5 9a5 5 0 0 1-10 0c0-2 1-3.2 1-3.2s.2 2 1.6 2.6C9.2 11 12 9 12 3z"/>',
   arrowL: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+  // ── People (§5) + Meetings/To-dos (§6) glyphs ─────────
+  users:
+    '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/>'
+    + '<path d="M16 5.2a3.2 3.2 0 0 1 0 5.6M17.5 20a5.5 5.5 0 0 0-3-4.9"/>',
+  target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.4"/>',
 };
 
 /**
