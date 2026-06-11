@@ -222,10 +222,12 @@ function dispatchApi(
     return;
   }
   if (req.method === "GET" && url.pathname === "/api/summarize") {
+    if (blockCrossOrigin(req, res)) return;
     void handleSummarize(url, req, res, deps);
     return;
   }
   if (req.method === "GET" && url.pathname === "/api/total-summary") {
+    if (blockCrossOrigin(req, res)) return;
     void handleTotalSummary(url, req, res, deps);
     return;
   }
@@ -243,6 +245,37 @@ function dispatchApi(
   }
   res.writeHead(404, { "content-type": "text/plain" });
   res.end("Not found");
+}
+
+/**
+ * CSRF defense for the state-changing GET endpoints (/api/summarize, /api/total-summary):
+ * they advance the read watermark + spend LLM compute, but can't move to POST because the
+ * browser consumes them via EventSource (GET only, no custom headers). So validate the
+ * request's Origin/Referer against its own host instead.
+ *
+ * Returns true when the request is cross-origin and must be rejected. A same-origin
+ * request passes; a request with NEITHER Origin nor Referer also passes (a same-origin
+ * top-level GET navigation often omits both) — but a cross-site trigger leaks either an
+ * Origin (fetch/form) or the attacker's Referer (window.open / link navigation), which is
+ * exactly what this blocks. Combined with the SameSite=Lax session cookie.
+ */
+export function isCrossOrigin(req: http.IncomingMessage): boolean {
+  const host = req.headers.host;
+  if (!host) return false; // nothing to compare against — don't block
+  const candidate = req.headers.origin ?? req.headers.referer;
+  if (!candidate) return false; // no Origin/Referer present
+  try {
+    return new URL(candidate).host !== host;
+  } catch {
+    return true; // malformed Origin/Referer → treat as cross-origin
+  }
+}
+
+function blockCrossOrigin(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+  if (!isCrossOrigin(req)) return false;
+  res.writeHead(403, { "content-type": "application/json" });
+  res.end(JSON.stringify({ error: "Cross-origin request rejected." }));
+  return true;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
