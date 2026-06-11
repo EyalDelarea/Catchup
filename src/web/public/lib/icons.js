@@ -30,6 +30,21 @@ const PATHS = {
   filter: '<path d="M3 5h18l-7 8.5V20l-4-2.2v-4.3z"/>',
   check: '<path d="M20 6.5 9.5 17 4 11.5"/>',
   chevL: '<path d="M14.5 6 8.5 12l6 6"/>',
+  chevR: '<path d="M9.5 6 15.5 12l-6 6"/>',
+  // ── Today (§2) glyphs ─────────────────────────────────
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  calendar:
+    '<rect x="4" y="5" width="16" height="16" rx="2.5"/>'
+    + '<path d="M8 3v4M16 3v4M4 10h16"/>',
+  message: '<path d="M21 11.5a7.5 7.5 0 0 1-10.7 6.79L4 20l1.71-4.3A7.5 7.5 0 1 1 21 11.5z"/>',
+  pencil:
+    '<path d="M4 20h4L18.5 9.5a2 2 0 0 0-2.83-2.83L5 17.5z"/>'
+    + '<path d="M14 7l3 3"/>',
+  checks: '<path d="M3 13l3 3 7-8M13 16l1 1 7-8"/>',
+  user: '<circle cx="12" cy="8" r="3.5"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/>',
+  flame: '<path d="M12 3s5 4 5 9a5 5 0 0 1-10 0c0-2 1-3.2 1-3.2s.2 2 1.6 2.6C9.2 11 12 9 12 3z"/>',
+  arrowL: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
 };
 
 /**
