@@ -10,6 +10,7 @@ import path from "node:path";
 import type { WAMessage } from "@whiskeysockets/baileys";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { recordLink } from "../db/repositories/identity-links.js";
 import { InMemoryJobBus } from "../jobs/in-memory-bus.js";
 import { InMemoryJobRunRecorder } from "../jobs/job-run-recorder.js";
 import { createTestDatabase } from "../test/db.js";
@@ -977,5 +978,93 @@ describe("collector identity-canonicalization (#17)", () => {
     // No existing chat under either identity → new chat keyed on the phone JID.
     expect(await groupIdForJid(pn)).not.toBeNull();
     expect(await groupIdForJid(lid)).toBeNull();
+  });
+});
+
+describe("DB-first identity canonicalization (cold live bridge)", () => {
+  let pool: pg.Pool;
+  let dataDir: string;
+
+  beforeAll(async () => {
+    pool = new pg.Pool({ connectionString: await createTestDatabase() });
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "catchup-collector-idlink-"));
+  }, 120_000);
+
+  afterAll(async () => {
+    await pool.end();
+  }, 30_000);
+
+  it("routes a pn-keyed message into the existing lid row using the DB map when the live bridge is cold", async () => {
+    const lid = "123@lid";
+    const pn = "972500000000@s.whatsapp.net";
+
+    // A named lid chat already exists; a link maps lid <-> pn. tenant_id defaults
+    // to the default tenant (no GUC set on this raw superuser pool).
+    await pool.query("INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live')", [
+      lid,
+      "Dana",
+    ]);
+    await recordLink(pool, { lidJid: lid, pnJid: pn, source: "message_alt" });
+
+    // A message arrives under the PN identity with the live bridge COLD (returns null).
+    const waMsg = makeFakeWATextMessage({ id: "IDLINK_001", remoteJid: pn, pushName: "Dana" });
+    await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      lidForPn: async () => null,
+      pnForLid: async () => null,
+    });
+
+    // Exactly one row exists for this person — the message was routed into the lid row.
+    const { rows } = await pool.query(
+      "SELECT count(*)::int AS n FROM groups WHERE whatsapp_id IN ($1, $2)",
+      [lid, pn],
+    );
+    expect(rows[0].n).toBe(1);
+  });
+
+  it("routes a lid-keyed message into the existing pn row using the DB map when the live bridge is cold", async () => {
+    const lid = "456@lid";
+    const pn = "972511112222@s.whatsapp.net";
+
+    // A named pn chat already exists; a link maps lid <-> pn.
+    await pool.query("INSERT INTO groups (whatsapp_id, name, source) VALUES ($1, $2, 'live')", [
+      pn,
+      "Roni",
+    ]);
+    await recordLink(pool, { lidJid: lid, pnJid: pn, source: "message_alt" });
+
+    // A message arrives under the LID identity with the live bridge COLD.
+    const waMsg = makeFakeWATextMessage({ id: "IDLINK_002", remoteJid: lid, pushName: "Roni" });
+    await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      lidForPn: async () => null,
+      pnForLid: async () => null,
+    });
+
+    const { rows } = await pool.query(
+      "SELECT count(*)::int AS n FROM groups WHERE whatsapp_id IN ($1, $2)",
+      [lid, pn],
+    );
+    expect(rows[0].n).toBe(1);
+  });
+
+  it("persists a freshly bridge-resolved pairing into identity_links", async () => {
+    const lid = "999@lid";
+    const pn = "972599998888@s.whatsapp.net";
+    // No pre-existing link; a WARM bridge maps pn -> lid (a newly learned fact).
+    const waMsg = makeFakeWATextMessage({ id: "IDLINK_003", remoteJid: pn, pushName: "Gil" });
+    await handleIncomingMessage(pool, waMsg, {
+      dataDir,
+      lidForPn: async (j) => (j === pn ? lid : null),
+      pnForLid: async () => null,
+    });
+
+    const { rows } = await pool.query(
+      "SELECT lid_jid, pn_jid, source FROM identity_links WHERE pn_jid = $1",
+      [pn],
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].lid_jid).toBe(lid);
+    expect(rows[0].source).toBe("message_alt");
   });
 });
