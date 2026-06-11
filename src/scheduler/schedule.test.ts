@@ -4,7 +4,26 @@
  * parseTimes, nextRun, dueCatchup — all pure, no DB, no Date.now().
  */
 import { describe, expect, it } from "vitest";
-import { dueCatchup, nextRun, parseTimes } from "./schedule.js";
+import { dueCatchup, nextRun, parseTimes, resolveDigestTimes } from "./schedule.js";
+
+describe("resolveDigestTimes", () => {
+  it("uses the stored CSV when present and valid", () => {
+    expect(resolveDigestTimes("07:00,20:00", "08:00,18:00")).toEqual([
+      { h: 7, m: 0 },
+      { h: 20, m: 0 },
+    ]);
+  });
+
+  it("falls back to the env default when stored is null/empty", () => {
+    expect(resolveDigestTimes(null, "08:00")).toEqual([{ h: 8, m: 0 }]);
+    expect(resolveDigestTimes("  ", "08:00")).toEqual([{ h: 8, m: 0 }]);
+  });
+
+  it("falls back to the env default when stored is malformed", () => {
+    expect(resolveDigestTimes("nonsense", "09:00")).toEqual([{ h: 9, m: 0 }]);
+    expect(resolveDigestTimes("25:99", "09:00")).toEqual([{ h: 9, m: 0 }]);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // parseTimes

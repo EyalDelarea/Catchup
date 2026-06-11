@@ -1,7 +1,8 @@
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDatabase } from "../../test/db.js";
-import { getPreferences, upsertPreferences } from "./user-preferences.js";
+import { DEFAULT_TENANT_ID } from "../tenant-context.js";
+import { getPreferences, getTenantDigestTimes, upsertPreferences } from "./user-preferences.js";
 
 describe("user-preferences repository", () => {
   let pool: pg.Pool;
@@ -38,5 +39,12 @@ describe("user-preferences repository", () => {
     const cfg = { enabled: true, kinds: ["task", "meeting"], proactiveness: "מאוזן" };
     const out = await upsertPreferences(pool, { engineConfig: cfg });
     expect(out.engineConfig).toEqual(cfg);
+  });
+
+  it("getTenantDigestTimes returns the default tenant's saved digest times (else null)", async () => {
+    // owner-pool writes attribute to the default tenant via the column default
+    await upsertPreferences(pool, { digestTimes: "06:30,21:00" });
+    expect(await getTenantDigestTimes(pool, DEFAULT_TENANT_ID)).toBe("06:30,21:00");
+    expect(await getTenantDigestTimes(pool, "00000000-0000-0000-0000-0000000000ff")).toBeNull();
   });
 });
