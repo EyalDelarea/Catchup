@@ -1076,6 +1076,7 @@ function renderAma(scope) {
       <div class="ama-messages" id="ama-messages" aria-live="polite">
         <div class="ama-empty">${scope ? "שאל כל שאלה על הצ׳אט הזה ✨" : "שאל כל שאלה על השיחות שלך ✨"}</div>
       </div>
+      ${amaSuggestHtml(scope)}
       <form class="ama-input" id="ama-form">
         <input id="ama-q" class="ama-input__field" type="text" placeholder="שאל שאלה…"
           aria-label="שאלה" autocomplete="off" />
@@ -1094,6 +1095,40 @@ function renderAma(scope) {
     e.preventDefault();
     submitAmaQuestion(scope);
   });
+
+  // Delegate citation clicks (chips are re-rendered on every token) → source jump.
+  document.getElementById("ama-messages")?.addEventListener("click", (e) => {
+    const chip = e.target.closest?.(".ama-src");
+    if (!chip) return;
+    const chat = chip.dataset.chat;
+    const id = Number(chip.dataset.id);
+    if (chat && Number.isFinite(id)) navigate("thread", { chat, aroundId: id });
+  });
+
+  // Suggestion chips fill the box and submit.
+  for (const chip of document.querySelectorAll(".ama-suggest__chip")) {
+    chip.addEventListener("click", () => {
+      const input = document.getElementById("ama-q");
+      if (input) input.value = chip.dataset.q || chip.textContent || "";
+      submitAmaQuestion(scope);
+    });
+  }
+}
+
+/** Starter prompts shown above the input on the global Ask, before any question. */
+const AMA_SUGGESTIONS = [
+  "מה הכי דחוף מכל השיחות שלי?",
+  "מה פספסתי היום?",
+  "אילו החלטות פתוחות צריך לסגור?",
+];
+
+/** Suggestion-chip row — only on the global Ask with an empty thread. */
+function amaSuggestHtml(scope) {
+  if (scope || amaConversation.messages.length) return "";
+  const chips = AMA_SUGGESTIONS.map(
+    (q) => `<button type="button" class="ama-suggest__chip" data-q="${escHtml(q)}">${escHtml(q)}</button>`,
+  ).join("");
+  return `<div class="ama-suggest">${chips}</div>`;
 }
 
 /** No SSE activity for this long → treat the request as stuck and surface it. */
@@ -1108,6 +1143,7 @@ function submitAmaQuestion(scope) {
   const reply = beginQuestion(amaConversation, q);
   if (!reply) return;
   if (input) input.value = "";
+  document.querySelector(".ama-suggest")?.remove();
   renderAmaMessages();
   saveConversation(amaStorage(), amaScope, amaConversation);
 
@@ -1167,11 +1203,14 @@ function renderAmaMessages() {
   el.scrollTop = el.scrollHeight;
 }
 
-/** Render the resolved [n] citations under an answer bubble. */
+/** Render the resolved [n] citations under an answer bubble. Each chip is a
+ *  button that jumps to the cited message in its chat thread. */
 function renderAmaSources(citations) {
   if (!citations?.length) return "";
   const items = citations.map((c) =>
-    `<span class="ama-src">[${c.n}] ${escHtml(c.sender)} · ${escHtml(formatGroupName(c.chat))} · ${escHtml(fmtTime(c.sentAt))}</span>`
+    `<button type="button" class="ama-src" data-chat="${escHtml(c.chat)}" data-id="${c.messageId}">` +
+    `[${c.n}] ${escHtml(c.sender)} · ${escHtml(formatGroupName(c.chat))} · ` +
+    `<span dir="ltr">${escHtml(fmtTime(c.sentAt))}</span></button>`
   ).join("");
   return `<span class="ama-bubble__src">↳ ${items}</span>`;
 }
