@@ -731,6 +731,54 @@ body::after {
   opacity: 0.35;
 }
 
+/* ── §3 structured summary-first card ───────────────────── */
+.sum-section { margin-block-start: 14px; }
+.sum-section--tldr { margin-block-start: 6px; }
+.sum-section__title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--accent-ink);
+  margin-block-end: 6px;
+}
+.sum-tldr { font-size: var(--text-base); line-height: 1.6; color: var(--ink); }
+.sum-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.sum-item {
+  font-size: var(--text-base);
+  line-height: 1.55;
+  color: var(--ink);
+  padding-inline-start: 14px;
+  position: relative;
+}
+.sum-item::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 2px;
+  inset-block-start: 0.62em;
+  inline-size: 5px;
+  block-size: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+/* a bullet linked to its source message */
+.sum-jump {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  inline-size: 100%;
+  text-align: start;
+  font: inherit;
+  font-size: var(--text-base);
+  line-height: 1.55;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.sum-jump:hover { background: var(--accent-weak); }
+.sum-jump__icon { color: var(--accent); flex: 0 0 auto; margin-block-start: 2px; }
+
 .summary-card__body {
   font-size: 0.84375rem; /* 13.5px */
   line-height: 1.72;
