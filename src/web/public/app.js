@@ -20,7 +20,7 @@ import { activeCount, filterScopes, groupByCategory, partitionRemoved, sectionCo
 import { DIGEST_CHOICES, ENGINE_KINDS, PROACT_LEVELS, isDigestSelected, normalizeEngineConfig, toggleDigestTime } from "./lib/prefs.js";
 import { buildDeck, clampIndex, commitActionFor, emptyTally, greeting, indexAfterRemoval, isSuggestion, leavingVariant, peekCount, recordTally, removeCardById, segmentFills, suggestionConfig, tallyBits, tileCounts, TILE_KINDS } from "./lib/today.js";
 import { formatAgo, presetToSince, validateRangeInput } from "./lib/time.js";
-import { renderMarkdown } from "./lib/markdown.js";
+import { renderInline, renderMarkdown } from "./lib/markdown.js";
 import { deriveHealth } from "./lib/health.js";
 import { shouldStartBackgroundRefresh } from "./lib/open-state.js";
 import { PHASE_LABELS, PHASES, phaseFill, activeZoneIndex, phaseCaption, scanFill } from "./lib/phase-loader.js";
@@ -926,7 +926,9 @@ function buildSummaryCardDone(text, statusText, stale) {
 function renderSumBullets(bullets) {
   return bullets
     .map((b) => {
-      const text = escHtml(b.text);
+      // Inline markdown (bold label + chat tags), citation markers stripped —
+      // the source-jump button carries the real messageId for attribution.
+      const text = renderInline(b.text);
       if (b.sourceMessageId) {
         return `<li><button type="button" class="sum-jump" data-id="${b.sourceMessageId}">` +
           `<span class="sum-jump__text">${text}</span>` +
@@ -2234,7 +2236,7 @@ function buildInfoCard(card, index, total) {
         <span class="badge accent">מידע</span>
       </div>
       <h3>${escHtml(title)}</h3>
-      <div class="body body--scroll">${escHtml(card.body)}</div>
+      <div class="body body--scroll">${renderMarkdown(card.body)}</div>
     </div>`;
   // Read-only: no accept/snooze/discard — just a hint to swipe on.
   const footer = `<div class="actions info-actions"><span class="info-hint">${icon("sparkle", { size: 14 })}סקירה — החליקו להמשך</span></div>`;
