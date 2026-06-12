@@ -2773,13 +2773,21 @@ body::after {
 }
 .beta {
   font-size: var(--text-xs);
-  font-weight: 600;
-  color: var(--accent-ink);
-  background: var(--accent-weak);
-  border: 1px solid var(--line);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--warn-ink);
+  background: var(--warn-weak);
   border-radius: var(--radius-pill);
   padding: 2px 8px;
 }
+/* delete-everything confirm dialog (§8) */
+.confirm-card { text-align: center; padding: 22px 20px; max-inline-size: 340px; margin: 0 auto; }
+.confirm-ic { inline-size: 48px; block-size: 48px; border-radius: 14px; background: var(--warn-weak); color: var(--warn-ink); display: grid; place-items: center; margin: 0 auto 12px; }
+.confirm-card b { font-size: var(--text-md); font-weight: 800; }
+.confirm-card p { margin: 6px 0 16px; font-size: var(--text-sm); color: var(--ink-2); line-height: 1.5; }
+.confirm-row { display: flex; gap: 10px; }
+.confirm-row .btn { flex: 1; justify-content: center; }
+.btn-danger { background: var(--warn); color: #fff; }
 
 .set-card {
   display: flex;

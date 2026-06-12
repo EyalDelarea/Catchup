@@ -14,7 +14,7 @@
  * Teardown: EventSource is closed when leaving a streaming view
  */
 
-import { actOnSuggestion, askStream, createScopeCategory, getGroups, getMeetings, getMessages, getPeople, getPreferences, getScopeCategories, getScopes, getStatus, getSummaries, getToday, getTodos, putPreferences, putScopes, setTodoDone, summarizeStream } from "./lib/api.js";
+import { actOnSuggestion, askStream, createScopeCategory, getGroups, getMeetings, getMessages, getPeople, getPreferences, getScopeCategories, getScopes, getStatus, getSummaries, getToday, getTodos, putPreferences, putScopes, resetSuggestionLearning, setTodoDone, summarizeStream } from "./lib/api.js";
 import { avatarTint, buildMonthGrid, eventDaySet, groupMeetingsByDay, peopleStatusMeta, relativeDay, todoProgress } from "./lib/agenda.js";
 import { activeCount, filterScopes, groupByCategory, partitionRemoved, sectionCount } from "./lib/scopes.js";
 import { DIGEST_CHOICES, ENGINE_KINDS, PROACT_LEVELS, isDigestSelected, normalizeEngineConfig, toggleDigestTime } from "./lib/prefs.js";
@@ -1819,6 +1819,42 @@ function showNotifPreview() {
   host.appendChild(el);
 }
 
+/** A centered warn-tinted confirm dialog (§8 delete-everything). Calls onConfirm
+ *  when the danger button is pressed; dismisses on backdrop / cancel / Esc. */
+function showConfirm({ title, body, confirmLabel, onConfirm }) {
+  const host = document.querySelector(".main");
+  if (!host || document.getElementById("confirm-overlay")) return;
+  const el = document.createElement("div");
+  el.className = "notif-preview";
+  el.id = "confirm-overlay";
+  el.setAttribute("role", "dialog");
+  el.setAttribute("aria-label", title);
+  el.innerHTML = `
+    <div class="confirm-card surface">
+      <div class="confirm-ic">${icon("trash", { size: 22 })}</div>
+      <b>${escHtml(title)}</b>
+      <p>${escHtml(body)}</p>
+      <div class="confirm-row">
+        <button class="btn btn-ghost" type="button" data-confirm="cancel">ביטול</button>
+        <button class="btn btn-danger" type="button" data-confirm="ok">${escHtml(confirmLabel)}</button>
+      </div>
+    </div>`;
+  const close = () => {
+    el.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  el.addEventListener("click", (e) => {
+    if (e.target === el || e.target.closest('[data-confirm="cancel"]')) return close();
+    if (e.target.closest('[data-confirm="ok"]')) {
+      close();
+      onConfirm?.();
+    }
+  });
+  document.addEventListener("keydown", onKey);
+  host.appendChild(el);
+}
+
 /** The Settings screen (§8): privacy callout, daily digest, display mode,
  *  and the experimental suggestion-engine config. Fetch-on-entry, then paint. */
 async function renderSettings() {
@@ -1905,53 +1941,6 @@ function paintSettings() {
         </div>
       </div>
 
-      <h2 class="set-sec">פרטיות ונתונים</h2>
-      <div class="set-card">
-        <div class="setrow">
-          ${icon("lock", { cls: "set-ico" })}
-          <div class="setrow__body"><h4>אחסון מקומי בלבד</h4><p>שמירת ההודעות והסיכומים על המכשיר</p></div>
-          <span class="set-switch is-on" role="img" aria-label="פעיל"><span class="set-switch__knob"></span></span>
-        </div>
-        <div class="set-divide"></div>
-        <div class="setrow">
-          ${icon("cloud", { cls: "set-ico" })}
-          <div class="setrow__body"><h4>גיבוי לענן</h4><p>כבוי כברירת מחדל — שום דבר לא יוצא בלי אישורך</p></div>
-          <span class="set-switch is-disabled" role="img" aria-label="כבוי (לא זמין)"><span class="set-switch__knob"></span></span>
-        </div>
-        <div class="set-divide"></div>
-        <div class="setrow">
-          ${icon("trash", { cls: "set-ico" })}
-          <div class="setrow__body"><h4>נתק וואטסאפ ומחק הכול</h4><p>הסרה מלאה של הנתונים מהמכשיר</p></div>
-          <button class="set-btn set-btn--danger" type="button" disabled>מחיקה</button>
-        </div>
-      </div>
-
-      <h2 class="set-sec">הסיכום היומי</h2>
-      <div class="set-card">
-        <div class="setrow">
-          ${icon("bell", { cls: "set-ico" })}
-          <div class="setrow__body"><h4>התראת בוקר</h4><p>תזכורת עדינה כשהסיכום מוכן</p></div>
-          <button class="btn btn-ghost btn-sm" data-act="notif-preview" type="button" style="margin-inline-end:8px">תצוגה מקדימה</button>
-          <button class="set-switch${prefs.morningNotification ? " is-on" : ""}" data-act="morning" type="button"
-            role="switch" aria-checked="${prefs.morningNotification}" aria-label="התראת בוקר"><span class="set-switch__knob"></span></button>
-        </div>
-        <div class="set-divide"></div>
-        <div class="setrow setrow--stack">
-          ${icon("clock", { cls: "set-ico" })}
-          <div class="setrow__body"><h4>שעות הסיכום</h4><p>מתי להכין את הסיכום היומי</p></div>
-        </div>
-        <div class="set-chips" role="group" aria-label="שעות הסיכום">${digestChips}</div>
-      </div>
-
-      <h2 class="set-sec">תצוגה</h2>
-      <div class="set-card">
-        <div class="setrow">
-          ${icon("sliders", { cls: "set-ico" })}
-          <div class="setrow__body"><h4>מצב תצוגה</h4><p>בהיר או כהה — נשמר במכשיר</p></div>
-          <div class="set-seg" role="group" aria-label="מצב תצוגה">${themeSeg}</div>
-        </div>
-      </div>
-
       <h2 class="set-sec">מנוע ההצעות <span class="beta">ניסיוני</span></h2>
       <div class="set-card">
         <div class="setrow">
@@ -1979,9 +1968,62 @@ function paintSettings() {
           ${icon("filter", { cls: "set-ico" })}
           <div class="setrow__body"><h4>צ׳אטים מוזנים</h4><p>בחרו אילו שיחות המנוע ינתח</p></div>
           <button class="set-btn" id="settings-manage" type="button">ניהול ${icon("chevL", { size: 16 })}</button>
+        </div>
+        <div class="set-divide"></div>
+        <div class="setrow">
+          ${icon("sparkle", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>איפוס למידה</h4><p>אפסו את ההעדפות שנלמדו והתחילו מחדש</p></div>
+          <button class="set-btn" data-act="engine-reset" type="button">אפס</button>
         </div>`
             : ""
         }
+      </div>
+
+      <h2 class="set-sec">פרטיות ונתונים</h2>
+      <div class="set-card">
+        <div class="setrow">
+          ${icon("lock", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>אחסון מקומי בלבד</h4><p>שמירת ההודעות והסיכומים על המכשיר</p></div>
+          <span class="set-switch is-on" role="img" aria-label="פעיל"><span class="set-switch__knob"></span></span>
+        </div>
+        <div class="set-divide"></div>
+        <div class="setrow">
+          ${icon("cloud", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>גיבוי לענן</h4><p>כבוי כברירת מחדל — שום דבר לא יוצא בלי אישורך</p></div>
+          <span class="set-switch is-disabled" role="img" aria-label="כבוי (לא זמין)"><span class="set-switch__knob"></span></span>
+        </div>
+        <div class="set-divide"></div>
+        <div class="setrow">
+          ${icon("trash", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>נתק וואטסאפ ומחק הכול</h4><p>הסרה מלאה של הנתונים מהמכשיר</p></div>
+          <button class="set-btn set-btn--danger" data-act="wipe" type="button">מחיקה</button>
+        </div>
+      </div>
+
+      <h2 class="set-sec">הסיכום היומי</h2>
+      <div class="set-card">
+        <div class="setrow">
+          ${icon("bell", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>התראת בוקר</h4><p>תזכורת עדינה כשהסיכום מוכן</p></div>
+          <button class="btn btn-ghost btn-sm" data-act="notif-preview" type="button" style="margin-inline-end:8px">תצוגה מקדימה</button>
+          <button class="set-switch${prefs.morningNotification ? " is-on" : ""}" data-act="morning" type="button"
+            role="switch" aria-checked="${prefs.morningNotification}" aria-label="התראת בוקר"><span class="set-switch__knob"></span></button>
+        </div>
+        <div class="set-divide"></div>
+        <div class="setrow setrow--stack">
+          ${icon("clock", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>שעות הסיכום</h4><p>מתי להכין את הסיכום היומי</p></div>
+        </div>
+        <div class="set-chips" role="group" aria-label="שעות הסיכום">${digestChips}</div>
+      </div>
+
+      <h2 class="set-sec">תצוגה</h2>
+      <div class="set-card">
+        <div class="setrow">
+          ${icon("sliders", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>מצב תצוגה</h4><p>בהיר או כהה — נשמר במכשיר</p></div>
+          <div class="set-seg" role="group" aria-label="מצב תצוגה">${themeSeg}</div>
+        </div>
       </div>
     </div>`;
   wireSettings();
@@ -2038,6 +2080,38 @@ function wireSettings() {
       applyPrefChange({ engineConfig: { ...engine, proact: btn.dataset.val } }),
     );
   }
+  document.querySelector('[data-act="engine-reset"]')?.addEventListener("click", (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    resetSuggestionLearning()
+      .then(() => {
+        btn.textContent = "אופס ✓";
+      })
+      .catch(() => {
+        btn.textContent = "לא הצליח";
+      })
+      .finally(() => setTimeout(() => { btn.textContent = "אפס"; btn.disabled = false; }, 1800));
+  });
+  document.querySelector('[data-act="wipe"]')?.addEventListener("click", () => {
+    showConfirm({
+      title: "למחוק הכול?",
+      body: "ניתוק וואטסאפ ומחיקת כל ההודעות, הסיכומים והנתונים מהמכשיר. אי אפשר לבטל.",
+      confirmLabel: "מחק הכול",
+      // No server-side wipe endpoint yet — be honest rather than fake success.
+      onConfirm: () => showMainToast("המחיקה עדיין לא זמינה — נתקו ידנית בהגדרות וואטסאפ"),
+    });
+  });
+}
+
+/** A transient toast pinned to the bottom of the main column (reuses .dg-flash). */
+function showMainToast(text) {
+  const host = document.querySelector(".main");
+  if (!host) return;
+  const t = document.createElement("div");
+  t.className = "dg-flash show";
+  t.textContent = text;
+  host.appendChild(t);
+  setTimeout(() => t.remove(), 2400);
 }
 
 /** Apply + persist a theme choice and keep the appbar toggle icon in sync. */
