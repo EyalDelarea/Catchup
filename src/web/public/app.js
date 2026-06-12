@@ -198,6 +198,16 @@ window.addEventListener("popstate", (e) => {
 
 /* ── 3. Health polling ───────────────────────────────────── */
 
+/** One-time: paint the phone glyph into the conn-banner + wire "חבר מחדש". */
+function initConnBanner() {
+  if (!staleBanner) return;
+  const ic = staleBanner.querySelector(".conn-banner__ic");
+  if (ic && !ic.innerHTML) ic.innerHTML = icon("phone", { size: 16 });
+  document
+    .getElementById("conn-reconnect")
+    ?.addEventListener("click", () => location.reload());
+}
+
 function applyHealth(healthy) {
   staleBanner.hidden = !!healthy;
   document.querySelectorAll(".health-pill").forEach((pill) => {
@@ -421,7 +431,7 @@ async function renderCatchup() {
   teardownStream();
   setView("catchup");
   setAppbar("catchup");
-  paneMain.innerHTML = `<div class="content"><p class="thread-loading">טוען עדכונים…</p></div>`;
+  paneMain.innerHTML = `<div class="content">${skeletonList(3)}</div>`;
 
   if (cachedGroups.length === 0 && !DEMO) await loadGroupsIntoList();
   const groups = cachedGroups;
@@ -489,6 +499,7 @@ const detailState = {
   cachedSummaryText: null,
   showingCachedCard: false,
   backgroundRefreshStarted: false,
+  lastSummaryParams: null,
 };
 
 function renderDetail(group, autoStart) {
@@ -711,6 +722,7 @@ function runSummary(params, background = false) {
   teardownStream();
   if (!detailState.group) return;
 
+  detailState.lastSummaryParams = params;
   detailState.started = Date.now();
   detailState.syncingTimer = null;
   detailState.syncingStart = 0;
@@ -740,6 +752,7 @@ function teardownStream() {
   if (detailState.syncingTimer) { clearInterval(detailState.syncingTimer); detailState.syncingTimer = null; }
   if (totalLoaderTimer) { clearInterval(totalLoaderTimer); totalLoaderTimer = null; }
   if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
+  closeStateOverlay();
 }
 
 /* ── 5c. SSE event handlers ──────────────────────────────── */
@@ -841,8 +854,20 @@ function onError(data) {
     teardownStream();
     return;
   }
-  const msg = data?.message || "שגיאת חיבור.";
-  setSummaryRegion(`<p class="detail-status detail-status--error" role="alert">${escHtml(msg)}</p>`);
+  const lastParams = detailState.lastSummaryParams;
+  const surf = errorSurface({
+    icon: "x",
+    anim: "pulse",
+    title: "לא הצלחנו ליצור סיכום",
+    text: "משהו השתבש בעיבוד על המכשיר. אפשר לנסות שוב.",
+    cta: "נסה שוב",
+    ctaIcon: "sparkle",
+    onCta: () => { if (lastParams) runSummary(lastParams); },
+    onHelp: () => openHelpChat(),
+    sub: data?.message ? `העיבוד המקומי לא הגיב · ${data.message}` : "העיבוד המקומי לא הגיב",
+  });
+  setSummaryRegion(surf.html);
+  surf.wire(paneMain);
   teardownStream();
 }
 
@@ -895,11 +920,8 @@ function buildSummaryCardStreaming(text) {
   if (!text.length) return buildPhaseTube({ phase: "summarize", elapsed: 0 });
   return `
     <div class="glass-card summary-card summary-card--streaming" style="animation: summary-fade-in 0.35s ease both">
-      <div class="summary-card__meta">
-        <span class="writing-indicator">
-          <span class="writing-indicator__pen" aria-hidden="true">✍️</span>
-          כותב סיכום<span class="writing-dots" aria-hidden="true"><i></i><i></i><i></i></span>
-        </span>
+      <div class="summary-card__meta" style="justify-content:flex-start;gap:6px">
+        ${icon("sparkle", { size: 12 })}<span class="writing">CatchApp כותב</span><span class="ob-dots" aria-hidden="true"><i></i><i></i><i></i></span>
       </div>
       <div class="summary-card__body summary-card__body--rendered">${renderMarkdown(text)}<span class="caret" aria-hidden="true"></span></div>
     </div>
@@ -1193,6 +1215,9 @@ function buildTotalShell() {
       <div id="total-loader" aria-live="polite"></div>
       <p id="total-error" class="detail-status detail-status--error" role="alert" hidden></p>
       <div id="total-highlights" class="glass-card summary-card" hidden>
+        <div id="total-highlights-meta" class="summary-card__meta" style="justify-content:flex-start;gap:6px" hidden>
+          ${icon("sparkle", { size: 12 })}<span class="writing">CatchApp כותב</span><span class="ob-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        </div>
         <div id="total-highlights-body" class="summary-card__body summary-card__body--rendered"></div>
       </div>
       <div id="total-perchat" class="total-perchat-list"></div>
@@ -1259,10 +1284,12 @@ function runTotal({ since }) {
     }
   });
 
+  const metaEl = document.getElementById("total-highlights-meta");
   es.addEventListener("token", (e) => {
     if (loaderActive) { loaderActive = false; clearTotalLoader(); }
     raw += JSON.parse(e.data).delta;
     if (highlightsCard) highlightsCard.hidden = false;
+    if (metaEl) metaEl.hidden = false; // show "CatchApp כותב" while tokens arrive
     if (highlightsBody) highlightsBody.innerHTML = `${renderMarkdown(raw)}<span class="caret" aria-hidden="true"></span>`;
   });
 
@@ -1271,17 +1298,33 @@ function runTotal({ since }) {
     loaderActive = false;
     clearTotalLoader();
     if (highlightsCard) highlightsCard.hidden = false;
+    if (metaEl) metaEl.hidden = true; // streaming complete — drop the writing label
     if (highlightsBody) highlightsBody.innerHTML = renderMarkdown(d.highlights);
     renderTotalPerChat(d.perChat || []);
     teardownStream();
   });
 
   es.addEventListener("error", (e) => {
-    let msg = "שגיאה בהפקת הסיכום.";
+    let msg = "";
     try { const data = JSON.parse(e.data); if (data?.message) msg = data.message; } catch { /* native error */ }
     loaderActive = false;
     clearTotalLoader();
-    if (errorEl) { errorEl.textContent = msg; errorEl.hidden = false; }
+    if (metaEl) metaEl.hidden = true;
+    const region = document.getElementById("total-loader");
+    if (region) {
+      paintErrorSurface(region, {
+        icon: "x",
+        anim: "pulse",
+        title: "לא הצלחנו ליצור סיכום",
+        text: "משהו השתבש בעיבוד על המכשיר. אפשר לנסות שוב.",
+        cta: "נסה שוב",
+        ctaIcon: "sparkle",
+        onCta: () => runTotal({ since }),
+        onHelp: () => openHelpChat(),
+        sub: msg ? `העיבוד המקומי לא הגיב · ${msg}` : "העיבוד המקומי לא הגיב",
+      });
+    }
+    if (errorEl) errorEl.hidden = true;
     teardownStream();
   });
 }
@@ -1428,12 +1471,26 @@ function renderAmaMessages() {
       return `<div class="msg me"><div class="bubble">${escHtml(m.text)}</div></div>`;
     }
     if (m.pending && !m.text) {
-      const label =
-        m.phase === "searching" ? "מחפש בהודעות…" : m.phase === "synthesizing" ? "מנסח תשובה…" : "חושב…";
-      return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble writing">${label}<span class="caret"></span></div></div></div>`;
+      // Before the first token: a "searching the whole history" status row.
+      const title =
+        m.phase === "synthesizing" ? "מנסח תשובה…" : "מחפש בכל ההיסטוריה…";
+      const sub = m.phase === "synthesizing" ? "מרכיב תשובה מהמקורות" : "קורא הודעות רלוונטיות";
+      return `<div class="msg ai">${amaAiAvatar()}<div><div class="ask-state">
+        <span class="sg-spark">${icon("sparkle", { size: 16 })}</span>
+        <div><b>${title}</b><div class="ask-sub">${sub}</div></div>
+        <span class="ob-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      </div></div></div>`;
     }
     if (m.error) {
       return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble" style="color:var(--warn-ink)">${escHtml(m.error)}</div></div></div>`;
+    }
+    // Settled reply with no text and no sources → nothing relevant was found.
+    if (!m.text && !m.citations?.length) {
+      return `<div class="msg ai">${amaAiAvatar()}<div>${emptySurface({
+        icon: "search",
+        title: "לא מצאתי על זה כלום",
+        text: "לא נמצאו הודעות רלוונטיות בשיחות שבחרת. נסו לנסח אחרת או להרחיב את טווח הצ׳אטים.",
+      })}</div></div>`;
     }
     return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble">${escHtml(m.text)}</div>${renderAmaSources(m.citations)}</div></div>`;
   }).join("");
@@ -1474,7 +1531,7 @@ async function renderThread(chat, aroundId) {
         <div class="thread-head__title">${escHtml(formatGroupName(chat))}</div>
         <span class="thread-head__src">מקור מקושר</span>
       </div>
-      <div class="thread-msgs" id="thread-msgs"><p class="thread-loading">טוען שיחה…</p></div>
+      <div class="thread-msgs" id="thread-msgs">${skeletonCard()}</div>
     </div>`;
   document.getElementById("thread-back")?.addEventListener("click", () => history.back());
 
@@ -1483,13 +1540,25 @@ async function renderThread(chat, aroundId) {
     rows = await getMessages({ chat, aroundId, limit: 24 });
   } catch {
     const box = document.getElementById("thread-msgs");
-    if (box) box.innerHTML = `<p class="error-state">שגיאה בטעינת השיחה.</p>`;
+    paintErrorSurface(box, {
+      icon: "message",
+      anim: "pulse",
+      title: "לא הצלחנו לטעון את השיחה",
+      text: "משהו השתבש בקריאת ההודעות מהמכשיר. אפשר לנסות שוב.",
+      cta: "נסה שוב",
+      ctaIcon: "message",
+      onCta: () => renderThread(chat, aroundId),
+    });
     return;
   }
   const box = document.getElementById("thread-msgs");
   if (!box) return; // navigated away while loading
   if (!rows.length) {
-    box.innerHTML = `<p class="empty-state">לא נמצאו הודעות.</p>`;
+    box.innerHTML = emptySurface({
+      icon: "message",
+      title: "לא נמצאו הודעות",
+      text: "אין הודעות להצגה סביב המקור הזה.",
+    });
     return;
   }
   box.innerHTML = rows
@@ -1520,13 +1589,22 @@ async function renderSources() {
   teardownStream();
   setView("sources");
   setAppbar("sources");
-  paneMain.innerHTML = `<div class="sources-panel"><p class="thread-loading">טוען צ׳אטים…</p></div>`;
+  paneMain.innerHTML = `<div class="sources-panel">${skeletonCard()}</div>`;
   try {
     const [scopes, categories] = await Promise.all([getScopes(), getScopeCategories()]);
     sourcesState.scopes = scopes;
     sourcesState.categories = categories;
   } catch {
-    paneMain.innerHTML = `<div class="sources-panel"><p class="error-state">שגיאה בטעינת הצ׳אטים.</p></div>`;
+    paneMain.innerHTML = `<div class="sources-panel"></div>`;
+    paintErrorSurface(paneMain.querySelector(".sources-panel"), {
+      icon: "filter",
+      anim: "pulse",
+      title: "לא הצלחנו לטעון את הצ׳אטים",
+      text: "משהו השתבש בקריאת רשימת השיחות מהמכשיר. אפשר לנסות שוב.",
+      cta: "נסה שוב",
+      ctaIcon: "filter",
+      onCta: () => renderSources(),
+    });
     return;
   }
   paintSources();
@@ -1710,7 +1788,7 @@ async function renderSettings() {
   teardownStream();
   setView("settings");
   setAppbar("settings");
-  paneMain.innerHTML = `<div class="settings-panel"><p class="thread-loading">טוען הגדרות…</p></div>`;
+  paneMain.innerHTML = `<div class="settings-panel">${skeletonCard()}</div>`;
   if (DEMO) {
     settingsState.prefs = {
       digestTimes: "08:00",
@@ -1724,7 +1802,16 @@ async function renderSettings() {
   try {
     settingsState.prefs = await getPreferences();
   } catch {
-    paneMain.innerHTML = `<div class="settings-panel"><p class="error-state">שגיאה בטעינת ההגדרות.</p></div>`;
+    paneMain.innerHTML = `<div class="settings-panel"></div>`;
+    paintErrorSurface(paneMain.querySelector(".settings-panel"), {
+      icon: "sliders",
+      anim: "pulse",
+      title: "לא הצלחנו לטעון את ההגדרות",
+      text: "משהו השתבש בקריאת ההעדפות מהמכשיר. אפשר לנסות שוב.",
+      cta: "נסה שוב",
+      ctaIcon: "sliders",
+      onCta: () => renderSettings(),
+    });
     return;
   }
   paintSettings();
@@ -1807,7 +1894,7 @@ function paintSettings() {
         <div class="setrow">
           ${icon("trash", { cls: "set-ico" })}
           <div class="setrow__body"><h4>נתק וואטסאפ ומחק הכול</h4><p>הסרה מלאה של הנתונים מהמכשיר</p></div>
-          <button class="set-btn set-btn--danger" type="button" disabled>מחיקה</button>
+          <button class="set-btn set-btn--danger" id="settings-delete-all" type="button">מחיקה</button>
         </div>
       </div>
 
@@ -1874,6 +1961,19 @@ function paintSettings() {
 function wireSettings() {
   document.getElementById("settings-back")?.addEventListener("click", () => history.back());
   document.getElementById("settings-manage")?.addEventListener("click", () => navigate("sources"));
+
+  // Destructive "disconnect + wipe" — confirm first. There is no wipe endpoint in
+  // this UI slice, so confirming is a safe no-op + flash (never invent a backend call).
+  document.getElementById("settings-delete-all")?.addEventListener("click", () =>
+    confirmDialog({
+      icon: "trash",
+      title: "למחוק את כל הנתונים?",
+      text: "פעולה בלתי הפיכה. כל ההודעות, הסיכומים וההעדפות יימחקו מהמכשיר.",
+      confirmLabel: "מחק הכול",
+      cancelLabel: "ביטול",
+      onConfirm: () => showFlash("המחיקה אינה זמינה במצב זה"),
+    }),
+  );
 
   const prefs = settingsState.prefs;
 
@@ -1969,8 +2069,15 @@ const DEMO_SIDE = {
 /** Today story-deck demo payload (matches the /api/suggestions contract). */
 const DEMO_TODAY = {
   info: {
-    highlights: "42 הודעות חדשות בצוות העבודה, דנה מחכה לתשובה על הדירה, ובכיתת הילדים נפתח תשלום לטיול עד יום ראשון.",
-    perChat: [{ chat: "צוות עבודה", summary: "סוכם דדליין ליום חמישי; נשאר רק לאשר את התקציב." }],
+    highlights:
+      "[צוות עבודה] סוכם דדליין ליום חמישי, נשאר רק לאשר את התקציב ^[12, 14]. - [דנה כהן] מחכה לתשובה על הדירה כבר 3 ימים ^[7]. - [כיתת הילדים] נפתח תשלום לטיול עד יום ראשון.",
+    perChat: [
+      {
+        chat: "צוות עבודה",
+        summary:
+          "## תקציר\nסגירת הספרינט בעיצומה ^[3].\n## נושאים עיקריים\n- **דדליין**: הספרינט נסגר ביום חמישי ^[12].\n- **תקציב**: ממתין לאישור ההנהלה.",
+      },
+    ],
   },
   suggestions: [
     { id: 1, kind: "task", chat: "צוות עבודה", proposedText: "להכין מצגת לישיבת הסטטוס", reason: "זוהו 4 הודעות על המצגת שעדיין לא נענו", sourceMessageId: null },
@@ -1999,7 +2106,7 @@ async function renderToday() {
   teardownStream();
   setView("today");
   setAppbar("today");
-  paneMain.innerHTML = `<div class="content wide"><div class="today"><p class="thread-loading">טוען את הסיכום…</p></div></div>`;
+  paneMain.innerHTML = `<div class="content wide"><div class="today">${skeletonCard()}</div></div>`;
 
   let data = null;
   try {
@@ -2222,10 +2329,49 @@ function buildSuggestionCard(card, index, total) {
   return buildCardChrome(index, total, "s-suggest", inner, footer);
 }
 
+/** Strip LLM citation markers (`^[12]`, `[12, 13]`, `^12`) — noise in a digest
+ *  preview (the source-jump chips live on the full summary, not here). */
+function stripCitations(text) {
+  return String(text || "")
+    .replace(/\s*\^?\[\d+(?:\s*,\s*\d+)*\]/g, "")
+    .replace(/\s*\^\d+\b/g, "")
+    .replace(/[^\S\n]{2,}/g, " ")
+    .trim();
+}
+
+/** Parse a "[chat] line - [chat] line - …" highlights blob into {chat,text}. */
+function parseHighlights(raw) {
+  const items = [];
+  const re = /\[([^\]]+)\]\s*([\s\S]*?)(?=\s*[-–—•]\s*\[|$)/g;
+  let m = re.exec(raw);
+  while (m) {
+    const chat = m[1].trim();
+    const text = m[2].trim().replace(/^[-–—•\s]+|[-–—•.\s]+$/g, "").trim();
+    if (chat) items.push({ chat, text });
+    m = re.exec(raw);
+  }
+  return items;
+}
+
 function buildInfoCard(card, index, total) {
   const isHi = card.variant === "highlights";
   const kicker = isHi ? "מבט על היום" : "סיכום צ׳אט";
   const title = isHi ? "עיקרי היום בכל הצ׳אטים" : formatGroupName(card.chat);
+  const clean = stripCitations(card.body);
+  let bodyHtml;
+  if (isHi) {
+    const items = parseHighlights(clean);
+    bodyHtml = items.length
+      ? `<ul class="sum-list">${items
+          .map(
+            (it) =>
+              `<li><b>${escHtml(it.chat)}</b>${it.text ? ` — ${escHtml(it.text)}` : ""}</li>`,
+          )
+          .join("")}</ul>`
+      : renderMarkdown(clean);
+  } else {
+    bodyHtml = renderMarkdown(clean);
+  }
   const inner = `
     <div class="scard">
       <div class="topline">
@@ -2234,7 +2380,7 @@ function buildInfoCard(card, index, total) {
         <span class="badge accent">מידע</span>
       </div>
       <h3>${escHtml(title)}</h3>
-      <div class="body body--scroll">${escHtml(card.body)}</div>
+      <div class="body body--scroll summary-card__body--rendered">${bodyHtml}</div>
     </div>`;
   // Read-only: no accept/snooze/discard — just a hint to swipe on.
   const footer = `<div class="actions info-actions"><span class="info-hint">${icon("sparkle", { size: 14 })}סקירה — החליקו להמשך</span></div>`;
@@ -2466,7 +2612,7 @@ async function renderPeople() {
   teardownStream();
   setView("people");
   setAppbar("people");
-  paneMain.innerHTML = `<div class="people"><p class="thread-loading">טוען אנשים…</p></div>`;
+  paneMain.innerHTML = `<div class="people"><div class="content">${skeletonList(3)}</div></div>`;
   let people = [];
   try {
     people = DEMO ? [] : await getPeople();
@@ -2487,7 +2633,11 @@ function paintPeople() {
         <div class="entity-head">
           <div class="entity-head__title">${icon("users", { size: 18 })} אנשים</div>
         </div>
-        ${buildEntityEmpty("users", "אין עדיין אנשים", "כשתתחילו לשוחח, CatchApp יזהה לידים ואנשי קשר שמחכים לתשובה — והם יופיעו כאן.")}
+        ${emptySurface({
+          icon: "users",
+          title: "עוד אין אנשים",
+          text: "כשנזהה אנשי קשר פעילים מהשיחות שלך, הם יופיעו כאן כ-CRM קליל.",
+        })}
       </div>`;
     document.getElementById("people-back")?.addEventListener("click", () => history.back());
     return;
@@ -2604,7 +2754,7 @@ async function renderAgenda() {
   teardownStream();
   setView("agenda");
   setAppbar("agenda");
-  paneMain.innerHTML = `<div class="agenda-view"><p class="thread-loading">טוען פגישות ומשימות…</p></div>`;
+  paneMain.innerHTML = `<div class="agenda-view"><div class="content">${skeletonCard()}</div></div>`;
   let meetings = [];
   let todos = [];
   if (!DEMO) {
@@ -2711,7 +2861,11 @@ function agendaDayLabel(group) {
 function buildAgendaTimeline() {
   const groups = groupMeetingsByDay(agendaState.meetings, new Date().toISOString());
   if (groups.length === 0) {
-    return `<div class="agenda-timeline">${buildEntityEmpty("calendar", "אין פגישות", "פגישות שיזוהו בשיחות יופיעו כאן, מקובצות לפי יום.")}</div>`;
+    return `<div class="agenda-timeline">${emptySurface({
+      icon: "calendar",
+      title: "אין פגישות שזוהו",
+      text: "פגישות שיוזכרו בצ׳אטים יאספו לכאן אוטומטית — כולל מתי, מי והיכן.",
+    })}</div>`;
   }
   return `
     <div class="agenda-timeline">
@@ -2891,6 +3045,240 @@ function escHtml(str) {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+/* ── 8b. Non-happy-path state surfaces ───────────────────── */
+//
+// Reusable presentation for loading / error / empty / confirm / guided-help
+// states, ported 1:1 from the prototype (/tmp/hf_states.jsx). Product-facing
+// Hebrew copy only — never expose internal terms. Decorative motion is gated in
+// CSS behind prefers-reduced-motion; the resting markup is always meaningful.
+
+/** Skeleton list — `n` shimmering item-card rows (used by list screens). */
+function skeletonList(n = 3) {
+  const row = `
+    <div class="itemcard surface" style="align-items:center">
+      <div class="skel" style="width:46px;height:46px;border-radius:50%;flex:none"></div>
+      <div class="grow">
+        <div class="skel skel-line" style="width:45%;height:13px;margin-bottom:9px"></div>
+        <div class="skel skel-line" style="width:85%;margin-bottom:6px"></div>
+        <div class="skel skel-line" style="width:60%"></div>
+      </div>
+    </div>`;
+  return `<div class="list">${row.repeat(n)}</div>`;
+}
+
+/** Skeleton card — a single shimmering surface for non-list screens. */
+function skeletonCard() {
+  return `
+    <div class="surface" style="padding:20px">
+      <div class="skel skel-line" style="width:40%;height:13px;margin-bottom:14px"></div>
+      <div class="skel skel-line" style="width:92%;margin-bottom:8px"></div>
+      <div class="skel skel-line" style="width:80%;margin-bottom:8px"></div>
+      <div class="skel skel-line" style="width:64%"></div>
+    </div>`;
+}
+
+/**
+ * Empty-state surface (non-error variant): accent icon disc + title + text,
+ * optional ghost CTA. Matches the prototype `.empty`.
+ * @param {{icon:string,title:string,text:string,cta?:string,ctaId?:string}} o
+ */
+function emptySurface({ icon: iconName, title, text, cta, ctaId }) {
+  return `
+    <div class="empty">
+      <div class="empty-ic">${icon(iconName, { size: 26 })}</div>
+      <h3>${escHtml(title)}</h3>
+      <p>${escHtml(text)}</p>
+      ${cta ? `<button class="btn btn-soft"${ctaId ? ` id="${ctaId}"` : ""} type="button">${escHtml(cta)}</button>` : ""}
+    </div>`;
+}
+
+/** Counter so each error surface gets unique element ids for event wiring. */
+let errorSurfaceSeq = 0;
+
+/**
+ * Warn-toned error surface (markup + wiring), ported from the prototype
+ * `ErrorSurface`. Returns an HTML string; call wireErrorSurface(id, handlers)
+ * after injecting to bind the CTA / fix-steps toggle / help link.
+ * @param {{icon:string,anim?:"wiggle"|"pulse",title:string,text:string,
+ *   cta?:string,ctaIcon?:string,steps?:string[],onCta?:Function,onHelp?:Function,sub?:string}} o
+ * @returns {{html:string, wire:(root?:ParentNode)=>void}}
+ */
+function errorSurface(o) {
+  const id = `errsurf-${++errorSurfaceSeq}`;
+  const animCls = o.anim ? ` err-ic--${o.anim}` : "";
+  const ctaIcon = o.ctaIcon ?? "phone";
+  const cta = o.cta
+    ? `<button class="btn btn-ghost" id="${id}-cta" type="button" style="margin-top:12px">${icon(ctaIcon, { size: 15 })}${escHtml(o.cta)}</button>`
+    : "";
+  const steps = o.steps?.length
+    ? `<button class="err-fix-toggle" id="${id}-fix" type="button">${icon("chevL", { size: 14 })}איך מתקנים?</button>
+       <ol class="err-steps" id="${id}-steps" hidden>${o.steps
+        .map((s, i) => `<li><span class="sn">${i + 1}</span>${escHtml(s)}</li>`)
+        .join("")}</ol>`
+    : "";
+  const help = o.onHelp
+    ? `<button class="err-help" id="${id}-help" type="button">${icon("message", { size: 14 })}שאל את העזרה</button>`
+    : "";
+  const sub = o.sub
+    ? `<div class="muted" style="font-size:12px;margin-top:10px">${escHtml(o.sub)}</div>`
+    : "";
+  const html = `
+    <div class="empty err">
+      <div class="empty-ic err-ic${animCls}"><span class="err-ring"></span>${icon(o.icon, { size: 26 })}</div>
+      <h3>${escHtml(o.title)}</h3>
+      <p>${escHtml(o.text)}</p>
+      ${cta}${steps}${help}${sub}
+    </div>`;
+  const wire = (root = document) => {
+    if (o.onCta) root.querySelector(`#${id}-cta`)?.addEventListener("click", () => o.onCta());
+    if (o.onHelp) root.querySelector(`#${id}-help`)?.addEventListener("click", () => o.onHelp());
+    const toggle = root.querySelector(`#${id}-fix`);
+    const list = root.querySelector(`#${id}-steps`);
+    toggle?.addEventListener("click", () => {
+      const open = list.hidden; // about to open
+      list.hidden = !open;
+      // Swap chevron direction to mirror the prototype open/closed affordance.
+      toggle.innerHTML = `${icon(open ? "chevR" : "chevL", { size: 14 })}איך מתקנים?`;
+    });
+  };
+  return { html, wire };
+}
+
+/**
+ * Inject an error surface into `host` and wire its events in one call.
+ * @param {Element} host — the container to fill
+ * @param {object} o — errorSurface options (see above)
+ */
+function paintErrorSurface(host, o) {
+  if (!host) return;
+  const surf = errorSurface(o);
+  host.innerHTML = surf.html;
+  surf.wire(host);
+}
+
+/** Transient toast, mounted on <body> so it works on any screen. */
+function showFlash(text) {
+  if (!text) return;
+  const el = document.createElement("div");
+  el.className = "app-flash";
+  el.setAttribute("role", "status");
+  el.setAttribute("aria-live", "polite");
+  el.textContent = text;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("show"));
+  setTimeout(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 250); }, 1600);
+}
+
+/* ── 8c. Overlays: confirm dialog + guided HelpChat ──────── */
+
+/** Remove any open state overlay (confirm / help) from the DOM. */
+function closeStateOverlay() {
+  document.querySelector(".state-overlay")?.remove();
+}
+
+/** Mount an overlay node (reuses the `.notif-preview` backdrop) with a card +
+ *  a "סגירה"/dismiss affordance. Click-outside and Esc both dismiss. */
+function mountOverlay(innerHtml, { dismissLabel = "סגירה" } = {}) {
+  closeStateOverlay();
+  const overlay = document.createElement("div");
+  overlay.className = "notif-preview state-overlay";
+  overlay.innerHTML = `
+    <div class="state-overlay__card" style="width:min(380px,100%)">
+      ${innerHtml}
+      ${dismissLabel ? `<button class="notif-dismiss" type="button" data-overlay-dismiss>${escHtml(dismissLabel)}</button>` : ""}
+    </div>`;
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay || e.target.closest("[data-overlay-dismiss]")) closeStateOverlay();
+  });
+  const onKey = (e) => {
+    if (e.key === "Escape") { closeStateOverlay(); document.removeEventListener("keydown", onKey); }
+  };
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+/**
+ * Confirmation dialog (destructive). Renders the prototype `.confirm-card`
+ * inside an overlay; "ביטול" closes, the danger button runs `onConfirm`.
+ * @param {{icon?:string,title:string,text:string,confirmLabel:string,
+ *   cancelLabel?:string,onConfirm:Function}} o
+ */
+function confirmDialog(o) {
+  const overlay = mountOverlay(
+    `<div class="confirm-card surface">
+       <div class="confirm-ic">${icon(o.icon ?? "trash", { size: 22 })}</div>
+       <b>${escHtml(o.title)}</b>
+       <p>${escHtml(o.text)}</p>
+       <div class="confirm-row" style="display:flex;gap:10px;justify-content:center;margin-top:4px">
+         <button class="btn btn-ghost" type="button" data-overlay-dismiss>${escHtml(o.cancelLabel ?? "ביטול")}</button>
+         <button class="btn btn-danger" type="button" id="confirm-go">${escHtml(o.confirmLabel)}</button>
+       </div>
+     </div>`,
+    { dismissLabel: "" },
+  );
+  overlay.querySelector("#confirm-go")?.addEventListener("click", () => {
+    closeStateOverlay();
+    o.onConfirm();
+  });
+}
+
+/** Scripted guided-recovery Q&A (prototype `HelpChat`). */
+const HELP_SCRIPT = [
+  { who: "me", text: "החיבור לוואטסאפ נפל, מה עושים?" },
+  { who: "ai", text: "בלי דאגה — נתקן יחד ב-3 צעדים. קודם, האם הטלפון שלך מחובר לאינטרנט?" },
+  { who: "ai", text: "פתחו בטלפון: וואטסאפ ← הגדרות ← מכשירים מקושרים, ובדקו ש-CatchApp מופיע ברשימה." },
+  { who: "me", text: "הוא לא מופיע שם" },
+  { who: "ai", text: "אז פשוט נחבר מחדש — הקישו ״חבר מחדש״ וסרקו את הקוד שיופיע. זה לוקח 10 שניות.", cta: "חבר מחדש עכשיו" },
+];
+
+/** Build the help-chat body for the first `n` scripted turns. */
+function helpChatHtml(n) {
+  const msgs = HELP_SCRIPT.slice(0, n)
+    .map((m) => {
+      const cta = m.cta ? `<button class="hbub-cta" type="button" data-help-reconnect>${escHtml(m.cta)}</button>` : "";
+      return `<div class="hmsg ${m.who}"><div class="hbub">${escHtml(m.text)}${cta}</div></div>`;
+    })
+    .join("");
+  const typing = n < HELP_SCRIPT.length
+    ? `<div class="hmsg ai"><div class="hbub typing"><span class="ob-dots"><i></i><i></i><i></i></span></div></div>`
+    : "";
+  const foot = n < HELP_SCRIPT.length
+    ? `<button class="btn btn-soft btn-sm" type="button" data-help-more>המשך השיחה →</button>`
+    : `<div class="help-quick"><span class="chip">עדיין לא עובד</span><span class="chip">פתח מדריך</span></div>`;
+  return `
+    <div class="help-chat">
+      <div class="help-head">
+        <span class="help-av">${icon("sparkle", { size: 15 })}</span>
+        <div><b>עזרה של CatchApp</b><small><span class="dot-live"></span>מגיב תוך רגע</small></div>
+      </div>
+      <div class="help-body">${msgs}${typing}</div>
+      <div class="help-foot">${foot}</div>
+    </div>`;
+}
+
+/** Guided HelpChat overlay — scripted recovery Q&A with a "המשך השיחה" stepper. */
+function openHelpChat() {
+  let n = 2;
+  const overlay = mountOverlay(helpChatHtml(n));
+  const card = overlay.querySelector(".state-overlay__card");
+  const repaint = () => {
+    // Re-render the chat in place, preserving the dismiss button below it.
+    const dismiss = card.querySelector(".notif-dismiss");
+    card.innerHTML = helpChatHtml(n);
+    if (dismiss) card.appendChild(dismiss);
+    wire();
+  };
+  const wire = () => {
+    card.querySelector("[data-help-more]")?.addEventListener("click", () => {
+      n = Math.min(n + 1, HELP_SCRIPT.length);
+      repaint();
+    });
+    card.querySelector("[data-help-reconnect]")?.addEventListener("click", () => location.reload());
+  };
+  wire();
+}
+
 /* ── 9. Bootstrap ────────────────────────────────────────── */
 
 function resolveInitialRoute() {
@@ -3031,9 +3419,36 @@ function renderOnboarding(initialStatus) {
     renderScanProgress();
   });
   es.addEventListener("logged-out", () => {
-    setOnboardingStatus("הקישור נדחה. רעננו ונסו שוב.");
+    es.close();
+    showQrError({
+      title: "הקוד פג תוקף",
+      text: "קוד החיבור מתחלף כל דקה לאבטחה. הפיקו קוד חדש וסרקו שוב.",
+    });
   });
-  es.onerror = () => setOnboardingStatus("שגיאת חיבור לשרת. רעננו את הדף.");
+  es.onerror = () => {
+    es.close();
+    showQrError({
+      title: "שגיאת חיבור",
+      text: "לא הצלחנו להפיק קוד חיבור. בדקו את החיבור ונסו קוד חדש.",
+    });
+  };
+}
+
+/** Replace the QR box with an error surface offering a "קוד חדש" retry that
+ *  re-runs the onboarding QR stream (keeps onboarding logic intact). */
+function showQrError({ title, text }) {
+  const box = document.getElementById("qr-box");
+  if (!box) return;
+  setOnboardingStatus("");
+  paintErrorSurface(box, {
+    icon: "phone",
+    anim: "pulse",
+    title,
+    text,
+    cta: "קוד חדש",
+    ctaIcon: "phone",
+    onCta: () => renderOnboarding(),
+  });
 }
 
 function setOnboardingStatus(text) {
@@ -3349,6 +3764,7 @@ async function boot() {
   }
   if (!(await authGate())) return;
   renderShell();
+  initConnBanner();
   if (DEMO) applyHealth(true);
   else startHealthPolling();
   wireCopyButton();

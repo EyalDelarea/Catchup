@@ -4301,6 +4301,7 @@ h2.sec .ic{ width:15px; height:15px; }
 .hbub-cta{ display:block; margin-top:9px; border:none; background:var(--on-accent); color:var(--accent-ink); font:700 12.5px "Heebo",sans-serif; padding:7px 13px; border-radius:9px; cursor:pointer; }
 .help-foot{ padding:11px 14px; border-top:1px solid var(--line); display:flex; justify-content:center; }
 .help-quick{ display:flex; gap:8px; }
+.btn-sm{ padding:7px 14px; font-size:13px; }
 
 @media (max-width:760px){ .gal{ grid-template-columns:1fr; } }
 .ask-state{ display:flex; align-items:center; gap:12px; padding:16px; }
@@ -4392,6 +4393,13 @@ h2.sec .ic{ width:15px; height:15px; }
 .notif-title{ font-weight:800; font-size:14.5px; margin-bottom:2px; }
 .notif-text{ font-size:13px; color:#555; line-height:1.45; }
 .notif-dismiss{ display:block; margin:16px auto 0; border:none; background:rgba(255,255,255,.2); color:#fff; font:700 13px "Heebo",sans-serif; padding:9px 20px; border-radius:999px; cursor:pointer; }
+
+/* ---- generic transient toast (fixed; reused across screens) ---- */
+.app-flash{ position:fixed; left:50%; bottom:96px; transform:translateX(-50%) translateY(8px); z-index:80;
+  background:var(--ink); color:var(--bg); font-weight:700; font-size:14px; padding:9px 18px; border-radius:999px;
+  opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; box-shadow:0 8px 20px -8px rgba(0,0,0,.4); }
+.app-flash.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+@media (prefers-reduced-motion:reduce){ .app-flash{ transition:opacity .15s; transform:translateX(-50%); } }
 
 
 /* ── Re-seat the existing single-pane screens into the command-center
