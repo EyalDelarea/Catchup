@@ -27,11 +27,14 @@
     <span>המערכת לא מגיבה — ייתכן שחסרות הודעות אחרונות. הפעילו מחדש לסנכרון.</span>
   </div>
 
-  <!-- responsive two-pane shell; data-view controls which pane shows on mobile -->
-  <div id="layout" class="layout" data-view="feed">
-    <header id="top-bar" class="top-bar"></header>
-    <aside id="pane-list" class="pane pane--list" aria-label="קבוצות"></aside>
-    <main id="pane-main" class="pane pane--main" aria-live="polite"></main>
+  <!-- 3-pane command center: nav rail · appbar + content · mobile bottom nav -->
+  <div id="layout" class="shell" data-view="today">
+    <aside id="pane-list" class="sidebar" aria-label="ניווט ראשי"></aside>
+    <main class="main">
+      <header id="top-bar" class="appbar"></header>
+      <div id="pane-main" class="scroll" aria-live="polite"></div>
+      <nav id="botnav" class="botnav" aria-label="ניווט תחתון"></nav>
+    </main>
   </div>
 
   <script type="module" src="/app.js"></script>

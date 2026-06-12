@@ -38,6 +38,7 @@ const layout = document.getElementById("layout");
 const topBar = document.getElementById("top-bar");
 const paneList = document.getElementById("pane-list");
 const paneMain = document.getElementById("pane-main");
+const botNav = document.getElementById("botnav");
 const staleBanner = document.getElementById("stale-banner");
 
 /** Active theme ("light" | "dark"). The pre-paint snippet in index.html already
@@ -70,22 +71,70 @@ function amaStorage() {
   }
 }
 
-/* ── 2. Routing ──────────────────────────────────────────── */
+/* ── 2. Routing & nav model ──────────────────────────────── */
 
-/** Set the visible-pane hint for CSS. */
+/** The "me" card shown in the nav rail. Single-user has no real profile, so this
+ *  is a neutral, privacy-consistent placeholder mirroring the prototype card. */
+const ME = { name: "החשבון שלי", sub: "מחובר · וואטסאפ", hue: 280 };
+
+/** Vertical nav rail items (prototype order). `count` badges are filled lazily
+ *  by the screen loaders via setNavCount(); omit when unknown. */
+const NAV = [
+  { id: "today", label: "היום", icon: "sun" },
+  { id: "catchup", label: "עדכונים", icon: "inbox" },
+  { id: "people", label: "אנשים", icon: "users" },
+  { id: "meetings", label: "פגישות", icon: "calendar" },
+  { id: "todos", label: "משימות", icon: "checks" },
+  { id: "ask", label: "שאל", icon: "sparkle" },
+  { id: "sources", label: "צ׳אטים", icon: "filter" },
+  { id: "settings", label: "הגדרות", icon: "sliders" },
+];
+
+/** Mobile bottom-nav: the five most-used surfaces. */
+const BOTNAV = ["today", "catchup", "ask", "people", "settings"];
+
+/** Appbar title + subtitle per screen. `sub` may be a function (dynamic date). */
+const META = {
+  today: { title: "היום", sub: () => todayDateSub() },
+  catchup: { title: "עדכונים", sub: "מה פספסת — סיכומים במקום גלילה" },
+  detail: { title: "עדכונים", sub: "מה פספסת — סיכומים במקום גלילה" },
+  thread: { title: "השיחה המלאה", sub: "ההודעה שהסיכום הצביע עליה" },
+  people: { title: "אנשים ולידים", sub: "CRM קליל שנבנה מהשיחות" },
+  agenda: { title: "פגישות ומשימות", sub: "כל פריט מקושר חזרה למקור" },
+  ask: { title: "שאל את הוואטסאפ שלך", sub: "תשובות עם מקור — בלי לנחש" },
+  sources: { title: "צ׳אטים מוזנים", sub: "בחרו אילו שיחות מזינות את CatchApp" },
+  settings: { title: "הגדרות", sub: "פרטיות קודם כול" },
+  total: { title: "סיכום כללי", sub: "מה קרה בכל הצ׳אטים" },
+};
+
+/** Which nav item is highlighted for a given view. */
+function navIdForView(view) {
+  if (view === "detail") return "catchup";
+  if (view === "thread") return "catchup";
+  if (view === "agenda") return "meetings";
+  return view;
+}
+
+/** Set the visible-pane hint for CSS (mobile pane visibility / residual styling). */
 function setView(view) {
   if (layout) layout.dataset.view = view;
+  setActiveNav(navIdForView(view));
 }
 
 /**
  * Navigate to a view, pushing a history entry.
- * @param {"feed"|"detail"|"total"|"ama"|"thread"|"sources"|"settings"|"today"|"people"|"agenda"} view
- * @param {string} [arg] — group name (detail) or AMA scope (ama)
+ * @param {"today"|"catchup"|"detail"|"total"|"ama"|"ask"|"thread"|"sources"|"settings"|"people"|"meetings"|"todos"|"agenda"} view
+ * @param {string|object} [arg] — group name (detail) or AMA scope (ama) or {chat,aroundId} (thread)
  */
 function navigate(view, arg) {
+  if (view === "ask") view = "ama";
+  if (view === "meetings" || view === "todos") view = "agenda";
   if (view === "today") {
     history.pushState({ view: "today" }, "", "#today");
     renderToday();
+  } else if (view === "catchup") {
+    history.pushState({ view: "catchup" }, "", "#catchup");
+    renderCatchup();
   } else if (view === "detail" && arg) {
     history.pushState({ view: "detail", group: arg }, "", `#group=${encodeURIComponent(arg)}`);
     renderDetail(arg, true);
@@ -116,17 +165,16 @@ function navigate(view, arg) {
     history.pushState({ view: "agenda" }, "", "#agenda");
     renderAgenda();
   } else {
-    history.pushState({ view: "feed" }, "", location.pathname);
-    setView("feed");
-    markActiveRow(null);
+    history.pushState({ view: "today" }, "", "#today");
+    renderToday();
   }
 }
 
 window.addEventListener("popstate", (e) => {
   teardownStream();
   const state = e.state;
-  if (state?.view === "today") {
-    renderToday();
+  if (state?.view === "catchup") {
+    renderCatchup();
   } else if (state?.view === "detail" && state.group) {
     renderDetail(state.group, false);
   } else if (state?.view === "total") {
@@ -144,8 +192,7 @@ window.addEventListener("popstate", (e) => {
   } else if (state?.view === "thread" && state.chat) {
     renderThread(state.chat, state.aroundId);
   } else {
-    setView("feed");
-    markActiveRow(null);
+    renderToday();
   }
 });
 
@@ -183,107 +230,152 @@ function startHealthPolling() {
   healthInterval = setInterval(pollHealth, 5_000);
 }
 
-/* ── 4. Shell (top-bar + list pane) ──────────────────────── */
+/* ── 4. Shell: nav rail + appbar + mobile bottom nav ─────── */
 
-/** Render the persistent shell once at boot. */
+/** The CatchApp brand mark (check-in-a-tile), matching the prototype glyph. */
+function brandGlyph(size = 34) {
+  const r = Math.round(size * 0.29);
+  return (
+    `<div class="bglyph v-check" style="width:${size}px;height:${size}px;border-radius:${r}px;font-size:${size}px">`
+    + `<span class="dot"></span>`
+    + `<svg class="ck" viewBox="0 0 24 24" aria-hidden="true">`
+    + `<path d="M20 6.5 9.5 17 4 11.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`
+    + `</div>`
+  );
+}
+
+/** Initials + per-entity oklch tint disc (matches the prototype Avatar). */
+function avatarHtml(name, hue = 150, size = 36) {
+  const initials = (name || "").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("");
+  return (
+    `<div class="avatar" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.36)}px;`
+    + `background:oklch(0.93 0.045 ${hue});color:oklch(0.42 0.09 ${hue})">${escHtml(initials)}</div>`
+  );
+}
+
+/** Render the persistent shell once at boot: nav rail + bottom nav. */
 function renderShell() {
+  paneList.innerHTML = navRailHtml();
+  topBar.innerHTML = "";
+  if (botNav) botNav.innerHTML = botnavHtml();
+  for (const el of paneList.querySelectorAll("[data-nav-id]")) {
+    el.addEventListener("click", () => navigate(el.dataset.navId));
+  }
+  for (const el of botNav?.querySelectorAll("[data-nav-id]") ?? []) {
+    el.addEventListener("click", () => navigate(el.dataset.navId));
+  }
+}
+
+function navRailHtml() {
+  const links = NAV.map((n) => `
+    <button class="navlink" type="button" data-nav-id="${n.id}" aria-label="${escHtml(n.label)}">
+      ${icon(n.icon, { size: 20 })}
+      <span>${escHtml(n.label)}</span>
+      <span class="count" data-count="${n.id}" hidden></span>
+    </button>`).join("");
+  return `
+    <div class="side-brand">
+      ${brandGlyph(34)}
+      <div class="wordmark"><b style="font-size:16px">CatchApp</b><small>וואטסאפ, בלי הרעש</small></div>
+    </div>
+    ${links}
+    <div class="side-foot">
+      <div class="privacy-card">
+        ${icon("lock", { size: 18 })}
+        <div><b>הכול נשאר אצלך</b><p>מאוחסן במכשיר · לא נשלח החוצה</p></div>
+      </div>
+      <div class="side-user">
+        ${avatarHtml(ME.name, ME.hue, 36)}
+        <div style="min-width:0">
+          <div style="font-weight:700;font-size:14px">${escHtml(ME.name)}</div>
+          <div class="mono" dir="ltr" style="font-size:11px;color:var(--muted)">${escHtml(ME.sub)}</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function botnavHtml() {
+  return BOTNAV.map((id) => {
+    const n = NAV.find((x) => x.id === id);
+    return `<button type="button" data-nav-id="${id}" aria-label="${escHtml(n.label)}">${icon(n.icon, { size: 21 })}<span>${escHtml(n.label)}</span></button>`;
+  }).join("");
+}
+
+/** Highlight the active nav item (rail + bottom nav). */
+function setActiveNav(id) {
+  for (const el of document.querySelectorAll("#pane-list .navlink")) {
+    el.classList.toggle("on", el.dataset.navId === id);
+  }
+  for (const el of document.querySelectorAll("#botnav button")) {
+    el.classList.toggle("on", el.dataset.navId === id);
+  }
+}
+
+/** Fill or clear a nav count badge. */
+function setNavCount(id, n) {
+  for (const el of document.querySelectorAll(`.count[data-count="${id}"]`)) {
+    if (n && n > 0) {
+      el.textContent = String(n);
+      el.hidden = false;
+    } else {
+      el.textContent = "";
+      el.hidden = true;
+    }
+  }
+}
+
+/** Appbar header for the current screen: title + subtitle + action icons + optional back. */
+function setAppbar(view, { back } = {}) {
+  const m = META[view] || { title: "", sub: "" };
+  const sub = typeof m.sub === "function" ? m.sub() : m.sub;
+  const backBtn = back
+    ? `<button class="iconbtn" id="appbar-back" type="button" aria-label="חזרה">${icon("chevR", { size: 19 })}</button>`
+    : "";
   topBar.innerHTML = `
-    <div class="brand">
-      <div class="feed-kicker">on the go</div>
-      <h1 class="feed-title">הקבוצות שלי</h1>
+    ${backBtn}
+    <div>
+      <h1>${escHtml(m.title)}</h1>
+      ${sub ? `<div class="sub">${sub}</div>` : ""}
     </div>
-    <div class="core" role="group" aria-label="פעולות ראשיות">
-      <button class="feat feat--today" id="today-card" type="button" aria-label="הסיכום היומי">
-        <span class="feat__ico" aria-hidden="true">✦</span>
-        <span class="feat__title">היום</span>
-        <span class="feat__sub">הסיכום היומי שלך</span>
-        <span class="feat__hint">פתח את הסיכום ›</span>
-      </button>
-      <button class="feat feat--ama" id="ama-card" type="button" aria-label="שאל אותי הכל">
-        <span class="feat__ico" aria-hidden="true">✨</span>
-        <span class="feat__title">שאל אותי הכל</span>
-        <span class="feat__sub">על כל השיחות שלך</span>
-        <span class="feat__hint">הקש כדי לשאול ›</span>
-      </button>
-      <button class="feat feat--total" id="total-card" type="button" aria-label="סיכום כללי לכל הצ׳אטים">
-        <span class="feat__ico" aria-hidden="true">📊</span>
-        <span class="feat__title">סיכום כללי</span>
-        <span class="feat__sub">מה קרה בכל הצ׳אטים</span>
-        <span class="feat__hint">הקש לסיכום ›</span>
-      </button>
-      <button class="feat feat--people" id="people-card" type="button" aria-label="אנשים">
-        <span class="feat__ico" aria-hidden="true">👥</span>
-        <span class="feat__title">אנשים</span>
-        <span class="feat__sub">מי מחכה לתשובה</span>
-        <span class="feat__hint">פתח את האנשים ›</span>
-      </button>
-      <button class="feat feat--agenda" id="agenda-card" type="button" aria-label="פגישות ומשימות">
-        <span class="feat__ico" aria-hidden="true">🗓️</span>
-        <span class="feat__title">פגישות ומשימות</span>
-        <span class="feat__sub">היומן והמשימות שלך</span>
-        <span class="feat__hint">פתח את היומן ›</span>
-      </button>
-    </div>
-    <div class="health-pill" role="status" aria-live="polite">
-      <span class="health-pill__dot"></span><span>טוען…</span>
-    </div>
-    <button id="settings-gear" class="theme-toggle" type="button" aria-label="הגדרות">${icon("sliders")}</button>
-    ${themeToggleHtml()}
-  `;
-
-  paneList.innerHTML = `
-    <div class="search-wrap">
-      <input id="search-input" class="search-input" type="search"
-        placeholder="🔍  חיפוש קבוצה…" aria-label="חיפוש קבוצה"
-        autocomplete="off" autocorrect="off" spellcheck="false" />
-    </div>
-    <div class="seclabel seclabel--row">
-      <span>הקבוצות שלי</span>
-      <button class="manage-sources" id="manage-sources" type="button">נהל צ׳אטים ›</button>
-    </div>
-    <div class="feed-list" id="feed-list" role="list" aria-live="polite">
-      ${buildSkeletonCards(3)}
-    </div>
-  `;
-
-  document.getElementById("today-card")?.addEventListener("click", () => navigate("today"));
-  document.getElementById("ama-card").addEventListener("click", () => navigate("ama"));
-  document.getElementById("total-card").addEventListener("click", () => navigate("total"));
-  document.getElementById("people-card")?.addEventListener("click", () => navigate("people"));
-  document.getElementById("agenda-card")?.addEventListener("click", () => navigate("agenda"));
-  document.getElementById("theme-toggle")?.addEventListener("click", toggleTheme);
-  document.getElementById("settings-gear")?.addEventListener("click", () => navigate("settings"));
-  document.getElementById("manage-sources")?.addEventListener("click", () => navigate("sources"));
-  const input = document.getElementById("search-input");
-  if (input) input.addEventListener("input", () => renderGroupList(cachedGroups, input.value));
+    <div class="acts">
+      <button class="iconbtn" id="appbar-search" type="button" aria-label="חיפוש">${icon("search", { size: 19 })}</button>
+      <button class="iconbtn" id="appbar-bell" type="button" aria-label="התראות">${icon("bell", { size: 19 })}</button>
+      <button class="iconbtn" id="appbar-theme" type="button" aria-label="החלפת ערכת צבעים">${icon(currentTheme === "dark" ? "sun" : "moon", { size: 19 })}</button>
+    </div>`;
+  document.getElementById("appbar-back")?.addEventListener("click", () => history.back());
+  document.getElementById("appbar-search")?.addEventListener("click", () => navigate("catchup"));
+  document.getElementById("appbar-bell")?.addEventListener("click", () => navigate("settings"));
+  document.getElementById("appbar-theme")?.addEventListener("click", toggleTheme);
 }
 
-/** Top-bar בהיר/כהה control. Shows the icon of the mode it switches TO. */
-function themeToggleHtml() {
-  const toDark = currentTheme !== "dark";
-  return `<button id="theme-toggle" class="theme-toggle" type="button"
-    aria-label="${toDark ? "מעבר למצב כהה" : "מעבר למצב בהיר"}">${icon(toDark ? "moon" : "sun")}</button>`;
+/** Hebrew "weekday, D Month" for the Today appbar subtitle. */
+function todayDateSub() {
+  try {
+    return escHtml(new Date().toLocaleDateString("he-IL", { weekday: "long", day: "numeric", month: "long" }));
+  } catch {
+    return "";
+  }
 }
 
-/** Flip + persist the theme, updating the toggle button in place (re-rendering
- *  the whole shell would reset the populated group list to skeletons). */
+/** Flip + persist the theme; refresh the appbar toggle icon in place. */
 function toggleTheme() {
   currentTheme = currentTheme === "dark" ? "light" : "dark";
   setTheme(currentTheme);
-  const btn = document.getElementById("theme-toggle");
-  if (btn) btn.outerHTML = themeToggleHtml();
-  document.getElementById("theme-toggle")?.addEventListener("click", toggleTheme);
+  const btn = document.getElementById("appbar-theme");
+  if (btn) btn.innerHTML = icon(currentTheme === "dark" ? "sun" : "moon", { size: 19 });
 }
 
-/** Fetch groups and populate the list, filtered to included (non-excluded/removed) chats. */
+/** Fetch groups (scope-filtered) into the cache + the עדכונים nav badge. */
 async function loadGroupsIntoList() {
-  if (DEMO) { cachedGroups = DEMO_GROUPS; renderGroupList(cachedGroups, ""); return; }
+  if (DEMO) {
+    cachedGroups = DEMO_GROUPS;
+    setNavCount("catchup", cachedGroups.length);
+    return;
+  }
   let groups;
   try {
     groups = await getGroups();
   } catch {
-    const list = document.getElementById("feed-list");
-    if (list) list.innerHTML = `<p class="error-state">שגיאה בטעינת הקבוצות. אנא רעננו את הדף.</p>`;
     return;
   }
   // Scope filter (S4 §3): hide excluded/removed chats. Resilient — on any scope
@@ -297,36 +389,7 @@ async function loadGroupsIntoList() {
     /* show all on scope-load failure */
   }
   cachedGroups = groups;
-  if (cachedGroups.length === 0) {
-    const list = document.getElementById("feed-list");
-    if (list) {
-      list.innerHTML =
-        `<p class="empty-state">אין צ׳אטים מוזנים. <button class="manage-sources" id="empty-manage">נהל צ׳אטים ›</button></p>`;
-      document.getElementById("empty-manage")?.addEventListener("click", () => navigate("sources"));
-    }
-    return;
-  }
-  renderGroupList(cachedGroups, "");
-}
-
-/** Re-render the card list based on a filter string. */
-function renderGroupList(groups, filter) {
-  const list = document.getElementById("feed-list");
-  if (!list) return;
-  const q = (filter || "").trim().toLowerCase();
-  const filtered = q ? groups.filter((g) => g.name.toLowerCase().includes(q)) : groups;
-
-  if (filtered.length === 0) {
-    list.innerHTML = `<p class="empty-state">${q ? "לא נמצאו קבוצות תואמות." : "אין שיחות שמורות."}</p>`;
-    return;
-  }
-  list.innerHTML = filtered.map((g) => buildGroupCard(g)).join("");
-  list.querySelectorAll(".gcard").forEach((card) => {
-    card.addEventListener("click", () => {
-      const group = card.dataset.group;
-      if (group) navigate("detail", group);
-    });
-  });
+  setNavCount("catchup", cachedGroups.length);
 }
 
 /** True if the group had activity within the last 24h. */
@@ -336,51 +399,78 @@ function isFreshGroup(group) {
     : false;
 }
 
-/** Deterministic avatar emoji from the group name (no real data needed). */
-const AVATARS = ["💬", "🗨️", "📨", "🌀", "✦", "🪐", "🔆", "🎐"];
-function groupEmoji(name) {
+/** No-op kept for callers that cleared the old sidebar row highlight. */
+function markActiveRow() {}
+
+/** Deterministic per-name avatar hue (stable across renders). */
+function hueFromName(name) {
   let h = 0;
   for (let i = 0; i < (name || "").length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return AVATARS[h % AVATARS.length];
+  return h % 360;
 }
 
-/** Build a single group card (freshness only — no message counts). */
-function buildGroupCard(group) {
-  const ago = formatAgo(group.lastMessageAt);
-  const fresh = isFreshGroup(group);
-  const cls = fresh ? "gcard gcard--fresh" : "gcard gcard--dim";
-  const ringCls = fresh ? "ring ring--fresh" : "ring ring--muted";
-  const meta = fresh
-    ? `<span class="gcard__live">● פעיל</span>${ago ? ` · ${escHtml(ago)}` : ""}`
-    : ago ? escHtml(ago) : "—";
-  const cta = fresh
-    ? `<div class="gcard__cta" aria-hidden="true">סכם מה שפספסתי ›</div>`
-    : "";
+/* ── 4b. Updates (עדכונים) — list-first catch-up ─────────── */
+//
+// The catch-up surface: a list of fed chats, each a card with a one-line
+// summary. Tapping a card opens the structured summary-first chat (renderDetail).
+
+async function renderCatchup() {
+  teardownStream();
+  setView("catchup");
+  setAppbar("catchup");
+  paneMain.innerHTML = `<div class="content"><p class="thread-loading">טוען עדכונים…</p></div>`;
+
+  if (cachedGroups.length === 0 && !DEMO) await loadGroupsIntoList();
+  const groups = cachedGroups;
+
+  if (!groups.length) {
+    paneMain.innerHTML = `
+      <div class="content">
+        <div class="empty">
+          <div class="empty-ic">${icon("filter", { size: 26 })}</div>
+          <h3>אין צ׳אטים מוזנים</h3>
+          <p>בחרו אילו שיחות יזינו את CatchApp כדי לקבל עדכונים.</p>
+          <button class="btn btn-soft" id="catchup-manage" type="button">${icon("filter", { size: 16 })}ניהול צ׳אטים</button>
+        </div>
+      </div>`;
+    document.getElementById("catchup-manage")?.addEventListener("click", () => navigate("sources"));
+    return;
+  }
+
+  const cards = groups.map((g) => buildUpdateCard(g)).join("");
+  paneMain.innerHTML = `
+    <div class="content">
+      <div class="filters">
+        <span class="muted" style="font-weight:700">קבץ לפי:</span>
+        <span class="chip on">הכול</span>
+        <span class="chip cat-manage" id="catchup-manage">${icon("filter", { size: 14 })}נהל צ׳אטים</span>
+      </div>
+      <div class="list">${cards}</div>
+    </div>`;
+  document.getElementById("catchup-manage")?.addEventListener("click", () => navigate("sources"));
+  for (const card of paneMain.querySelectorAll(".itemcard[data-group]")) {
+    card.addEventListener("click", () => navigate("detail", card.dataset.group));
+  }
+}
+
+function buildUpdateCard(g) {
+  const name = formatGroupName(g.name);
+  const hue = g.hue ?? hueFromName(g.name);
+  const sum = g.sum || "הקישו לסיכום מה שפספסתם בשיחה הזו.";
+  const newBadge = g.n ? `<span class="badge accent">${g.n} חדשות</span>` : "";
+  const who = g.who || (g.messageCount != null ? `${g.messageCount} הודעות` : "");
+  const ago = g.lastMessageAt ? formatAgo(g.lastMessageAt) : "";
+  const meta = [who, ago].filter(Boolean).join(" · ");
   return `
-    <div class="${cls}" role="listitem" data-group="${escHtml(group.name)}"
-      tabindex="0" aria-label="סכם מה שפספסתי בקבוצה ${escHtml(formatGroupName(group.name))}">
-      <span class="${ringCls}" aria-hidden="true">${groupEmoji(group.name)}</span>
-      <div class="gcard__name">${escHtml(formatGroupName(group.name))}</div>
-      <div class="gcard__meta">${meta}</div>
-      ${cta}
-    </div>
-  `;
-}
-
-function buildSkeletonCards(count) {
-  return Array.from({ length: count }, () => `
-    <div class="gcard gcard--loading" aria-hidden="true">
-      <div class="skeleton" style="width:55%;height:16px;margin-bottom:10px"></div>
-      <div class="skeleton" style="width:75%"></div>
-    </div>
-  `).join("");
-}
-
-/** Highlight the active group row in the sidebar (or clear with null). */
-function markActiveRow(group) {
-  document.querySelectorAll(".gcard").forEach((c) => {
-    c.classList.toggle("gcard--active", !!group && c.dataset.group === group);
-  });
+    <div class="itemcard surface" data-group="${escHtml(g.name)}" role="button" tabindex="0">
+      ${avatarHtml(name, hue, 40)}
+      <div class="grow">
+        <h4>${escHtml(name)}${newBadge}</h4>
+        <p>${escHtml(sum)}</p>
+        ${meta ? `<div class="meta"><span class="muted">${escHtml(meta)}</span></div>` : ""}
+      </div>
+      <span class="btn btn-soft" style="align-self:center">פתח ${icon("chevL", { size: 15 })}</span>
+    </div>`;
 }
 
 /* ── 5. Detail view ──────────────────────────────────────── */
@@ -414,7 +504,7 @@ function renderDetail(group, autoStart) {
 
   paneMain.innerHTML = buildDetailShell(group, ago, fresh);
   setView("detail");
-  markActiveRow(group);
+  setAppbar("detail", { back: true });
   wireDetailButtons(group);
   if (!DEMO) loadHistory(group);
 
@@ -1046,7 +1136,7 @@ function renderTotal(autoStart) {
   teardownStream();
   paneMain.innerHTML = buildTotalShell();
   setView("total");
-  markActiveRow(null);
+  setAppbar("total", { back: true });
 
   document.getElementById("total-back-btn")?.addEventListener("click", () => navigate("feed"));
   const chipsContainer = document.getElementById("total-chips");
@@ -1203,37 +1293,31 @@ function renderAma(scope) {
   teardownStream();
   amaScope = scope ?? null;
   amaConversation = loadConversation(amaStorage(), amaScope);
-  const sub = scope ? `על "${escHtml(formatGroupName(scope))}"` : "מחפש בכל השיחות שלך";
   paneMain.innerHTML = `
-    <div class="ama-panel">
-      <div class="ama-head">
-        <button class="back-btn" id="ama-back-btn" aria-label="חזרה">
-          <span class="back-btn__arrow" aria-hidden="true">›</span> חזרה
-        </button>
-        <span class="ama-head__orb" aria-hidden="true"></span>
-        <div class="ama-head__txt">
-          <div class="ama-head__title">שאל אותי הכל</div>
-          <div class="ama-head__sub">${sub}</div>
+    <div class="ama2">
+      <div class="ama-scroll" id="ama-scroll">
+        <div class="content">
+          <div class="chat" id="ama-messages" aria-live="polite">
+            <div class="empty">
+              <div class="empty-ic">${icon("sparkle", { size: 26 })}</div>
+              <p>${scope ? "שאל כל שאלה על הצ׳אט הזה ✨" : "שאל כל שאלה על השיחות שלך ✨"}</p>
+            </div>
+          </div>
+          ${amaSuggestHtml(scope)}
         </div>
       </div>
-      <div class="ama-messages" id="ama-messages" aria-live="polite">
-        <div class="ama-empty">${scope ? "שאל כל שאלה על הצ׳אט הזה ✨" : "שאל כל שאלה על השיחות שלך ✨"}</div>
-      </div>
-      ${amaSuggestHtml(scope)}
-      <form class="ama-input" id="ama-form">
-        <input id="ama-q" class="ama-input__field" type="text" placeholder="שאל שאלה…"
-          aria-label="שאלה" autocomplete="off" />
-        <button class="ama-input__send" type="submit" aria-label="שלח">➤</button>
+      <form class="askbar" id="ama-form">
+        <label class="field">${icon("message", { size: 18 })}<input id="ama-q" type="text"
+          placeholder="${scope ? "שאל על הצ׳אט הזה…" : "שאל על כל ההיסטוריה שלך…"}" aria-label="שאלה" autocomplete="off" /></label>
+        <button class="btn btn-primary" type="submit" aria-label="שלח">${icon("arrowL", { size: 18 })}שלח</button>
       </form>
-    </div>
-  `;
+    </div>`;
   setView("ama");
-  markActiveRow(scope);
+  setAppbar("ask");
 
   // Replace the empty-state hint with the restored thread, if there is one.
   if (amaConversation.messages.length) renderAmaMessages();
 
-  document.getElementById("ama-back-btn")?.addEventListener("click", () => history.back());
   document.getElementById("ama-form")?.addEventListener("submit", (e) => {
     e.preventDefault();
     submitAmaQuestion(scope);
@@ -1241,7 +1325,7 @@ function renderAma(scope) {
 
   // Delegate citation clicks (chips are re-rendered on every token) → source jump.
   document.getElementById("ama-messages")?.addEventListener("click", (e) => {
-    const chip = e.target.closest?.(".ama-src");
+    const chip = e.target.closest?.(".src[data-chat]");
     if (!chip) return;
     const chat = chip.dataset.chat;
     const id = Number(chip.dataset.id);
@@ -1249,7 +1333,7 @@ function renderAma(scope) {
   });
 
   // Suggestion chips fill the box and submit.
-  for (const chip of document.querySelectorAll(".ama-suggest__chip")) {
+  for (const chip of document.querySelectorAll(".suggrow .chip")) {
     chip.addEventListener("click", () => {
       const input = document.getElementById("ama-q");
       if (input) input.value = chip.dataset.q || chip.textContent || "";
@@ -1269,9 +1353,9 @@ const AMA_SUGGESTIONS = [
 function amaSuggestHtml(scope) {
   if (scope || amaConversation.messages.length) return "";
   const chips = AMA_SUGGESTIONS.map(
-    (q) => `<button type="button" class="ama-suggest__chip" data-q="${escHtml(q)}">${escHtml(q)}</button>`,
+    (q) => `<button type="button" class="chip" data-q="${escHtml(q)}">${escHtml(q)}</button>`,
   ).join("");
-  return `<div class="ama-suggest">${chips}</div>`;
+  return `<div class="suggrow">${chips}</div>`;
 }
 
 /** No SSE activity for this long → treat the request as stuck and surface it. */
@@ -1328,34 +1412,42 @@ function submitAmaQuestion(scope) {
   });
 }
 
+/** AI-answer avatar disc (accent-tinted sparkle), matching the prototype. */
+function amaAiAvatar() {
+  return `<div class="avatar" style="width:34px;height:34px;flex:none;background:var(--accent-weak);color:var(--accent-ink)">${icon("sparkle", { size: 17 })}</div>`;
+}
+
 function renderAmaMessages() {
   const el = document.getElementById("ama-messages");
   if (!el) return;
   el.innerHTML = amaConversation.messages.map((m) => {
     if (m.role === "user") {
-      return `<div class="ama-bubble ama-bubble--user">${escHtml(m.text)}</div>`;
+      return `<div class="msg me"><div class="bubble">${escHtml(m.text)}</div></div>`;
     }
     if (m.pending && !m.text) {
       const label =
         m.phase === "searching" ? "מחפש בהודעות…" : m.phase === "synthesizing" ? "מנסח תשובה…" : "חושב…";
-      return `<div class="ama-bubble ama-bubble--ai ama-bubble--pending">${label}</div>`;
+      return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble writing">${label}<span class="caret"></span></div></div></div>`;
     }
-    const err = m.error ? `<span class="ama-bubble__err">${escHtml(m.error)}</span>` : "";
-    return `<div class="ama-bubble ama-bubble--ai">${escHtml(m.text)}${err}${renderAmaSources(m.citations)}</div>`;
+    if (m.error) {
+      return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble" style="color:var(--warn-ink)">${escHtml(m.error)}</div></div></div>`;
+    }
+    return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble">${escHtml(m.text)}</div>${renderAmaSources(m.citations)}</div></div>`;
   }).join("");
-  el.scrollTop = el.scrollHeight;
+  const scroller = document.getElementById("ama-scroll");
+  if (scroller) scroller.scrollTop = scroller.scrollHeight;
 }
 
-/** Render the resolved [n] citations under an answer bubble. Each chip is a
- *  button that jumps to the cited message in its chat thread. */
+/** Render the resolved [n] citations under an answer bubble as source chips.
+ *  Each chip is a button that jumps to the cited message in its chat thread. */
 function renderAmaSources(citations) {
   if (!citations?.length) return "";
   const items = citations.map((c) =>
-    `<button type="button" class="ama-src" data-chat="${escHtml(c.chat)}" data-id="${c.messageId}">` +
-    `[${c.n}] ${escHtml(c.sender)} · ${escHtml(formatGroupName(c.chat))} · ` +
-    `<span dir="ltr">${escHtml(fmtTime(c.sentAt))}</span></button>`
+    `<button type="button" class="src" data-chat="${escHtml(c.chat)}" data-id="${c.messageId}">` +
+    `${icon("source", { size: 13 })}<span>[${c.n}] ${escHtml(formatGroupName(c.chat))}</span>` +
+    `<span class="src-date" dir="ltr"> · ${escHtml(fmtTime(c.sentAt))}</span></button>`
   ).join("");
-  return `<span class="ama-bubble__src">↳ ${items}</span>`;
+  return `<div class="cites">${items}</div>`;
 }
 
 /* ── 7b. Thread view (Ask source-jump) ───────────────────── */
@@ -1368,7 +1460,8 @@ function renderAmaSources(citations) {
  */
 async function renderThread(chat, aroundId) {
   teardownStream();
-  setView("ama");
+  setView("thread");
+  setAppbar("thread", { back: true });
   paneMain.innerHTML = `
     <div class="thread-panel">
       <div class="thread-head">
@@ -1422,7 +1515,8 @@ const sourcesState = { scopes: [], categories: [], query: "", segment: "all" };
 /** The Sources control center (§7): whitelist/blacklist + categorize chats. */
 async function renderSources() {
   teardownStream();
-  setView("ama"); // reuse the single-pane slot
+  setView("sources");
+  setAppbar("sources");
   paneMain.innerHTML = `<div class="sources-panel"><p class="thread-loading">טוען צ׳אטים…</p></div>`;
   try {
     const [scopes, categories] = await Promise.all([getScopes(), getScopeCategories()]);
@@ -1611,7 +1705,8 @@ const settingsState = { prefs: null };
  *  and the experimental suggestion-engine config. Fetch-on-entry, then paint. */
 async function renderSettings() {
   teardownStream();
-  setView("ama"); // reuse the single-pane slot, like Sources
+  setView("settings");
+  setAppbar("settings");
   paneMain.innerHTML = `<div class="settings-panel"><p class="thread-loading">טוען הגדרות…</p></div>`;
   if (DEMO) {
     settingsState.prefs = {
@@ -1823,15 +1918,12 @@ function wireSettings() {
   }
 }
 
-/** Apply + persist a theme choice and keep the top-bar toggle icon in sync. */
+/** Apply + persist a theme choice and keep the appbar toggle icon in sync. */
 function setDisplayMode(value) {
   currentTheme = value;
   setTheme(currentTheme);
-  const btn = document.getElementById("theme-toggle");
-  if (btn) {
-    btn.outerHTML = themeToggleHtml();
-    document.getElementById("theme-toggle")?.addEventListener("click", toggleTheme);
-  }
+  const btn = document.getElementById("appbar-theme");
+  if (btn) btn.innerHTML = icon(currentTheme === "dark" ? "sun" : "moon", { size: 19 });
 }
 
 /* ── 7e. Today (suggestion deck §2) ───────────────────────── */
@@ -1851,7 +1943,48 @@ const todayState = {
   acted: 0,
   counts: { task: 0, meeting: 0, followup: 0, recap: 0 },
   engineOn: true,
+  side: { meetings: [], todos: [], people: [] },
 };
+
+/** Command-center side-rail demo fixtures (mirror the prototype). */
+const DEMO_SIDE = {
+  meetings: [
+    { title: "קפה עם יוסי", where: "קפה לנדוור, רוטשילד", time: "14:00" },
+    { title: "שיחה עם הקבלן", where: "טלפון", time: "17:30" },
+  ],
+  todos: [
+    { title: "להחזיר מחיר לרונית", done: false },
+    { title: "לאשר תקציב לצוות", done: false },
+    { title: "לשלם על הטיול השנתי", done: false },
+  ],
+  people: [
+    { name: "משה לוי", hue: 40, status: "מתקרר", warn: true, note: "אין קשר 9 ימים" },
+    { name: "דנה כהן", hue: 20, status: "ממתינה", warn: true, note: "שאלה על הדירה" },
+  ],
+};
+
+/** Today story-deck demo payload (matches the /api/suggestions contract). */
+const DEMO_TODAY = {
+  info: {
+    highlights: "42 הודעות חדשות בצוות העבודה, דנה מחכה לתשובה על הדירה, ובכיתת הילדים נפתח תשלום לטיול עד יום ראשון.",
+    perChat: [{ chat: "צוות עבודה", summary: "סוכם דדליין ליום חמישי; נשאר רק לאשר את התקציב." }],
+  },
+  suggestions: [
+    { id: 1, kind: "task", chat: "צוות עבודה", proposedText: "להכין מצגת לישיבת הסטטוס", reason: "זוהו 4 הודעות על המצגת שעדיין לא נענו", sourceMessageId: null },
+    { id: 2, kind: "meeting", chat: "יוסי טל", proposedText: "פגישת סטטוס · יום ה׳ 10:00", reason: "מנסים לתאם כבר 3 הודעות בלי לסגור מועד", sourceMessageId: null },
+    { id: 3, kind: "followup", chat: "דנה כהן", proposedText: "לחזור לדנה לגבי הדירה", reason: "לא ענית 3 ימים — השיחה נשארה פתוחה", sourceMessageId: null },
+    { id: 4, kind: "recap", chat: "כיתת הילדים", proposedText: "תשלום לטיול עד יום ראשון\nדרושים 2 מלווים נוספים\nלהחזיר אישור חתום", reason: "31 הודעות חדשות סוכמו לעיקר", sourceMessageId: null },
+  ],
+};
+
+/** ISO timestamp → "HH:MM" (Latin, for the mono time column). */
+function formatTime(iso) {
+  try {
+    return new Date(iso).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit", hour12: false });
+  } catch {
+    return "";
+  }
+}
 
 /** True when the user asked the OS to minimize motion. */
 function prefersReducedMotion() {
@@ -1861,13 +1994,13 @@ function prefersReducedMotion() {
 /** Fetch-on-entry: load the deck, then paint. A 404/empty/error → empty state. */
 async function renderToday() {
   teardownStream();
-  setView("ama"); // reuse the single-pane slot, like Sources / Settings
-  markActiveRow(null);
-  paneMain.innerHTML = `<div class="today"><p class="thread-loading">טוען את הסיכום…</p></div>`;
+  setView("today");
+  setAppbar("today");
+  paneMain.innerHTML = `<div class="content wide"><div class="today"><p class="thread-loading">טוען את הסיכום…</p></div></div>`;
 
   let data = null;
   try {
-    data = DEMO ? null : await getToday();
+    data = DEMO ? DEMO_TODAY : await getToday();
   } catch {
     data = null; // endpoint not built yet / network → render the empty state
   }
@@ -1879,6 +2012,7 @@ async function renderToday() {
   todayState.acted = 0;
   todayState.counts = tileCounts(data?.suggestions ?? []);
   todayState.engineOn = true;
+  todayState.side = await loadTodaySide();
 
   // Only the empty state needs the engine on/off hint — fetch it lazily.
   if (todayState.deck.length === 0 && !DEMO) {
@@ -1888,7 +2022,20 @@ async function renderToday() {
       /* keep the optimistic default */
     }
   }
+  setNavCount("today", todayState.deck.filter(isSuggestion).length);
   paintToday();
+}
+
+/** Command-center side-rail data: today's meetings, open to-dos, follow-up
+ *  people. Best-effort against the live endpoints; demo uses small fixtures. */
+async function loadTodaySide() {
+  if (DEMO) return DEMO_SIDE;
+  const [meetings, todos, people] = await Promise.all([
+    getMeetings().catch(() => []),
+    getTodos().catch(() => []),
+    getPeople().catch(() => []),
+  ]);
+  return { meetings, todos, people };
 }
 
 function paintToday() {
@@ -1904,13 +2051,21 @@ function paintToday() {
     body = buildStoryStack();
   }
 
-  paneMain.innerHTML = `
+  const hero = `
     <div class="today">
       ${buildTodayHeader(new Date())}
       <div class="today-note">${icon("sparkle", { size: 13 })}<span>הצעות חכמות שנבנות מהשיחות — ומתחדדות לפי הבחירות שלך</span></div>
       ${body}
       <div class="today-foot">${buildTodayFoot(total, hasSuggestionsLeft)}</div>
       ${buildTiles()}
+    </div>`;
+
+  paneMain.innerHTML = `
+    <div class="content wide">
+      <div class="cc">
+        <div class="cc-hero">${hero}</div>
+        <aside class="cc-side">${buildCommandSide()}</aside>
+      </div>
     </div>`;
   wireToday();
 }
@@ -1925,17 +2080,75 @@ function buildTodayHeader(now) {
     /* leave date blank if Intl is unavailable */
   }
   return `
-    <nav class="detail-nav today-nav" aria-label="ניווט">
-      <button class="back-btn" id="today-back" aria-label="חזרה">
-        <span class="back-btn__arrow" aria-hidden="true">›</span> חזרה
-      </button>
-    </nav>
     <div class="today-head">
       <div>
         <div class="kicker">הסיכום היומי</div>
         <div class="greet">${escHtml(greet)}</div>
       </div>
       <div class="date">${dateStr}</div>
+    </div>`;
+}
+
+/** The desktop command-center side rail: meetings today · open to-dos ·
+ *  follow-up people · an Ask shortcut. Each row links to its full screen. */
+function buildCommandSide() {
+  const side = todayState.side || { meetings: [], todos: [], people: [] };
+  const meetings = (side.meetings || []).slice(0, 3);
+  const openTodos = (side.todos || []).filter((t) => !t.done).slice(0, 4);
+  const followups = (side.people || []).filter((p) => p.warn || p.status?.includes("מתקרר")).slice(0, 3);
+
+  const meetingRows = meetings.length
+    ? meetings.map((m) => `
+        <div class="cc-row" data-go="agenda">
+          <div class="grow"><div class="cc-row-t">${escHtml(m.title || "")}</div>
+          <div class="cc-row-s">${escHtml(m.where || m.chat || "")}</div></div>
+          <div class="cc-row-time mono" dir="ltr">${escHtml(m.time || (m.startsAt ? formatTime(m.startsAt) : ""))}</div>
+        </div>`).join("")
+    : `<div class="cc-empty">אין פגישות היום ✦</div>`;
+
+  const todoRows = openTodos.length
+    ? openTodos.map((t) => `
+        <div class="cc-todo" data-go="agenda"><span class="cc-check"></span><span>${escHtml(t.title || "")}</span></div>`).join("")
+    : `<div class="cc-empty">אין משימות פתוחות</div>`;
+
+  const followRows = followups.length
+    ? followups.map((p) => `
+        <div class="cc-row" data-go="people">
+          ${avatarHtml(p.name, p.hue ?? 40, 30)}
+          <div class="grow"><div class="cc-row-t">${escHtml(p.name || "")}<span class="badge warn" style="margin-inline-start:6px">${escHtml(p.status || "מתקרר")}</span></div>
+          <div class="cc-row-s">${escHtml(p.note || p.next || "")}</div></div>
+        </div>`).join("")
+    : `<div class="cc-empty">אין מה לעקוב כרגע</div>`;
+
+  return `
+    <div class="cc-panel surface">
+      <div class="cc-panel-h" data-go="agenda">
+        <span class="cc-panel-ic">${icon("calendar", { size: 16 })}</span>
+        <b>פגישות היום</b><span class="cc-count">${meetings.length}</span>
+        <span class="cc-more">${icon("chevL", { size: 15 })}</span>
+      </div>
+      <div class="cc-panel-body">${meetingRows}</div>
+    </div>
+    <div class="cc-panel surface">
+      <div class="cc-panel-h" data-go="agenda">
+        <span class="cc-panel-ic">${icon("checks", { size: 16 })}</span>
+        <b>משימות פתוחות</b><span class="cc-count">${openTodos.length}</span>
+        <span class="cc-more">${icon("chevL", { size: 15 })}</span>
+      </div>
+      <div class="cc-panel-body">${todoRows}</div>
+    </div>
+    <div class="cc-panel cc-panel--accent surface">
+      <div class="cc-panel-h" data-go="people">
+        <span class="cc-panel-ic">${icon("flame", { size: 16 })}</span>
+        <b>דורש מעקב</b><span class="cc-count">${followups.length}</span>
+        <span class="cc-more">${icon("chevL", { size: 15 })}</span>
+      </div>
+      <div class="cc-panel-body">${followRows}</div>
+    </div>
+    <div class="cc-ask surface" data-go="ama">
+      <span class="cc-ask-ic">${icon("sparkle", { size: 18 })}</span>
+      <div class="grow"><b>שאל את הצ׳אטים שלך</b><small>״מה הכי דחוף היום?״</small></div>
+      ${icon("chevL", { size: 16 })}
     </div>`;
 }
 
@@ -2088,9 +2301,13 @@ function buildTiles() {
 }
 
 function wireToday() {
-  document.getElementById("today-back")?.addEventListener("click", () => history.back());
   document.getElementById("today-empty-cta")?.addEventListener("click", () => navigate(todayState.engineOn ? "sources" : "settings"));
   document.getElementById("today-ask-tile")?.addEventListener("click", () => navigate("ama"));
+
+  // Command-center side rail: every panel/row links to its full screen.
+  for (const el of paneMain.querySelectorAll("[data-go]")) {
+    el.addEventListener("click", () => navigate(el.dataset.go));
+  }
 
   const stack = document.querySelector(".today .story-stack");
   if (!stack) return;
@@ -2244,8 +2461,8 @@ function buildEntityNav(backId) {
 
 async function renderPeople() {
   teardownStream();
-  setView("ama"); // reuse the single-pane slot, like Sources / Settings / Today
-  markActiveRow(null);
+  setView("people");
+  setAppbar("people");
   paneMain.innerHTML = `<div class="people"><p class="thread-loading">טוען אנשים…</p></div>`;
   let people = [];
   try {
@@ -2382,8 +2599,8 @@ const DOW_HE = ["א", "ב", "ג", "ד", "ה", "ו", "ש"];
 
 async function renderAgenda() {
   teardownStream();
-  setView("ama");
-  markActiveRow(null);
+  setView("agenda");
+  setAppbar("agenda");
   paneMain.innerHTML = `<div class="agenda-view"><p class="thread-loading">טוען פגישות ומשימות…</p></div>`;
   let meetings = [];
   let todos = [];
@@ -2715,8 +2932,13 @@ function resolveInitialRoute() {
     history.replaceState({ view: "agenda" }, "", hash);
     return { view: "agenda" };
   }
-  history.replaceState({ view: "feed" }, "", location.pathname);
-  return { view: "feed" };
+  if (hash === "#catchup") {
+    history.replaceState({ view: "catchup" }, "", hash);
+    return { view: "catchup" };
+  }
+  // Default landing surface is the daily summary (היום), per the prototype.
+  history.replaceState({ view: "today" }, "", "#today");
+  return { view: "today" };
 }
 
 // ── T2 auth gate (multi-tenant mode) ─────────────────────────────────────────
@@ -3131,9 +3353,7 @@ async function boot() {
   const route = resolveInitialRoute();
   await loadGroupsIntoList();
 
-  if (route.view === "today") {
-    renderToday();
-  } else if (route.view === "detail") {
+  if (route.view === "detail") {
     renderDetail(route.group, true);
   } else if (route.view === "total") {
     renderTotal(true);
@@ -3147,20 +3367,11 @@ async function boot() {
     renderPeople();
   } else if (route.view === "agenda") {
     renderAgenda();
+  } else if (route.view === "catchup") {
+    renderCatchup();
   } else {
-    setView("feed");
-    renderMainWelcome();
+    renderToday();
   }
-}
-
-/** Desktop default for the main pane while on the feed (hidden on mobile). */
-function renderMainWelcome() {
-  paneMain.innerHTML = `
-    <div class="main-welcome">
-      <span class="main-welcome__orb" aria-hidden="true"></span>
-      <p class="main-welcome__txt">בחר צ׳אט מהרשימה<br>או השתמש בפעולות שלמעלה ✨</p>
-    </div>
-  `;
 }
 
 boot();
