@@ -1607,6 +1607,14 @@ function buildSourceRow(s) {
         <option value=""${s.categoryId == null ? " selected" : ""}>ללא</option>
         ${cats}
       </select>
+      ${
+        s.included
+          ? `<button class="src-mute${s.muted ? " is-on" : ""}" data-act="mute" type="button"
+        aria-pressed="${s.muted ? "true" : "false"}"
+        aria-label="${s.muted ? "בטל השתקת הצעות" : "השתק הצעות"}"
+        title="${s.muted ? "ההצעות מושתקות — הצ׳אט עדיין מופיע בעדכונים" : "השתק הצעות (הצ׳אט עדיין מופיע בעדכונים)"}">${icon("moon", { size: 15 })}</button>`
+          : ""
+      }
       <button class="src-remove" data-act="remove" type="button" aria-label="הסר">✕</button>
     </div>`;
 }
@@ -1635,6 +1643,7 @@ async function applyScopeChange(updates) {
     if (u.included !== undefined) row.included = u.included;
     if (u.categoryId !== undefined) row.categoryId = u.categoryId;
     if (u.removed !== undefined) row.removed = u.removed;
+    if (u.muted !== undefined) row.muted = u.muted;
   }
   paintSources();
   try {
@@ -1688,6 +1697,10 @@ function wireSources() {
     row.querySelector('[data-act="toggle"]')?.addEventListener("click", () => {
       const s = sourcesState.scopes.find((x) => x.group === group);
       applyScopeChange([{ group, included: !s.included }]);
+    });
+    row.querySelector('[data-act="mute"]')?.addEventListener("click", () => {
+      const s = sourcesState.scopes.find((x) => x.group === group);
+      applyScopeChange([{ group, muted: !s.muted }]);
     });
     row.querySelector('[data-act="remove"]')?.addEventListener("click", () =>
       applyScopeChange([{ group, removed: true }]),

@@ -2719,6 +2719,15 @@ body::after {
 }
 .src-remove { flex: 0 0 auto; border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: var(--text-md); }
 .src-remove:hover { color: var(--warn); }
+/* §7 per-chat mute: quiet by default, accent-filled when suggestions are muted. */
+.src-mute {
+  flex: 0 0 auto; display: grid; place-items: center;
+  inline-size: 30px; block-size: 30px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line); background: var(--surface); color: var(--muted); cursor: pointer;
+}
+.src-mute:hover { background: var(--hover); color: var(--ink-2); }
+.src-mute.is-on { background: var(--accent-weak); border-color: transparent; color: var(--accent-ink); }
+.src-mute .ic { inline-size: 15px; block-size: 15px; }
 .src-section--removed .src-row--removed { justify-content: space-between; }
 .src-restore { font: inherit; font-size: var(--text-sm); border: 0; background: transparent; color: var(--accent-ink); cursor: pointer; }
 
