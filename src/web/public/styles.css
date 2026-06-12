@@ -2470,6 +2470,26 @@ body::after {
   min-height: 1.2em;
 }
 
+/* S5 — onboarding scan-progress ring (history sync after link connects). */
+.scan-ring {
+  display: block;
+  transform: rotate(-90deg); /* start the fill at 12 o'clock */
+}
+
+.scan-ring__track {
+  fill: none;
+  stroke: rgba(4, 18, 31, 0.12);
+  stroke-width: 8;
+}
+
+.scan-ring__fill {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 8;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.4s ease;
+}
+
 /* ── T5 operator dashboard (/admin) ───────────────────────────────────────── */
 
 .admin-pane {

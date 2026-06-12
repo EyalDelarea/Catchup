@@ -2800,8 +2800,10 @@ function renderOnboarding(initialStatus) {
   });
   es.addEventListener("connected", () => {
     es.close();
-    setOnboardingStatus("✅ מחובר! טוען את האפליקציה…");
-    setTimeout(() => location.reload(), 800);
+    setOnboardingStatus("✅ מחובר! סורקים את הצ׳אטים שלכם…");
+    // S5: the link is up — WhatsApp now streams history. Show a live scan ring
+    // driven by /api/onboarding/progress, then load the app when the sync completes.
+    renderScanProgress();
   });
   es.addEventListener("logged-out", () => {
     setOnboardingStatus("הקישור נדחה. רעננו ונסו שוב.");
@@ -2812,6 +2814,57 @@ function renderOnboarding(initialStatus) {
 function setOnboardingStatus(text) {
   const el = document.getElementById("qr-status");
   if (el) el.textContent = text;
+}
+
+/**
+ * S5 scan-progress ring: after the WhatsApp link connects, WhatsApp streams the
+ * chat history. Replace the QR with a circular progress ring fed by the
+ * /api/onboarding/progress SSE stream; load the app once the sync completes.
+ * A safety timeout reloads anyway if the server never reports 100 (older syncs
+ * report null progress) so onboarding can't get stuck on this screen.
+ */
+function renderScanProgress() {
+  const box = document.getElementById("qr-box");
+  const steps = document.querySelector(".qr-steps");
+  if (steps) steps.remove();
+  if (box) {
+    const C = 2 * Math.PI * 52; // ring circumference (r=52)
+    box.innerHTML = `
+      <svg class="scan-ring" viewBox="0 0 120 120" width="160" height="160" aria-hidden="true">
+        <circle class="scan-ring__track" cx="60" cy="60" r="52" />
+        <circle class="scan-ring__fill" cx="60" cy="60" r="52"
+          style="stroke-dasharray:${C};stroke-dashoffset:${C}" />
+      </svg>
+      <p id="scan-pct" class="qr-hint">0%</p>`;
+  }
+  const done = () => location.reload();
+  // Fallback: if no terminal 'done' arrives within 90s, load the app anyway.
+  let timer = setTimeout(done, 90000);
+  const es = new EventSource("/api/onboarding/progress");
+  activeEventSource = es;
+  es.addEventListener("progress", (e) => {
+    const { progress } = JSON.parse(e.data);
+    if (typeof progress === "number") setScanProgress(progress);
+  });
+  es.addEventListener("done", () => {
+    clearTimeout(timer);
+    es.close();
+    setScanProgress(100);
+    setOnboardingStatus("✅ הסריקה הושלמה! טוען את האפליקציה…");
+    timer = setTimeout(done, 600);
+  });
+  es.onerror = () => setOnboardingStatus("הסריקה ממשיכה ברקע…");
+}
+
+function setScanProgress(pct) {
+  const clamped = Math.max(0, Math.min(100, pct));
+  const fill = document.querySelector(".scan-ring__fill");
+  const label = document.getElementById("scan-pct");
+  if (fill) {
+    const C = 2 * Math.PI * 52;
+    fill.style.strokeDashoffset = String(C * (1 - clamped / 100));
+  }
+  if (label) label.textContent = `${Math.round(clamped)}%`;
 }
 
 /* ── T5 operator dashboard (/admin) ──────────────────────────────────────── */
