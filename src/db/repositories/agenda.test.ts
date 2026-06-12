@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { NormalizedMessage } from "../../importer/types.js";
 import { createTestDatabase } from "../../test/db.js";
 import { listMeetings, listTodos, setTodoDone, upsertMeetings, upsertTodos } from "./agenda.js";
+import { upsertScope } from "./chat-scopes.js";
 import { upsertGroup } from "./groups.js";
 import { getMessageIdByExternalId, insertMessages } from "./messages.js";
 import { upsertParticipant } from "./participants.js";
@@ -36,6 +37,8 @@ describe("agenda + people repositories", () => {
     await insertMessages(pool, [msg]);
     const found = await getMessageIdByExternalId(pool, groupId, "AG-MSG-1");
     msgId = found!.id;
+    // Default-off scoping: People only derives from included chats.
+    await upsertScope(pool, { groupId, included: true });
   }, 120_000);
 
   afterAll(async () => {
@@ -78,5 +81,56 @@ describe("agenda + people repositories", () => {
     expect(dana?.nextStep).toContain("לשלוח דוח");
     expect(dana?.sourceMessageId).toBe(msgId);
     expect(dana?.chat).toBe("agenda-grp");
+  });
+
+  // ── Broadened, scope-aware People derivation ─────────────────────────
+  async function seedMsg(gid: number, name: string, key: string): Promise<void> {
+    const pid = await upsertParticipant(pool, name);
+    await insertMessages(pool, [
+      {
+        groupId: gid,
+        importId: null,
+        source: "import",
+        senderName: name,
+        participantId: pid,
+        messageType: "text",
+        textContent: "hi",
+        mediaFilename: null,
+        mediaPath: null,
+        mediaStatus: null,
+        sentAt: new Date(),
+        dedupeKey: key,
+        externalId: null,
+        fromMe: null,
+      } as NormalizedMessage & { participantId: number },
+    ]);
+  }
+
+  it("derives a 1:1 counterpart from an included chat even without a todo", async () => {
+    const dm = await upsertGroup(pool, { name: "dm-roni", source: "import" });
+    await seedMsg(dm, "רוני", `dm-${Math.random()}`);
+    await upsertScope(pool, { groupId: dm, included: true });
+    await refreshPeople(pool);
+    const roni = (await listPeople(pool)).find((p) => p.name === "רוני");
+    expect(roni).toBeDefined();
+    expect(roni?.nextStep ?? null).toBeNull(); // no todo → no next step, still listed
+  });
+
+  it("does not derive people from un-selected (un-scoped) chats", async () => {
+    const dm = await upsertGroup(pool, { name: "dm-noam", source: "import" });
+    await seedMsg(dm, "נועם", `dm-${Math.random()}`); // no scope row → excluded (default-off)
+    await refreshPeople(pool);
+    expect((await listPeople(pool)).find((p) => p.name === "נועם")).toBeUndefined();
+  });
+
+  it("does not flood with plain group members (not 1:1, not an owner)", async () => {
+    const grp = await upsertGroup(pool, { name: "grp-team", source: "import" });
+    await seedMsg(grp, "אורי", `g-${Math.random()}`);
+    await seedMsg(grp, "גל", `g-${Math.random()}`); // two non-self participants → a group, not a DM
+    await upsertScope(pool, { groupId: grp, included: true });
+    await refreshPeople(pool);
+    const names = (await listPeople(pool)).map((p) => p.name);
+    expect(names).not.toContain("אורי");
+    expect(names).not.toContain("גל");
   });
 });

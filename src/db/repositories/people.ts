@@ -12,37 +12,50 @@ export type PersonRow = {
 };
 
 /**
- * Refresh the derived People projection. A "person" is a participant NAMED as the
- * owner of at least one todo/meeting (keeps the list meaningful — not every
- * participant ever seen). Status is by message recency; open_threads + next_step
- * come from their open todos. Idempotent upsert on (tenant_id, participant_id);
- * fully rebuildable from messages + the agenda tables.
+ * Refresh the derived People projection — the contacts you actually talk to in
+ * the chats you've **included** (scope-consistent with the digest). A person
+ * qualifies when, in an included (non-removed) chat, they have a real message and
+ * are either the **counterpart of a 1:1 chat** (the only non-self participant) or
+ * **named as the owner** of a todo/meeting. Group members who are neither are
+ * left out so the list doesn't flood. Status is by message recency; open_threads
+ * counts the included chats they're active in; next_step comes from their open todos.
+ *
+ * Pure projection: fully rebuilt each call (DELETE + INSERT), so excluding a chat
+ * drops its people and re-including brings them straight back — nothing from an
+ * un-selected chat ever drives the list.
  */
 export async function refreshPeople(client: pg.Pool | pg.PoolClient): Promise<void> {
+  // Rebuild from scratch (RLS scopes this to the current tenant). Nothing
+  // FK-references people.id, so re-issuing ids is safe.
+  await client.query(`DELETE FROM people`);
   await client.query(`
     INSERT INTO people
       (participant_id, status, last_contact_at, open_threads, next_step, next_step_source_message_id)
     SELECT p.id,
       CASE WHEN max(m.sent_at) < now() - interval '14 days' THEN 'cold-lead' ELSE 'active' END,
       max(m.sent_at),
-      COALESCE((SELECT count(DISTINCT t.group_id) FROM todos t
-                WHERE t.owner = p.display_name AND NOT t.done), 0),
+      count(DISTINCT m.group_id),
       (SELECT t.title FROM todos t
        WHERE t.owner = p.display_name AND NOT t.done ORDER BY t.created_at DESC LIMIT 1),
       (SELECT t.source_message_id FROM todos t
        WHERE t.owner = p.display_name AND NOT t.done ORDER BY t.created_at DESC LIMIT 1)
     FROM participants p
-    JOIN messages m ON m.participant_id = p.id
-    WHERE EXISTS (SELECT 1 FROM todos t WHERE t.owner = p.display_name)
-       OR EXISTS (SELECT 1 FROM meetings mt WHERE mt.owner = p.display_name)
+    JOIN messages m
+      ON m.participant_id = p.id AND m.from_me IS NOT TRUE AND m.message_type <> 'system'
+    JOIN chat_scopes cs
+      ON cs.group_id = m.group_id AND cs.included AND cs.removed_at IS NULL
+    WHERE p.display_name IS NOT NULL AND btrim(p.display_name) <> ''
+      AND (
+        m.group_id IN (
+          SELECT dm.group_id FROM messages dm
+          WHERE dm.from_me IS NOT TRUE AND dm.message_type <> 'system'
+          GROUP BY dm.group_id
+          HAVING count(DISTINCT dm.participant_id) = 1
+        )
+        OR EXISTS (SELECT 1 FROM todos t WHERE t.owner = p.display_name)
+        OR EXISTS (SELECT 1 FROM meetings mt WHERE mt.owner = p.display_name)
+      )
     GROUP BY p.id, p.display_name
-    ON CONFLICT (tenant_id, participant_id) DO UPDATE SET
-      status = EXCLUDED.status,
-      last_contact_at = EXCLUDED.last_contact_at,
-      open_threads = EXCLUDED.open_threads,
-      next_step = EXCLUDED.next_step,
-      next_step_source_message_id = EXCLUDED.next_step_source_message_id,
-      updated_at = now()
   `);
 }
 
