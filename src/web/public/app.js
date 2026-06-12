@@ -2408,7 +2408,11 @@ function paintAgenda() {
       </div>
       <div class="duo">
         <section class="duo__col">
-          <h2 class="duo__sec">${icon("calendar", { size: 15 })} פגישות שנאספו</h2>
+          <div class="duo__sechead">
+            <h2 class="duo__sec">${icon("calendar", { size: 15 })} פגישות שנאספו</h2>
+            <a class="ics-export" href="/api/meetings.ics" download="catchapp.ics"
+               title="ייצוא הפגישות לקובץ יומן מקומי — שום דבר לא יוצא מהמכשיר">ייצוא ליומן (.ics)</a>
+          </div>
           ${buildCalendar()}
           ${buildAgendaTimeline()}
         </section>

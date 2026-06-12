@@ -6,7 +6,7 @@ import { currentUser } from "../auth/service.js";
 import { DEFAULT_TENANT_ID, scopedPool } from "../db/tenant-context.js";
 import { makeAdminRoutes } from "./admin-routes.js";
 import { makeAuthRoutes } from "./auth-routes.js";
-import { handleMeetings, handlePeople, handleTodos } from "./handlers/agenda.js";
+import { handleMeetings, handleMeetingsIcs, handlePeople, handleTodos } from "./handlers/agenda.js";
 import { handleAsk } from "./handlers/ask.js";
 import type { ServerDeps } from "./handlers/context.js";
 import { handleGroups } from "./handlers/groups.js";
@@ -185,6 +185,10 @@ function dispatchApi(
   }
   if (req.method === "GET" && url.pathname === "/api/people") {
     void handlePeople(url, res, deps);
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/api/meetings.ics") {
+    void handleMeetingsIcs(url, res, deps);
     return;
   }
   if (req.method === "GET" && url.pathname === "/api/meetings") {
