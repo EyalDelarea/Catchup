@@ -20,30 +20,75 @@ export const DEMO_GROUPS = [
   { name: "קבוצת לימוד", source: "group", messageCount: 0, lastMessageAt: ago(9 * 24 * 60 * MIN) },
 ];
 
-/** Per-group dummy summaries (markdown), keyed by group name — each contextually
- *  coherent so the family chat shows family content, the work chat work content, etc. */
+/** Per-group dummy summaries, keyed by group name — each contextually coherent
+ *  so the family chat shows family content, the work chat work content, etc.
+ *  These mirror the v2 structured shape returned by the API (`getSummaries`):
+ *  `overview` is the full markdown; `tldr`/`topics`/`decisions`/`openQuestions`
+ *  carry the structured fields. Topic bullets may carry a `sourceMessageId` so
+ *  the source-jump is exercised in demo mode. The `^[#N]` markers in `overview`
+ *  prove the citation-stripping path. */
 export const DEMO_SUMMARIES = {
-  "משפחה ❤️": [
-    "**ארוחת שישי:** נפגשים אצל סבתא ב־19:00, אמא מביאה קינוח.",
-    "",
-    "**יום הולדת:** מתאמים הפתעה לאבא בסוף החודש — דנה אוספת כסף למתנה.",
-    "",
-    "**הסעות:** מי אוסף את הילדים מהחוג ביום רביעי? יואב התנדב.",
-  ].join("\n"),
-  "צוות עבודה": [
-    "**פגישת צוות:** נקבעה ליום שלישי 10:00, נטע תשלח הזמנה ביומן.",
-    "",
-    "**משימות פתוחות:** דני מסיים את המסמך עד חמישי; רוני בודקת את התקציב.",
-    "",
-    "**החלטה:** עוברים לכלי הניהול החדש מתחילת החודש הבא.",
-  ].join("\n"),
-  "חברים מהטיול": [
-    "**מפגש הבא:** מציעים פיקניק בפארק בשבת הקרובה אחה״צ.",
-    "",
-    "**תמונות:** מאיה העלתה אלבום מהטיול הצפוני — שווה לראות.",
-    "",
-    "**טיול הבא:** מתלבטים בין הגולן למדבר יהודה לחופשת הסתיו.",
-  ].join("\n"),
+  "משפחה ❤️": {
+    version: 2,
+    overview: [
+      "**ארוחת שישי:** נפגשים אצל סבתא ב־19:00, אמא מביאה קינוח. ^[#1]",
+      "",
+      "**יום הולדת:** מתאמים הפתעה לאבא בסוף החודש — דנה אוספת כסף למתנה. ^[#2]",
+      "",
+      "**הסעות:** מי אוסף את הילדים מהחוג ביום רביעי? יואב התנדב. ^[#3]",
+    ].join("\n"),
+    tldr: "מתואמת ארוחת שישי אצל סבתא, מתוכננת הפתעת יום הולדת לאבא ונסגרו הסעות לחוג.",
+    topics: [
+      { lead: "ארוחת שישי", text: "נפגשים אצל סבתא ב־19:00, אמא מביאה קינוח.", sourceMessageId: 101 },
+      { lead: "יום הולדת", text: "הפתעה לאבא בסוף החודש — דנה אוספת כסף למתנה.", sourceMessageId: 102 },
+    ],
+    decisions: [
+      { text: "יואב אוסף את הילדים מהחוג ביום רביעי." },
+    ],
+    openQuestions: [
+      { text: "מה התקציב למתנה לאבא?" },
+    ],
+  },
+  "צוות עבודה": {
+    version: 2,
+    overview: [
+      "**פגישת צוות:** נקבעה ליום שלישי 10:00, נטע תשלח הזמנה ביומן. ^[#1]",
+      "",
+      "**משימות פתוחות:** דני מסיים את המסמך עד חמישי; רוני בודקת את התקציב. ^[5, #8]",
+      "",
+      "**החלטה:** עוברים לכלי הניהול החדש מתחילת החודש הבא. ^[#12]",
+    ].join("\n"),
+    tldr: "נקבעה פגישת צוות לשלישי, חולקו משימות לסיום השבוע והוחלט לעבור לכלי ניהול חדש.",
+    topics: [
+      { lead: "פגישת צוות", text: "נקבעה ליום שלישי 10:00, נטע תשלח הזמנה ביומן.", sourceMessageId: 201 },
+      { lead: "משימות", text: "דני מסיים את המסמך עד חמישי; רוני בודקת את התקציב.", sourceMessageId: 202 },
+    ],
+    decisions: [
+      { text: "עוברים לכלי הניהול החדש מתחילת החודש הבא." },
+    ],
+    openQuestions: [
+      { text: "מי מוביל את ההטמעה של הכלי החדש?" },
+    ],
+  },
+  "חברים מהטיול": {
+    version: 2,
+    overview: [
+      "**מפגש הבא:** מציעים פיקניק בפארק בשבת הקרובה אחה״צ. ^[#1]",
+      "",
+      "**תמונות:** מאיה העלתה אלבום מהטיול הצפוני — שווה לראות. ^[#4]",
+      "",
+      "**טיול הבא:** מתלבטים בין הגולן למדבר יהודה לחופשת הסתיו. ^[#7]",
+    ].join("\n"),
+    tldr: "מתוכנן פיקניק בשבת, מאיה שיתפה אלבום מהטיול הצפוני והקבוצה מתלבטת ביעד הבא.",
+    topics: [
+      { lead: "מפגש הבא", text: "פיקניק בפארק בשבת הקרובה אחה״צ.", sourceMessageId: 301 },
+      { lead: "תמונות", text: "מאיה העלתה אלבום מהטיול הצפוני.", sourceMessageId: 302 },
+    ],
+    decisions: [],
+    openQuestions: [
+      { text: "לאן יוצאים בחופשת הסתיו — הגולן או מדבר יהודה?" },
+    ],
+  },
 };
 
 /** Fallback summary for any group without a tailored entry. */

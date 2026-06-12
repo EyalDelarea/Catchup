@@ -146,10 +146,11 @@ function navigate(view, arg) {
     history.pushState({ view: "ama", scope: arg ?? null }, "", hash);
     renderAma(arg ?? null);
   } else if (view === "thread" && arg) {
+    const mPart = arg.aroundId != null ? `&m=${arg.aroundId}` : "";
     history.pushState(
       { view: "thread", chat: arg.chat, aroundId: arg.aroundId },
       "",
-      `#thread=${encodeURIComponent(arg.chat)}&m=${arg.aroundId}`,
+      `#thread=${encodeURIComponent(arg.chat)}${mPart}`,
     );
     renderThread(arg.chat, arg.aroundId);
   } else if (view === "sources") {
@@ -528,7 +529,14 @@ function renderDetail(group, autoStart) {
       if (DEMO === "tube") {
         setSummaryRegion(buildPhaseTube({ phase: "read", messages: 247, elapsed: 12 }));
       } else {
-        setSummaryRegion(buildSummaryCardDone(DEMO_SUMMARIES[group] || DEMO_SUMMARY, "נשמר • 8.4 שניות • 247 הודעות", false));
+        const demo = DEMO_SUMMARIES[group] || DEMO_SUMMARY;
+        const demoMeta = { createdAt: new Date().toISOString(), messages: 247 };
+        detailState.summaryText = stripCitations(demo.overview ?? demo);
+        setSummaryRegion(
+          demo && typeof demo === "object"
+            ? buildStructuredSummaryCard(demo, demoMeta, false)
+            : buildSummaryCardDone(demo, demoMeta, false),
+        );
       }
       return;
     }
@@ -547,10 +555,10 @@ async function runDetailWithCacheFirst(group) {
 
   if (cached) {
     detailState.cachedSummaryText = cached.output.overview;
-    detailState.summaryText = cached.output.overview; // so copy works on the cached card
+    detailState.summaryText = stripCitations(cached.output.overview); // so copy works on the cached card
     detailState.showingCachedCard = true;
-    const statusText = `מהמטמון • נוצר ב־${fmtTime(cached.createdAt)}`;
-    setSummaryRegion(buildStructuredSummaryCard(cached.output, statusText, false));
+    const meta = { createdAt: cached.createdAt, messages: cached.messageCount };
+    setSummaryRegion(buildStructuredSummaryCard(cached.output, meta, false));
     const openedGroup = group;
     setTimeout(() => {
       if (shouldStartBackgroundRefresh({
@@ -569,24 +577,26 @@ async function runDetailWithCacheFirst(group) {
 }
 
 function buildDetailShell(group, ago, fresh) {
-  const freshLine = ago
-    ? `<div class="detail-gfresh">${fresh ? '<span class="gcard__live">● פעיל</span> · ' : ""}${escHtml(ago)}</div>`
-    : "";
+  const name = formatGroupName(group);
+  const meta = cachedGroups.find((g) => g.name === group) || { name: group };
+  const hue = meta.hue ?? hueFromName(group);
+  // Sub-label under the name: live dot + "active/who" or last-seen relative time.
+  const who = meta.who || (meta.messageCount != null ? `${meta.messageCount} הודעות` : "");
+  const subLabel = fresh ? "פעיל עכשיו" : who || ago || "מקור מקושר";
   return `
     <div class="detail-view">
-      <nav class="detail-nav" aria-label="ניווט">
-        <button class="back-btn" id="back-btn" aria-label="חזרה לרשימת הקבוצות">
-          <span class="back-btn__arrow" aria-hidden="true">›</span> חזרה
-        </button>
-      </nav>
-
-      <div class="detail-ghead">
-        <h2 class="detail-gtitle">${escHtml(formatGroupName(group))}</h2>
-        ${freshLine}
+      <div class="chat-head">
+        <button class="iconbtn" id="back-btn" type="button" aria-label="חזרה לרשימת הצ׳אטים">${icon("chevR", { size: 19 })}</button>
+        ${avatarHtml(name, hue, 40)}
+        <div class="grow">
+          <b>${escHtml(name)}</b>
+          <small><span class="dot-live" aria-hidden="true"></span>${escHtml(subLabel)}</small>
+        </div>
+        <span class="src" id="src-jump" role="button" tabindex="0">${icon("source", { size: 13 })}מקור מקושר</span>
       </div>
 
-      <div class="chips mode-chips" role="group" aria-label="בחירת טווח זמן" id="mode-chips">
-        <button class="chip chip--active" data-chip="catchup" aria-pressed="true">מה שפספסתי</button>
+      <div class="chips mode-chips sum-ranges" role="group" aria-label="בחירת טווח זמן" id="mode-chips">
+        <button class="chip chip--active on" data-chip="catchup" aria-pressed="true">מה שפספסתי</button>
         <button class="chip" data-chip="24h" aria-pressed="false">24 שעות</button>
         <button class="chip" data-chip="3d" aria-pressed="false">3 ימים</button>
         <button class="chip" data-chip="week" aria-pressed="false">שבוע</button>
@@ -640,13 +650,28 @@ function wireDetailButtons(group) {
   document.getElementById("range-go")?.addEventListener("click", () => onRangeSubmit());
   document.getElementById("range-cancel")?.addEventListener("click", () => closeRangeSheet());
   document.getElementById("ama-bar-group")?.addEventListener("click", () => navigate("ama", group));
+  // "מקור מקושר" chip in the header → reveal the full conversation thread.
+  const srcChip = document.getElementById("src-jump");
+  srcChip?.addEventListener("click", () => revealThread());
+  srcChip?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); revealThread(); }
+  });
   // Source-jump: a structured-summary bullet → the chat thread, pulsing the source.
   document.getElementById("summary-region")?.addEventListener("click", (e) => {
-    const jump = e.target.closest?.(".sum-jump");
-    if (!jump || !detailState.group) return;
-    const id = Number(jump.dataset.id);
-    if (Number.isFinite(id)) navigate("thread", { chat: detailState.group, aroundId: id });
+    if (!detailState.group) return;
+    const jump = e.target.closest?.("[data-source-id]");
+    if (jump) {
+      const id = Number(jump.dataset.sourceId);
+      if (Number.isFinite(id)) { navigate("thread", { chat: detailState.group, aroundId: id }); return; }
+    }
+    // "הצג את השיחה" action → open the conversation thread (no specific source).
+    if (e.target.closest?.("#show-thread-btn")) revealThread();
   });
+}
+
+/** Open the full conversation thread for the current chat. */
+function revealThread() {
+  if (detailState.group) navigate("thread", { chat: detailState.group });
 }
 
 function onChipClick(chip) {
@@ -671,6 +696,7 @@ function setActiveChip(chip) {
   container.querySelectorAll(".chip[data-chip]").forEach((btn) => {
     const isActive = btn.dataset.chip === chip;
     btn.classList.toggle("chip--active", isActive);
+    btn.classList.toggle("on", isActive);
     btn.setAttribute("aria-pressed", isActive ? "true" : "false");
   });
 }
@@ -791,7 +817,7 @@ function onToken(data) {
     setSummaryRegion(buildSummaryCardStreaming(detailState.summaryText, ""));
     body = document.querySelector(".summary-card--streaming .summary-card__body");
   } else {
-    body.innerHTML = `${renderMarkdown(detailState.summaryText)}<span class="caret" aria-hidden="true"></span>`;
+    body.innerHTML = `${renderMarkdown(stripCitations(detailState.summaryText))}<span class="caret" aria-hidden="true"></span>`;
     body.scrollTop = body.scrollHeight;
   }
 }
@@ -805,9 +831,13 @@ function onCached(data) {
     teardownStream();
     return;
   }
-  detailState.summaryText = data.summary;
-  const statusText = `אין חדש — מתוך מטמון • נוצר ב־${fmtTime(data.generatedAt)}`;
-  setSummaryRegion(buildSummaryCardDone(detailState.summaryText, statusText, false));
+  detailState.summaryText = stripCitations(typeof data.summary === "string" ? data.summary : (data.summary?.overview ?? ""));
+  const meta = { createdAt: data.generatedAt };
+  setSummaryRegion(
+    typeof data.summary === "object" && data.summary
+      ? buildStructuredSummaryCard(data.summary, meta, false)
+      : buildSummaryCardDone(detailState.summaryText, meta, false),
+  );
   teardownStream();
 }
 
@@ -827,20 +857,16 @@ function onEmpty() {
 function onDone(data) {
   clearSyncingTimer();
   detailState.phase = "done";
-  const totalSec = ((Date.now() - detailState.started) / 1000).toFixed(1);
-  const parts = [`נשמר • ${totalSec} שניות`];
-  if (data.fetchMs > 0) parts.push(`טעינה ${(data.fetchMs / 1000).toFixed(1)}ש׳ (${data.fetched} הודעות)`);
-  if (data.summarizeMs) parts.push(`סיכום ${(data.summarizeMs / 1000).toFixed(1)}ש׳`);
   showUpdatingChip(false);
   detailState.showingCachedCard = false;
-  // Prefer the structured summary carried on `done`; keep summaryText as the full
-  // markdown so the copy button still copies the verbatim summary.
-  if (data.summary?.overview) detailState.summaryText = data.summary.overview;
-  const statusText = parts.join(" • ");
+  // Prefer the structured summary carried on `done`; keep summaryText as the
+  // cleaned overview so the copy button copies a citation-free summary.
+  if (data.summary?.overview) detailState.summaryText = stripCitations(data.summary.overview);
+  const meta = { createdAt: new Date().toISOString(), messages: data.fetched };
   setSummaryRegion(
     data.summary
-      ? buildStructuredSummaryCard(data.summary, statusText, !!data.stale)
-      : buildSummaryCardDone(detailState.summaryText, statusText, !!data.stale),
+      ? buildStructuredSummaryCard(data.summary, meta, !!data.stale)
+      : buildSummaryCardDone(detailState.summaryText, meta, !!data.stale),
   );
   teardownStream();
   if (detailState.group) loadHistory(detailState.group);
@@ -916,89 +942,131 @@ function setTubeFill(pct) {
   if (liq) liq.style.width = `${pct}%`;
 }
 
+/** The clean `.sum-meta` line: sparkle + "סיכום CatchApp · נוצר {time} · {N} הודעות". */
+function sumMetaLine({ createdAt, messages } = {}) {
+  const when = createdAt ? `נוצר ${escHtml(fmtMetaTime(createdAt))}` : "נוצר היום";
+  const count = Number.isFinite(messages) && messages > 0 ? ` · ${messages} הודעות` : "";
+  return `<div class="sum-meta">${icon("sparkle", { size: 12 })}<span>סיכום CatchApp · ${when}${count}</span></div>`;
+}
+
+/** Short "today HH:MM" style time for the meta line (falls back to full locale). */
+function fmtMetaTime(iso) {
+  try {
+    const d = new Date(iso);
+    const t = d.toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" });
+    const sameDay = new Date().toDateString() === d.toDateString();
+    return sameDay ? `היום ${t}` : `${d.toLocaleDateString("he-IL")} ${t}`;
+  } catch {
+    return fmtTime(iso);
+  }
+}
+
+/** The two `.sum-actions` buttons: reveal the thread + copy the summary. */
+function sumActions() {
+  return `
+    <div class="sum-actions">
+      <button class="btn btn-primary" id="show-thread-btn" type="button">${icon("message", { size: 15 })}הצג את השיחה</button>
+      <button class="btn btn-ghost copy-btn" id="copy-btn" type="button" aria-label="העתק סיכום">${icon("copy", { size: 15 })}העתק סיכום</button>
+    </div>`;
+}
+
+function staleNote(stale) {
+  return stale
+    ? `<div class="stale-note" role="alert"><span aria-hidden="true">⚠️</span><span>נתונים עלולים להיות לא עדכניים</span></div>`
+    : "";
+}
+
+/** Streaming look: sparkle "CatchApp כותב" + dots, cleaned overview filling in. */
 function buildSummaryCardStreaming(text) {
   if (!text.length) return buildPhaseTube({ phase: "summarize", elapsed: 0 });
   return `
-    <div class="glass-card summary-card summary-card--streaming" style="animation: summary-fade-in 0.35s ease both">
-      <div class="summary-card__meta" style="justify-content:flex-start;gap:6px">
+    <div class="glass-card surface sum-card summary-card--streaming" style="animation: summary-fade-in 0.35s ease both">
+      <div class="sum-meta">
         ${icon("sparkle", { size: 12 })}<span class="writing">CatchApp כותב</span><span class="ob-dots" aria-hidden="true"><i></i><i></i><i></i></span>
       </div>
-      <div class="summary-card__body summary-card__body--rendered">${renderMarkdown(text)}<span class="caret" aria-hidden="true"></span></div>
+      <div class="summary-card__body summary-card__body--rendered">${renderMarkdown(stripCitations(text))}<span class="caret" aria-hidden="true"></span></div>
     </div>
   `;
 }
 
-function buildSummaryCardDone(text, statusText, stale) {
+/** Legacy / v1 card: render the cleaned overview markdown (no raw citation markers). */
+function buildSummaryCardDone(text, meta, stale) {
   return `
-    ${stale ? `
-      <div class="stale-note" role="alert">
-        <span aria-hidden="true">⚠️</span><span>נתונים עלולים להיות לא עדכניים</span>
-      </div>` : ""}
-    <div class="glass-card summary-card">
-      <div class="summary-card__meta"><span>${escHtml(statusText)}</span></div>
-      <div class="summary-card__body summary-card__body--rendered">${renderMarkdown(text)}</div>
-      <div class="summary-actions">
-        <button class="copy-btn" id="copy-btn" aria-label="העתק סיכום">📋 העתק סיכום</button>
-      </div>
+    ${staleNote(stale)}
+    <div class="glass-card surface sum-card">
+      ${sumMetaLine(meta)}
+      <section><div class="summary-card__body summary-card__body--rendered">${renderMarkdown(stripCitations(text))}</div></section>
+      ${sumActions()}
     </div>
   `;
 }
 
-/** Render a section's bullets; those with a sourceMessageId become source-jump buttons. */
-function renderSumBullets(bullets) {
+/** Render topic bullets (`.sum-jump` — tappable, jump to the cited message). */
+function renderJumpBullets(bullets) {
   return bullets
     .map((b) => {
-      const text = escHtml(b.text);
-      if (b.sourceMessageId) {
-        return `<li><button type="button" class="sum-jump" data-id="${b.sourceMessageId}">` +
-          `<span class="sum-jump__text">${text}</span>` +
-          `<span class="sum-jump__icon" aria-hidden="true">↩︎</span></button></li>`;
-      }
-      return `<li class="sum-item">${text}</li>`;
+      const lead = b.lead ? `<b>${escHtml(stripCitations(b.lead))}:</b> ` : "";
+      const text = escHtml(stripCitations(b.text));
+      const jumpAttrs = b.sourceMessageId
+        ? ` data-source-id="${b.sourceMessageId}" title="קפיצה למקור בשיחה"`
+        : "";
+      const jumpIc = b.sourceMessageId ? icon("source", { size: 12, cls: "sum-jump-ic" }) : "";
+      return `<li${jumpAttrs}>${lead}${text}${jumpIc}</li>`;
+    })
+    .join("");
+}
+
+/** Render plain (non-jump) bullets. */
+function renderPlainBullets(bullets) {
+  return bullets
+    .map((b) => {
+      const lead = b.lead ? `<b>${escHtml(stripCitations(b.lead))}:</b> ` : "";
+      return `<li>${lead}${escHtml(stripCitations(b.text))}</li>`;
     })
     .join("");
 }
 
 /**
- * Structured summary-first card (§3). Falls back to the markdown card for legacy
- * (version !== 2) or missing structure, so nothing ever fails to render.
- * @param {{version:number, overview:string, tldr:string, topics:Array, decisions:Array, openQuestions:Array}} summary
+ * Structured summary-first card (§3). For v2 rows renders tldr + sectioned
+ * bullets; legacy (version !== 2) falls back to the cleaned-overview card so
+ * nothing ever fails to render.
+ * @param {{version:number, overview:string, tldr:string, topics:Array, decisions:Array, actionItems:Array, openQuestions:Array}} summary
  */
-function buildStructuredSummaryCard(summary, statusText, stale) {
+function buildStructuredSummaryCard(summary, meta, stale) {
   if (!summary || summary.version !== 2) {
-    return buildSummaryCardDone(summary?.overview ?? "", statusText, stale);
+    return buildSummaryCardDone(summary?.overview ?? "", meta, stale);
   }
-  const section = (title, bullets) =>
-    bullets && bullets.length
-      ? `<div class="sum-section"><h4 class="sum-section__title">${title}</h4>` +
-        `<ul class="sum-list">${renderSumBullets(bullets)}</ul></div>`
-      : "";
   const tldr = summary.tldr
-    ? `<div class="sum-section sum-section--tldr"><p class="sum-tldr">${escHtml(summary.tldr)}</p></div>`
+    ? `<section><h4 class="sum-h">תקציר</h4><p>${escHtml(stripCitations(summary.tldr))}</p></section>`
+    : "";
+  const topics = summary.topics?.length
+    ? `<section><h4 class="sum-h">נושאים עיקריים</h4><ul class="sum-list sum-jump">${renderJumpBullets(summary.topics)}</ul></section>`
+    : "";
+  const decisionBullets = summary.decisions?.length ? summary.decisions : summary.actionItems;
+  const decisions = decisionBullets?.length
+    ? `<section><h4 class="sum-h">החלטות ומשימות</h4><ul class="sum-list">${renderPlainBullets(decisionBullets)}</ul></section>`
+    : "";
+  const questions = summary.openQuestions?.length
+    ? `<section><h4 class="sum-h">שאלות פתוחות</h4><ul class="sum-list">${renderPlainBullets(summary.openQuestions)}</ul></section>`
     : "";
   return `
-    ${stale ? `
-      <div class="stale-note" role="alert">
-        <span aria-hidden="true">⚠️</span><span>נתונים עלולים להיות לא עדכניים</span>
-      </div>` : ""}
-    <div class="glass-card summary-card sum-card">
-      <div class="summary-card__meta"><span>${escHtml(statusText)}</span></div>
+    ${staleNote(stale)}
+    <div class="glass-card surface sum-card">
+      ${sumMetaLine(meta)}
       ${tldr}
-      ${section("נושאים עיקריים", summary.topics)}
-      ${section("החלטות ומשימות", summary.decisions)}
-      ${section("שאלות פתוחות", summary.openQuestions)}
-      <div class="summary-actions">
-        <button class="copy-btn" id="copy-btn" aria-label="העתק סיכום">📋 העתק סיכום</button>
-      </div>
+      ${topics}
+      ${decisions}
+      ${questions}
+      ${sumActions()}
     </div>
   `;
 }
 
 function buildEmptyResult() {
   return `
-    <div class="glass-card summary-card">
-      <div class="summary-card__meta"><span>אין חדש</span></div>
-      <p class="detail-status">אין הודעות חדשות לסיכום.</p>
+    <div class="glass-card surface sum-card">
+      <div class="sum-meta">${icon("sparkle", { size: 12 })}<span>אין חדש</span></div>
+      <p>אין הודעות חדשות לסיכום.</p>
     </div>
   `;
 }
@@ -1037,12 +1105,14 @@ function wireCopyButton() {
         document.body.appendChild(ta); ta.focus(); ta.select();
         document.execCommand("copy"); document.body.removeChild(ta);
       }
-      btn.textContent = "הועתק!";
+      const original = btn.innerHTML;
+      btn.innerHTML = `${icon("check", { size: 15 })}הועתק`;
       btn.classList.add("copy-btn--confirm");
-      setTimeout(() => { btn.textContent = "📋 העתק סיכום"; btn.classList.remove("copy-btn--confirm"); }, 2000);
+      setTimeout(() => { btn.innerHTML = original; btn.classList.remove("copy-btn--confirm"); }, 2000);
     } catch {
-      btn.textContent = "לא ניתן להעתיק";
-      setTimeout(() => { btn.textContent = "📋 העתק סיכום"; }, 2000);
+      const original = btn.innerHTML;
+      btn.innerHTML = "לא ניתן להעתיק";
+      setTimeout(() => { btn.innerHTML = original; }, 2000);
     }
   });
 }
@@ -1126,7 +1196,7 @@ function _renderHistoryToggle(section, listEl, count, error) {
 function buildHistoryRow(s) {
   const label = summaryTypeLabel(s.summaryType);
   const ts = fmtTime(s.createdAt);
-  const bodyText = s.output?.overview ?? "";
+  const bodyText = stripCitations(s.output?.overview ?? "");
   const dataText = bodyText.replace(/"/g, "&quot;");
   return `
     <div class="history-row glass-card" data-id="${s.id}" aria-expanded="false">
