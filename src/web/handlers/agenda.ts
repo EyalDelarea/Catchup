@@ -1,6 +1,6 @@
 import type http from "node:http";
 import { listMeetings, listTodos, setTodoDone } from "../../db/repositories/agenda.js";
-import { listPeople } from "../../db/repositories/people.js";
+import { listPeople, refreshPeople } from "../../db/repositories/people.js";
 import { buildIcs } from "../../summarization/build-ics.js";
 import type { ServerDeps } from "./context.js";
 import { readJsonBody } from "./scopes.js";
@@ -14,6 +14,9 @@ export async function handlePeople(
   deps: ServerDeps,
 ): Promise<void> {
   try {
+    // Rebuild the projection on open so newly-included chats show up immediately
+    // (otherwise People would stay empty until the next summary run). Best-effort.
+    await refreshPeople(deps.pool).catch(() => {});
     const people = await listPeople(deps.pool);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(people.map((p) => ({ ...p, lastContactAt: iso(p.lastContactAt) }))));
