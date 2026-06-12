@@ -2557,9 +2557,9 @@ function buildInfoCard(card, index, total) {
 function buildSrcChip(card) {
   const label = escHtml(formatGroupName(card.chat));
   if (card.sourceMessageId == null) {
-    return `<span class="src">${icon("arrowL", { size: 13 })}<span>${label}</span></span>`;
+    return `<span class="src">${icon("source", { size: 13 })}<span>${label}</span></span>`;
   }
-  return `<button type="button" class="src" data-src-jump="1" data-chat="${escHtml(card.chat)}" data-id="${card.sourceMessageId}">${icon("arrowL", { size: 13 })}<span>${label}</span></button>`;
+  return `<button type="button" class="src" data-src-jump="1" data-chat="${escHtml(card.chat)}" data-id="${card.sourceMessageId}">${icon("source", { size: 13 })}<span>${label}</span></button>`;
 }
 
 function buildDoneState(tally) {
@@ -2774,9 +2774,9 @@ function buildSrcJump({ chat, sourceMessageId, label }) {
   const text = escHtml(label ?? (chat ? formatGroupName(chat) : "מקור"));
   const id = Number(sourceMessageId);
   if (!chat || !Number.isFinite(id)) {
-    return `<span class="srcchip">${icon("arrowL", { size: 13 })}<span>${text}</span></span>`;
+    return `<span class="srcchip">${icon("source", { size: 13 })}<span>${text}</span></span>`;
   }
-  return `<button type="button" class="srcchip" data-src-jump="1" data-chat="${escHtml(chat)}" data-id="${id}">${icon("arrowL", { size: 13 })}<span>${text}</span></button>`;
+  return `<button type="button" class="srcchip" data-src-jump="1" data-chat="${escHtml(chat)}" data-id="${id}">${icon("source", { size: 13 })}<span>${text}</span></button>`;
 }
 
 /** Delegate source-chip clicks within a container to the S2 thread jump. */
@@ -2835,14 +2835,11 @@ function paintPeople() {
 
   const sel = Math.max(0, Math.min(peopleState.selected, people.length - 1));
   peopleState.selected = sel;
-  const warmWaiting = people.filter((p) => p.openThreads > 0).length;
-
   paneMain.innerHTML = `
     <div class="people">
       ${buildEntityNav("people-back")}
       <div class="entity-head">
         <div class="entity-head__title">${icon("users", { size: 18 })} אנשים</div>
-        <span class="entity-count mono" dir="ltr">${warmWaiting}/${people.length}</span>
       </div>
       <div class="split">
         <div class="ppl-list" role="list">
@@ -2869,7 +2866,7 @@ function buildPersonRow(p, isSel) {
           <span class="entity-badge${meta.warn ? " is-warn" : ""}">${escHtml(meta.label)}</span>
         </div>
         <p class="ppl-row__note">${note}</p>
-        <div class="ppl-row__meta">קשר אחרון · ${escHtml(last)}${open}</div>
+        <div class="ppl-row__meta"><span class="muted">${escHtml(last)}</span>${open}</div>
       </div>
     </button>`;
 }
@@ -2896,7 +2893,7 @@ function buildPersonDetail(p) {
         <div class="ppl-detail__row">${icon("message", { size: 16 })}<span>שיחות פתוחות</span><b class="mono" dir="ltr">${p.openThreads}</b></div>
       </div>
       <div class="ppl-detail__divide"></div>
-      <div class="ppl-next__kicker">${icon("target", { size: 13 })} הצעד הבא</div>
+      <div class="ppl-next__kicker">הצעד הבא</div>
       <div class="ppl-next surface">
         <span>${p.nextStep ? escHtml(p.nextStep) : "אין צעד פתוח כרגע"}</span>
         ${p.nextStep ? chip : ""}

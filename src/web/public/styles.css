@@ -3396,12 +3396,11 @@ button.srcchip:hover { filter: brightness(0.97); }
 .ppl-row {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: 14px;
   text-align: start;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
+  padding: 16px;
+  border: 1px solid transparent;
   border-radius: var(--radius-lg);
-  background: var(--surface);
   cursor: pointer;
   font-family: inherit;
   color: var(--ink);
@@ -3416,15 +3415,15 @@ button.srcchip:hover { filter: brightness(0.97); }
   gap: 8px;
   flex-wrap: wrap;
   font-weight: 700;
-  font-size: var(--text-base);
+  font-size: 15.5px;
   color: var(--ink);
 }
-.ppl-row__note { margin: 3px 0 0; font-size: var(--text-sm); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
-.ppl-row__meta { margin-top: 5px; font-size: var(--text-xs); color: var(--muted); }
+.ppl-row__note { margin: 3px 0 0; font-size: 13.5px; color: var(--ink-2); line-height: 1.5; }
+.ppl-row__meta { margin-top: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 
 .ppl-detail { padding: 20px; align-self: flex-start; }
 .ppl-detail__head { display: flex; align-items: center; gap: 13px; margin-bottom: 16px; }
-.ppl-detail__name { font-size: var(--text-lg); font-weight: 800; letter-spacing: -0.01em; color: var(--ink); }
+.ppl-detail__name { font-size: 18px; font-weight: 800; letter-spacing: -0.01em; color: var(--ink); }
 .ppl-detail__id .entity-badge { margin-top: 5px; }
 .ppl-detail__divide { block-size: 1px; background: var(--line); margin-block: 14px; }
 .ppl-detail__rows { display: flex; flex-direction: column; gap: 12px; }
@@ -3433,15 +3432,11 @@ button.srcchip:hover { filter: brightness(0.97); }
 .ppl-detail__row span { flex: 1 1 auto; color: var(--ink-2); }
 .ppl-detail__row b { color: var(--ink); }
 .ppl-next__kicker {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   margin-bottom: 8px;
-  font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  color: var(--accent-ink);
-  text-transform: uppercase;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--muted);
 }
 .ppl-next {
   display: flex;
