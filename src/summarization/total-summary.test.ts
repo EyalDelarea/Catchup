@@ -1,5 +1,6 @@
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { upsertScope } from "../db/repositories/chat-scopes.js";
 import { upsertGroup } from "../db/repositories/groups.js";
 import { insertMessages } from "../db/repositories/messages.js";
 import { upsertParticipant } from "../db/repositories/participants.js";
@@ -55,6 +56,9 @@ describe("generateTotalSummary", () => {
     const fam = await upsertGroup(pool, { name: "Family", source: "import" });
     await seed(work, new Date("2026-06-06T09:00:00.000Z"), "w1", "תקציב");
     await seed(fam, new Date("2026-06-06T09:30:00.000Z"), "f1", "שבת");
+    // Default-off scoping: include the seeded chats so they're summarized.
+    await upsertScope(pool, { groupId: work, included: true });
+    await upsertScope(pool, { groupId: fam, included: true });
 
     const statuses: string[] = [];
     const out = await generateTotalSummary(
@@ -75,6 +79,8 @@ describe("generateTotalSummary", () => {
     const bbb = await upsertGroup(pool, { name: "Bbb", source: "import" });
     await seed(aaa, new Date("2026-06-07T09:00:00.000Z"), "a1", "BOOM");
     await seed(bbb, new Date("2026-06-07T09:30:00.000Z"), "b1", "hello");
+    await upsertScope(pool, { groupId: aaa, included: true });
+    await upsertScope(pool, { groupId: bbb, included: true });
 
     async function* fakeStreamWithFailure(prompt: SummaryPrompt): AsyncGenerator<string> {
       if (prompt.system.includes("דורש תשומת לב")) {

@@ -39,7 +39,7 @@ describe("selectActiveGroups", () => {
     await insertMessages(pool, [row]);
   }
 
-  it("returns only chats with content in the range, ordered by name", async () => {
+  it("returns only included chats with content in the range, ordered by name", async () => {
     const work = await upsertGroup(pool, { name: "Work", source: "import" });
     const family = await upsertGroup(pool, { name: "Family", source: "import" });
     const old = await upsertGroup(pool, { name: "Old", source: "import" });
@@ -48,6 +48,8 @@ describe("selectActiveGroups", () => {
     await seed(work, new Date("2026-06-06T09:00:00.000Z"), "w1");
     await seed(family, new Date("2026-06-06T10:00:00.000Z"), "f1");
     await seed(old, new Date("2026-06-01T10:00:00.000Z"), "o1"); // before `since` → excluded
+    // Default-off: a chat is summarized only when explicitly included.
+    for (const groupId of [work, family, old]) await upsertScope(pool, { groupId, included: true });
 
     const groups = await selectActiveGroups(pool, { since });
     expect(groups.map((g) => g.name)).toEqual(["Family", "Work"]);
@@ -56,6 +58,7 @@ describe("selectActiveGroups", () => {
   it("excludes chats whose only in-range messages are system/empty", async () => {
     const since = new Date("2026-06-06T00:00:00.000Z");
     const sys = await upsertGroup(pool, { name: "SystemOnly", source: "import" });
+    await upsertScope(pool, { groupId: sys, included: true });
     const participantId = await upsertParticipant(pool, "Dana");
     await insertMessages(pool, [
       {
@@ -78,20 +81,24 @@ describe("selectActiveGroups", () => {
     expect(groups.find((g) => g.name === "SystemOnly")).toBeUndefined();
   });
 
-  it("excludes scope-excluded and removed chats, keeps un-scoped (default-on)", async () => {
+  it("keeps only explicitly-included chats; excludes un-scoped, excluded and removed (default-off)", async () => {
     const since = new Date("2026-06-07T00:00:00.000Z");
     const ts = new Date("2026-06-07T09:00:00.000Z");
     const keep = await upsertGroup(pool, { name: "ScopeKeep", source: "import" });
+    const none = await upsertGroup(pool, { name: "ScopeNone", source: "import" });
     const drop = await upsertGroup(pool, { name: "ScopeDrop", source: "import" });
     const gone = await upsertGroup(pool, { name: "ScopeGone", source: "import" });
     await seed(keep, ts, "sk1");
+    await seed(none, ts, "sn1");
     await seed(drop, ts, "sd1");
     await seed(gone, ts, "sg1");
+    await upsertScope(pool, { groupId: keep, included: true });
     await upsertScope(pool, { groupId: drop, included: false });
-    await upsertScope(pool, { groupId: gone, removed: true });
+    await upsertScope(pool, { groupId: gone, included: true, removed: true });
 
     const names = (await selectActiveGroups(pool, { since })).map((g) => g.name);
     expect(names).toContain("ScopeKeep");
+    expect(names).not.toContain("ScopeNone"); // un-scoped is now excluded
     expect(names).not.toContain("ScopeDrop");
     expect(names).not.toContain("ScopeGone");
   });

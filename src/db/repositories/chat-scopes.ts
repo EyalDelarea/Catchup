@@ -21,7 +21,8 @@ export type ScopeUpdate = {
 
 /**
  * All groups LEFT-JOINed to their scope. A group with no chat_scopes row reports
- * `included: true, categoryId: null, removed: false` — the default-on rule.
+ * `included: false, categoryId: null, removed: false` — the default-OFF rule:
+ * nothing is summarized until the user explicitly includes it.
  */
 export async function listScopes(client: pg.Pool | pg.PoolClient): Promise<ScopeRow[]> {
   const { rows } = await client.query<{
@@ -38,7 +39,7 @@ export async function listScopes(client: pg.Pool | pg.PoolClient): Promise<Scope
            g.source,
            COUNT(m.id) AS message_count,
            MAX(m.sent_at) AS last_message_at,
-           COALESCE(cs.included, true) AS included,
+           COALESCE(cs.included, false) AS included,
            cs.category_id,
            (cs.removed_at IS NOT NULL) AS removed
     FROM groups g
@@ -110,17 +111,17 @@ export async function upsertScopes(
 }
 
 /**
- * The digest filter: group ids that should be summarized. A group with no scope
- * row is included (default-on); explicit `included=false` or a set `removed_at`
- * excludes it.
+ * The digest filter: group ids that should be summarized. Default-OFF — only a
+ * group with an explicit `included = true` row (and no `removed_at`) qualifies;
+ * an unscoped group is excluded until the user opts it in.
  */
 export async function listIncludedGroupIds(client: pg.Pool | pg.PoolClient): Promise<number[]> {
   const { rows } = await client.query<{ id: string }>(
     `
     SELECT g.id
     FROM groups g
-    LEFT JOIN chat_scopes cs ON cs.group_id = g.id
-    WHERE cs.id IS NULL OR (cs.included AND cs.removed_at IS NULL)
+    JOIN chat_scopes cs ON cs.group_id = g.id
+    WHERE cs.included AND cs.removed_at IS NULL
     ORDER BY g.id ASC
     `,
   );

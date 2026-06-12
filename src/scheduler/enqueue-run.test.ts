@@ -65,8 +65,13 @@ function makeFakeBus(): JobBus & { calls: EnqueueCall[]; failForGroupId?: string
 // Seed helpers
 // ---------------------------------------------------------------------------
 
-async function seedGroup(pool: pg.Pool, name: string): Promise<number> {
-  return upsertGroup(pool, { name, source: "import" });
+// Scope is now default-OFF, so a group is only summarized when explicitly
+// included. These tests exercise watermark/change logic, not scoping, so by
+// default we opt every seeded group in; the scope-specific test opts out.
+async function seedGroup(pool: pg.Pool, name: string, include = true): Promise<number> {
+  const id = await upsertGroup(pool, { name, source: "import" });
+  if (include) await upsertScope(pool, { groupId: id, included: true });
+  return id;
 }
 
 async function seedMessage(
@@ -146,27 +151,30 @@ describe("enqueueScheduledRun", () => {
     expect(result.enqueued + result.skipped).toBeGreaterThanOrEqual(2);
   });
 
-  it("skips excluded/removed chats but keeps un-scoped (default-on), even with all:true", async () => {
+  it("enqueues only explicitly-included chats; skips un-scoped/excluded/removed, even with all:true", async () => {
     const bus = makeFakeBus();
     const ts = new Date("2026-06-05T07:00:00Z");
 
-    const unscoped = await seedGroup(pool, "scope-unscoped");
+    const included = await seedGroup(pool, "scope-included"); // auto included:true
+    await seedMessage(pool, included, "scope-inc-1", ts);
+    const unscoped = await seedGroup(pool, "scope-unscoped", false); // no scope row
     await seedMessage(pool, unscoped, "scope-uns-1", ts);
-    const excluded = await seedGroup(pool, "scope-excluded");
+    const excluded = await seedGroup(pool, "scope-excluded", false);
     await seedMessage(pool, excluded, "scope-exc-1", ts);
-    const removed = await seedGroup(pool, "scope-removed");
+    const removed = await seedGroup(pool, "scope-removed", false);
     await seedMessage(pool, removed, "scope-rem-1", ts);
 
     await upsertScope(pool, { groupId: excluded, included: false });
-    await upsertScope(pool, { groupId: removed, removed: true });
+    await upsertScope(pool, { groupId: removed, included: true, removed: true });
 
-    // all:true ignores the watermark but must NOT resurrect excluded/removed chats.
+    // all:true ignores the watermark but must NOT resurrect un-scoped/excluded chats.
     await enqueueScheduledRun(pool, bus, { all: true });
 
     const ids = bus.calls
       .filter((c) => c.type === "summarize.group")
       .map((c) => String(c.payload["groupId"]));
-    expect(ids).toContain(String(unscoped));
+    expect(ids).toContain(String(included));
+    expect(ids).not.toContain(String(unscoped));
     expect(ids).not.toContain(String(excluded));
     expect(ids).not.toContain(String(removed));
   });
