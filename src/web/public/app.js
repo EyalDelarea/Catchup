@@ -57,6 +57,9 @@ let totalLoaderTimer = null;
 let healthInterval = null;
 /** Cached groups list. */
 let cachedGroups = [];
+/** Updates (§3) category filter + the category list backing its chips. */
+let catchupFilter = "הכול";
+let catchupCategories = [];
 /** Active AMA conversation (restored from sessionStorage when the panel opens). */
 let amaConversation = createConversation();
 /** Scope of the active AMA conversation, for persistence keying. */
@@ -384,10 +387,13 @@ async function loadGroupsIntoList() {
   // Scope filter (S4 §3): hide excluded/removed chats. Resilient — on any scope
   // failure, fall back to showing all groups (default-on).
   try {
-    const excluded = new Set(
-      (await getScopes()).filter((s) => !s.included || s.removed).map((s) => s.group),
-    );
-    groups = groups.filter((g) => !excluded.has(g.name));
+    const byName = new Map((await getScopes()).map((s) => [s.group, s]));
+    groups = groups
+      .filter((g) => {
+        const s = byName.get(g.name);
+        return s ? s.included && !s.removed : false;
+      })
+      .map((g) => ({ ...g, categoryId: byName.get(g.name)?.categoryId ?? null }));
   } catch {
     /* show all on scope-load failure */
   }
@@ -424,6 +430,13 @@ async function renderCatchup() {
   paneMain.innerHTML = `<div class="content"><p class="thread-loading">טוען עדכונים…</p></div>`;
 
   if (cachedGroups.length === 0 && !DEMO) await loadGroupsIntoList();
+  if (!DEMO && catchupCategories.length === 0) {
+    try {
+      catchupCategories = await getScopeCategories();
+    } catch {
+      /* chips fall back to just "הכול" */
+    }
+  }
   const groups = cachedGroups;
 
   if (!groups.length) {
@@ -433,24 +446,55 @@ async function renderCatchup() {
           <div class="empty-ic">${icon("filter", { size: 26 })}</div>
           <h3>אין צ׳אטים מוזנים</h3>
           <p>בחרו אילו שיחות יזינו את CatchApp כדי לקבל עדכונים.</p>
-          <button class="btn btn-soft" id="catchup-manage" type="button">${icon("filter", { size: 16 })}ניהול צ׳אטים</button>
+          <button class="btn btn-soft" id="catchup-manage" type="button">${icon("filter", { size: 15 })}ניהול צ׳אטים</button>
         </div>
       </div>`;
     document.getElementById("catchup-manage")?.addEventListener("click", () => navigate("sources"));
     return;
   }
 
-  const cards = groups.map((g) => buildUpdateCard(g)).join("");
+  // Category chips: "הכול" + any category that has at least one included chat.
+  const usedCatIds = new Set(groups.map((g) => g.categoryId).filter((id) => id != null));
+  const catChips = catchupCategories
+    .filter((c) => usedCatIds.has(c.id))
+    .map((c) => ({ name: c.name, id: c.id }));
+  const filterNames = ["הכול", ...catChips.map((c) => c.name)];
+  if (!filterNames.includes(catchupFilter)) catchupFilter = "הכול";
+
+  const visible =
+    catchupFilter === "הכול"
+      ? groups
+      : groups.filter((g) => catChips.find((c) => c.name === catchupFilter)?.id === g.categoryId);
+
+  const chips = filterNames
+    .map((n) => `<span class="chip${n === catchupFilter ? " on" : ""}" data-filter="${escHtml(n)}">${escHtml(n)}</span>`)
+    .join("");
+
+  const listOrEmpty =
+    visible.length === 0
+      ? `<div class="empty">
+          <div class="empty-ic">${icon("inbox", { size: 26 })}</div>
+          <h3>אין עדכונים בקטגוריה זו</h3>
+          <p>נסו קטגוריה אחרת, או הוסיפו עוד צ׳אטים לקבוצה הזו.</p>
+        </div>`
+      : `<div class="list">${visible.map((g) => buildUpdateCard(g)).join("")}</div>`;
+
   paneMain.innerHTML = `
     <div class="content">
       <div class="filters">
-        <span class="muted" style="font-weight:700">קבץ לפי:</span>
-        <span class="chip on">הכול</span>
+        <span class="muted" style="font-size:13px;font-weight:700">קבץ לפי:</span>
+        ${chips}
         <span class="chip cat-manage" id="catchup-manage">${icon("filter", { size: 14 })}נהל צ׳אטים</span>
       </div>
-      <div class="list">${cards}</div>
+      ${listOrEmpty}
     </div>`;
   document.getElementById("catchup-manage")?.addEventListener("click", () => navigate("sources"));
+  paneMain.querySelector(".filters")?.addEventListener("click", (e) => {
+    const ch = e.target.closest(".chip[data-filter]");
+    if (!ch) return;
+    catchupFilter = ch.dataset.filter;
+    renderCatchup();
+  });
   for (const card of paneMain.querySelectorAll(".itemcard[data-group]")) {
     card.addEventListener("click", () => navigate("detail", card.dataset.group));
   }
@@ -460,17 +504,16 @@ function buildUpdateCard(g) {
   const name = formatGroupName(g.name);
   const hue = g.hue ?? hueFromName(g.name);
   const sum = g.sum || "הקישו לסיכום מה שפספסתם בשיחה הזו.";
-  const newBadge = g.n ? `<span class="badge accent">${g.n} חדשות</span>` : "";
-  const who = g.who || (g.messageCount != null ? `${g.messageCount} הודעות` : "");
+  const n = g.newCount ?? g.n;
+  const newBadge = n ? `<span class="badge accent">${n} חדשות</span>` : "";
   const ago = g.lastMessageAt ? formatAgo(g.lastMessageAt) : "";
-  const meta = [who, ago].filter(Boolean).join(" · ");
   return `
     <div class="itemcard surface" data-group="${escHtml(g.name)}" role="button" tabindex="0">
       ${avatarHtml(name, hue, 40)}
       <div class="grow">
         <h4>${escHtml(name)}${newBadge}</h4>
         <p>${escHtml(sum)}</p>
-        ${meta ? `<div class="meta"><span class="muted">${escHtml(meta)}</span></div>` : ""}
+        ${ago ? `<div class="meta"><span class="muted" style="font-size:12px;font-weight:600">${escHtml(ago)}</span></div>` : ""}
       </div>
       <span class="btn btn-soft" style="align-self:center">פתח ${icon("chevL", { size: 15 })}</span>
     </div>`;
