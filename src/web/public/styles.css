@@ -3729,7 +3729,7 @@ svg.ic{ width:20px; height:20px; stroke:currentColor; stroke-width:1.9; stroke-l
 .chip.on{ background:var(--ink); color:var(--bg); border-color:transparent; }
 .chip .ic{ width:14px; height:14px; }
 
-.src{ display:inline-flex; align-items:center; gap:6px; font:500 11.5px "Heebo",sans-serif; color:var(--accent-ink); background:var(--accent-weak); padding:4px 9px; border-radius:8px; cursor:pointer; }
+.src{ display:inline-flex; align-items:center; gap:6px; font:500 11.5px "Heebo",sans-serif; color:var(--accent-ink); background:var(--accent-weak); padding:4px 9px; border-radius:8px; cursor:pointer; white-space:nowrap; }
 .src-date{ opacity:.72; }
 .src .ic{ width:13px; height:13px; }
 .src:hover{ filter:brightness(.97); }

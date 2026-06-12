@@ -1402,8 +1402,8 @@ function renderAma(scope) {
 /** Starter prompts shown above the input on the global Ask, before any question. */
 const AMA_SUGGESTIONS = [
   "מה הכי דחוף מכל השיחות שלי?",
-  "מה פספסתי היום?",
-  "אילו החלטות פתוחות צריך לסגור?",
+  "סכם את כל הקבוצות מהשבוע",
+  "למי עדיין לא חזרתי?",
 ];
 
 /** Suggestion-chip row — only on the global Ask with an empty thread. */
@@ -1482,9 +1482,13 @@ function renderAmaMessages() {
       return `<div class="msg me"><div class="bubble">${escHtml(m.text)}</div></div>`;
     }
     if (m.pending && !m.text) {
-      const label =
-        m.phase === "searching" ? "מחפש בהודעות…" : m.phase === "synthesizing" ? "מנסח תשובה…" : "חושב…";
-      return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble writing">${label}<span class="caret"></span></div></div></div>`;
+      const [title, sub] =
+        m.phase === "synthesizing"
+          ? ["מנסח תשובה…", "מסכם את מה שנמצא"]
+          : m.phase === "searching"
+            ? ["מחפש בכל ההיסטוריה…", "קורא הודעות רלוונטיות"]
+            : ["חושב…", ""];
+      return `<div class="msg ai"><div class="ask-state"><span class="sg-spark">${icon("sparkle", { size: 16 })}</span><div><b>${title}</b>${sub ? `<div class="ask-sub">${sub}</div>` : ""}</div><span class="ob-dots"><i></i><i></i><i></i></span></div></div>`;
     }
     if (m.error) {
       return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble" style="color:var(--warn-ink)">${escHtml(m.error)}</div></div></div>`;
@@ -1501,7 +1505,7 @@ function renderAmaSources(citations) {
   if (!citations?.length) return "";
   const items = citations.map((c) =>
     `<button type="button" class="src" data-chat="${escHtml(c.chat)}" data-id="${c.messageId}">` +
-    `${icon("source", { size: 13 })}<span>[${c.n}] ${escHtml(formatGroupName(c.chat))}</span>` +
+    `${icon("source", { size: 13 })}<span><span dir="ltr">[${c.n}]</span> ${escHtml(formatGroupName(c.chat))}</span>` +
     `<span class="src-date" dir="ltr"> · ${escHtml(fmtTime(c.sentAt))}</span></button>`
   ).join("");
   return `<div class="cites">${items}</div>`;
