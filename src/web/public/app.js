@@ -23,7 +23,7 @@ import { formatAgo, presetToSince, validateRangeInput } from "./lib/time.js";
 import { renderMarkdown } from "./lib/markdown.js";
 import { deriveHealth } from "./lib/health.js";
 import { shouldStartBackgroundRefresh } from "./lib/open-state.js";
-import { PHASE_LABELS, PHASES, phaseFill, activeZoneIndex, phaseCaption, scanFill } from "./lib/phase-loader.js";
+import { scanFill } from "./lib/phase-loader.js";
 import { appendToken, beginQuestion, createConversation, failAnswer, finishAnswer, loadConversation, saveConversation, setPhase } from "./lib/ama-conversation.js";
 import { DEMO_GROUPS, DEMO_SUMMARY, DEMO_SUMMARIES, DEMO_TOTAL_HIGHLIGHTS, DEMO_TOTAL_PERCHAT } from "./lib/demo-data.js";
 import { applyTheme, readStoredTheme, resolveInitialTheme, setTheme } from "./lib/theme.js";
@@ -903,29 +903,25 @@ function onError(data) {
  * Liquid Phase Tube — phase-aware loader.
  * @param {{ phase: string, messages?: number, elapsed?: number }} opts
  */
-function buildPhaseTube({ phase = "sync", messages = 0, elapsed = 0 } = {}) {
-  const fill = phaseFill(phase);
-  const active = activeZoneIndex(phase);
-  const caption = phaseCaption(phase, { messages });
-  const elapsedStr = elapsed > 0 ? `${elapsed}ש׳` : "";
-  // Labels render in phase order; RTL places the first (סנכרון) on the right.
-  const labels = PHASES.map((p, i) =>
-    `<span class="phase-tube__label${i <= active ? " is-lit" : ""}${i === active ? " is-active" : ""}">${PHASE_LABELS[p]}</span>`
-  ).join("");
+function buildPhaseTube({ phase = "sync" } = {}) {
+  // Prototype loading state: a clean skeleton summary card ("CatchApp כותב" +
+  // shimmer lines) — not the retired Glacier phase-tube. Matches the streaming
+  // card so the sync→stream transition is seamless.
+  const label =
+    phase === "sync" ? "מסנכרן הודעות…" : phase === "read" ? "קורא הודעות…" : "CatchApp כותב";
   return `
-    <div class="phase-tube-wrap glass-card" role="status" aria-live="polite" aria-label="${escHtml(caption)}">
-      <div class="phase-tube__aurora" aria-hidden="true"></div>
-      <div class="phase-tube__cap">
-        <span class="phase-tube__caption">${escHtml(caption)}</span>
-        <span class="phase-tube__elapsed" id="tube-elapsed">${escHtml(elapsedStr)}</span>
-      </div>
-      <div class="phase-tube" aria-hidden="true">
-        <div class="phase-tube__liq" style="width:${fill}%"></div>
-        <span class="phase-tube__zone" style="right:25%"></span>
-        <span class="phase-tube__zone" style="right:50%"></span>
-        <span class="phase-tube__zone" style="right:75%"></span>
-      </div>
-      <div class="phase-tube__labels">${labels}</div>
+    <div class="sum-card surface" role="status" aria-live="polite" aria-label="${escHtml(label)}">
+      <div class="sum-meta">${icon("sparkle", { size: 12 })}<span class="writing">${escHtml(label)}</span><span class="ob-dots" aria-hidden="true"><i></i><i></i><i></i></span></div>
+      <section>
+        <h4 class="sum-h">תקציר</h4>
+        <div class="skel skel-line" style="width:92%;margin-bottom:8px"></div>
+        <div class="skel skel-line" style="width:74%"></div>
+      </section>
+      <section>
+        <h4 class="sum-h">נושאים עיקריים</h4>
+        <div class="skel skel-line" style="width:84%;margin-bottom:8px"></div>
+        <div class="skel skel-line" style="width:62%"></div>
+      </section>
     </div>
   `;
 }
