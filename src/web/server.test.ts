@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { upsertScope } from "../db/repositories/chat-scopes.js";
 import { upsertGroup } from "../db/repositories/groups.js";
 import { upsertJobRun } from "../db/repositories/job-runs.js";
 import { insertMessages } from "../db/repositories/messages.js";
@@ -1182,6 +1183,9 @@ describe("GET /api/total-summary", () => {
       };
       await insertMessages(pool, [row]);
     }
+    // Default-off scoping: include both chats so they're summarized.
+    await upsertScope(pool, { groupId: g1, included: true });
+    await upsertScope(pool, { groupId: g2, included: true });
 
     const r = await fetch(`${base}/api/total-summary?since=${encodeURIComponent(since)}`);
     const text = await r.text();

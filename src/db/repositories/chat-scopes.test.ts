@@ -41,7 +41,7 @@ describe("chat-scopes repository", () => {
   }
 
   describe("listIncludedGroupIds (the digest filter)", () => {
-    it("default-on: a group with no scope row is included; excluded/removed are filtered", async () => {
+    it("default-off: only an explicitly-included group qualifies; unscoped/excluded/removed are filtered", async () => {
       const noScope = await seedGroupWithMessage("cs-noscope");
       const included = await seedGroupWithMessage("cs-included");
       const excluded = await seedGroupWithMessage("cs-excluded");
@@ -49,11 +49,11 @@ describe("chat-scopes repository", () => {
 
       await upsertScope(pool, { groupId: included, included: true });
       await upsertScope(pool, { groupId: excluded, included: false });
-      await upsertScope(pool, { groupId: removed, removed: true });
+      await upsertScope(pool, { groupId: removed, included: true, removed: true });
 
       const ids = await listIncludedGroupIds(pool);
-      expect(ids).toContain(noScope);
       expect(ids).toContain(included);
+      expect(ids).not.toContain(noScope);
       expect(ids).not.toContain(excluded);
       expect(ids).not.toContain(removed);
     });
@@ -80,10 +80,10 @@ describe("chat-scopes repository", () => {
   });
 
   describe("listScopes", () => {
-    it("projects an un-scoped group as included/uncategorized/not-removed", async () => {
+    it("projects an un-scoped group as excluded/uncategorized/not-removed (default-off)", async () => {
       await seedGroupWithMessage("cs-projection");
       const row = (await listScopes(pool)).find((r) => r.group === "cs-projection")!;
-      expect(row).toMatchObject({ included: true, categoryId: null, removed: false });
+      expect(row).toMatchObject({ included: false, categoryId: null, removed: false });
       expect(row.messageCount).toBe(1);
     });
   });

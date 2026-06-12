@@ -80,10 +80,10 @@ export async function enqueueScheduledRun(
   let skipped = 0;
 
   try {
-    // Only included chats are summarized (S4 scope filter). A group with no scope
-    // row is included (default-on); explicitly excluded/removed chats are skipped.
-    // `opts.all` ignores the watermark, NOT the scope — a forced run must not
-    // resurrect excluded chats.
+    // Only included chats are summarized (S4 scope filter, default-OFF): a group
+    // is processed only when it has an explicit `included = true` row — an
+    // un-scoped chat is skipped. `opts.all` ignores the watermark, NOT the scope
+    // — a forced run must not resurrect un-scoped/excluded chats.
     const includedIds = await listIncludedGroupIds(pool);
 
     for (const groupId of includedIds) {
