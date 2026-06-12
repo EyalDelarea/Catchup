@@ -23,7 +23,7 @@ import { formatAgo, presetToSince, validateRangeInput } from "./lib/time.js";
 import { renderInline, renderMarkdown } from "./lib/markdown.js";
 import { deriveHealth } from "./lib/health.js";
 import { shouldStartBackgroundRefresh } from "./lib/open-state.js";
-import { PHASE_LABELS, PHASES, phaseFill, activeZoneIndex, phaseCaption, scanFill } from "./lib/phase-loader.js";
+import { scanFill } from "./lib/phase-loader.js";
 import { appendToken, beginQuestion, createConversation, failAnswer, finishAnswer, loadConversation, saveConversation, setPhase } from "./lib/ama-conversation.js";
 import { DEMO_GROUPS, DEMO_SUMMARY, DEMO_SUMMARIES, DEMO_TOTAL_HIGHLIGHTS, DEMO_TOTAL_PERCHAT } from "./lib/demo-data.js";
 import { applyTheme, readStoredTheme, resolveInitialTheme, setTheme } from "./lib/theme.js";
@@ -849,34 +849,43 @@ function onError(data) {
 /* ── 5d. Phase Tube + summary builders ───────────────────── */
 
 /**
- * Liquid Phase Tube — phase-aware loader.
- * @param {{ phase: string, messages?: number, elapsed?: number }} opts
+ * The playful "summarizing" loader (.sumload): a bobbing brand glyph in a
+ * pulsing ring, orbiting dots, rising chat bubbles, twinkling sparkles and an
+ * indeterminate bar. All motion is CSS and gated behind prefers-reduced-motion.
  */
-function buildPhaseTube({ phase = "sync", messages = 0, elapsed = 0 } = {}) {
-  const fill = phaseFill(phase);
-  const active = activeZoneIndex(phase);
-  const caption = phaseCaption(phase, { messages });
-  const elapsedStr = elapsed > 0 ? `${elapsed}ש׳` : "";
-  // Labels render in phase order; RTL places the first (סנכרון) on the right.
-  const labels = PHASES.map((p, i) =>
-    `<span class="phase-tube__label${i <= active ? " is-lit" : ""}${i === active ? " is-active" : ""}">${PHASE_LABELS[p]}</span>`
-  ).join("");
+function buildSumLoader(title, quip, compact = false) {
   return `
-    <div class="phase-tube-wrap glass-card" role="status" aria-live="polite" aria-label="${escHtml(caption)}">
-      <div class="phase-tube__aurora" aria-hidden="true"></div>
-      <div class="phase-tube__cap">
-        <span class="phase-tube__caption">${escHtml(caption)}</span>
-        <span class="phase-tube__elapsed" id="tube-elapsed">${escHtml(elapsedStr)}</span>
+    <div class="sumload${compact ? " sumload--compact" : ""}" role="status" aria-live="polite" aria-label="${escHtml(title)}">
+      <div class="sumload-scene" aria-hidden="true">
+        <div class="sumload-floats"><i></i><i></i><i></i></div>
+        <div class="sumload-orbit"><i></i><i></i><i></i></div>
+        <div class="sumload-ring"></div>
+        <div class="sumload-core">${brandGlyph(compact ? 30 : 38)}</div>
+        <span class="sumload-spark s1">${icon("sparkle", { size: 13 })}</span>
+        <span class="sumload-spark s2">${icon("sparkle", { size: 11 })}</span>
+        <span class="sumload-spark s3">${icon("sparkle", { size: 12 })}</span>
       </div>
-      <div class="phase-tube" aria-hidden="true">
-        <div class="phase-tube__liq" style="width:${fill}%"></div>
-        <span class="phase-tube__zone" style="right:25%"></span>
-        <span class="phase-tube__zone" style="right:50%"></span>
-        <span class="phase-tube__zone" style="right:75%"></span>
-      </div>
-      <div class="phase-tube__labels">${labels}</div>
-    </div>
-  `;
+      <div class="sumload-title">${escHtml(title)}</div>
+      <div class="sumload-quip">${escHtml(quip)}</div>
+      <div class="sumload-bar"><b></b></div>
+    </div>`;
+}
+
+/**
+ * Summarize loader (phase-aware copy). Name + signature are kept so existing
+ * call sites — and the now no-op tube updaters — need no change; the retired
+ * Glacier "phase tube" is replaced by the designed .sumload scene.
+ * @param {{ phase?: string }} opts
+ */
+function buildPhaseTube({ phase = "sync" } = {}) {
+  const copy = {
+    sync: ["מתחבר לוואטסאפ…", "טוען את ההודעות האחרונות…"],
+    read: ["קורא את ההודעות…", "עובר על מה שפספסת…"],
+    summarize: ["בונה את הסיכום…", "מתמצת לכמה שורות ✦"],
+    done: ["מסיים…", "כמעט שם ✦"],
+  };
+  const [title, quip] = copy[phase] || copy.sync;
+  return buildSumLoader(title, quip);
 }
 
 /** Update the live elapsed counter inside the tube. */
@@ -2053,7 +2062,14 @@ async function renderToday() {
   teardownStream();
   setView("today");
   setAppbar("today");
-  paneMain.innerHTML = `<div class="content wide"><div class="today"><p class="thread-loading">טוען את הסיכום…</p></div></div>`;
+  // Re-paint Today when the viewport crosses the board/stack breakpoint (once).
+  if (!todayState.mediaWired && window.matchMedia) {
+    todayState.mediaWired = true;
+    window.matchMedia("(min-width: 780px)").addEventListener("change", () => {
+      if (layout?.dataset.view === "today") paintToday();
+    });
+  }
+  paneMain.innerHTML = `<div class="content wide"><div class="dg-loading surface">${buildSumLoader("בונה את הסיכום היומי…", "עובר על הצ׳אטים שבחרת ✦")}</div></div>`;
 
   let data = null;
   try {
@@ -2099,23 +2115,29 @@ function paintToday() {
   const total = todayState.deck.length;
   const hasSuggestionsLeft = todayState.deck.some(isSuggestion);
 
-  let body;
-  if (total === 0) {
-    body = todayState.acted > 0 ? buildDoneState(todayState.tally) : buildEmptyToday(todayState.engineOn);
-  } else if (!hasSuggestionsLeft && todayState.acted > 0) {
-    body = buildDoneState(todayState.tally);
+  // Desktop ≥780px = the web-native digest board (v2); narrower = the v1 phone
+  // Stories stack. Both share the deck + onTodayAct; only the hero markup differs.
+  let hero;
+  if (isBoardLayout()) {
+    hero = buildDigestBoard(total, hasSuggestionsLeft);
   } else {
-    body = buildStoryStack();
+    let body;
+    if (total === 0) {
+      body = todayState.acted > 0 ? buildDoneState(todayState.tally) : buildEmptyToday(todayState.engineOn);
+    } else if (!hasSuggestionsLeft && todayState.acted > 0) {
+      body = buildDoneState(todayState.tally);
+    } else {
+      body = buildStoryStack();
+    }
+    hero = `
+      <div class="today">
+        ${buildTodayHeader(new Date())}
+        <div class="today-note">${icon("sparkle", { size: 13 })}<span>הצעות חכמות שנבנות מהשיחות — ומתחדדות לפי הבחירות שלך</span></div>
+        ${body}
+        <div class="today-foot">${buildTodayFoot(total, hasSuggestionsLeft)}</div>
+        ${buildTiles()}
+      </div>`;
   }
-
-  const hero = `
-    <div class="today">
-      ${buildTodayHeader(new Date())}
-      <div class="today-note">${icon("sparkle", { size: 13 })}<span>הצעות חכמות שנבנות מהשיחות — ומתחדדות לפי הבחירות שלך</span></div>
-      ${body}
-      <div class="today-foot">${buildTodayFoot(total, hasSuggestionsLeft)}</div>
-      ${buildTiles()}
-    </div>`;
 
   paneMain.innerHTML = `
     <div class="content wide">
@@ -2206,6 +2228,107 @@ function buildCommandSide() {
       <span class="cc-ask-ic">${icon("sparkle", { size: 18 })}</span>
       <div class="grow"><b>שאל את הצ׳אטים שלך</b><small>״מה הכי דחוף היום?״</small></div>
       ${icon("chevL", { size: 16 })}
+    </div>`;
+}
+
+/** True when the viewport is wide enough for the desktop digest board (v2). */
+function isBoardLayout() {
+  return window.matchMedia?.("(min-width: 780px)").matches ?? true;
+}
+
+/** The v2 board header: kicker, greeting, an inline date + remaining-count
+ *  subline, and the personalization note pill. */
+function buildDigestHead(now, left) {
+  let dateStr = "";
+  try {
+    const wd = now.toLocaleDateString("he-IL", { weekday: "long" });
+    dateStr = `<span class="dg-date">${escHtml(wd)} · <span class="mono" dir="ltr">${now.getDate()}.${now.getMonth() + 1}</span></span>`;
+  } catch {
+    /* leave the date blank if Intl is unavailable */
+  }
+  const countBit =
+    left > 0
+      ? `<span class="dg-bull">·</span><span>${left} ${left === 1 ? "כרטיס" : "כרטיסים"} להתעדכן · קריאה של דקה</span>`
+      : "";
+  return `
+    <div class="dg-head">
+      <div class="kicker" style="margin-bottom:5px">הסיכום היומי</div>
+      <div class="dg-greet">${escHtml(greeting(now.getHours()))}</div>
+      <div class="dg-subline">${dateStr}${countBit}</div>
+      <div class="dg-note">${icon("sparkle", { size: 13 })}<span>הצעות חכמות שנבנות מהשיחות — ומתחדדות לפי הבחירות שלך</span></div>
+    </div>`;
+}
+
+/** One wide digest-board row — a suggestion (edit-first + act buttons) or a
+ *  read-only info card. Acted on in place via onTodayAct (shared with the stack). */
+function buildDigestCard(card) {
+  if (isSuggestion(card)) {
+    const cfg = suggestionConfig(card.kind);
+    const draftVal = card.draft ?? card.proposedText;
+    let editor;
+    if (cfg.editable) {
+      editor = `<div class="cl-draft sg-draft">${icon("pencil", { size: 15 })}<input class="sg-draft__input" value="${escHtml(draftVal)}" aria-label="עריכת ההצעה" /></div>`;
+    } else {
+      const lines = String(card.proposedText).split("\n").map((s) => s.trim()).filter(Boolean);
+      const items = (lines.length ? lines : [card.proposedText]).map((l) => `<li>${escHtml(l)}</li>`).join("");
+      editor = `<div class="sg-recap"><ul>${items}</ul></div>`;
+    }
+    return `
+      <div class="dg-card surface s-suggest" data-card-id="${card.id}">
+        <div class="dgc-top">
+          <span class="sg-spark">${icon(cfg.icon, { size: 18 })}</span>
+          <div class="dgc-head">
+            <div class="kicker sg-kicker">${escHtml(cfg.kicker)} · מותאם אישית</div>
+            <h3 class="dgc-title">${escHtml(cfg.title(formatGroupName(card.chat)))}</h3>
+          </div>
+          <span class="sg-tag">${icon("sparkle", { size: 11 })}טיוטה</span>
+        </div>
+        ${editor}
+        <div class="dgc-reason">${icon("bolt", { size: 15 })}<span>${escHtml(card.reason)}</span></div>
+        <div class="dgc-foot">
+          ${buildSrcChip(card)}
+          <div class="dgc-actions">
+            <button class="btn btn-quiet btn-sm" type="button" data-act="discard" data-id="${card.id}">${icon("x", { size: 15 })}התעלם</button>
+            <button class="btn btn-quiet btn-sm" type="button" data-act="snooze" data-id="${card.id}">${icon("moon", { size: 15 })}נודניק</button>
+            <button class="btn btn-primary btn-sm" type="button" data-act="commit" data-id="${card.id}">${icon(cfg.commitIcon, { size: 15 })}${escHtml(cfg.commitLabel)}</button>
+          </div>
+        </div>
+      </div>`;
+  }
+  const isHi = card.variant === "highlights";
+  const title = isHi ? "עיקרי היום בכל הצ׳אטים" : formatGroupName(card.chat);
+  const kicker = isHi ? "מבט על היום" : "סיכום צ׳אט";
+  return `
+    <div class="dg-card surface" data-card-id="${card.id}">
+      <div class="dgc-top">
+        <span class="sg-spark">${icon(isHi ? "sparkle" : "message", { size: 18 })}</span>
+        <div class="dgc-head">
+          <div class="kicker">${escHtml(kicker)}</div>
+          <h3 class="dgc-title">${escHtml(title)}</h3>
+        </div>
+        <span class="badge accent">מידע</span>
+      </div>
+      <div class="dgc-body">${renderMarkdown(card.body)}</div>
+      <div class="dgc-foot">${buildSrcChip(card)}</div>
+    </div>`;
+}
+
+/** The desktop digest board (v2): head + a flat column of wide cards (or the
+ *  done / empty state), plus the flash slot. */
+function buildDigestBoard(total, hasSuggestionsLeft) {
+  let body;
+  if (total === 0) {
+    body = todayState.acted > 0 ? buildDoneState(todayState.tally) : buildEmptyToday(todayState.engineOn);
+  } else if (!hasSuggestionsLeft && todayState.acted > 0) {
+    body = buildDoneState(todayState.tally);
+  } else {
+    body = `<div class="dg-grid">${todayState.deck.map(buildDigestCard).join("")}</div>`;
+  }
+  return `
+    <div class="dg-board">
+      ${buildDigestHead(new Date(), total)}
+      ${body}
+      <div class="dg-flash" id="today-flash"></div>
     </div>`;
 }
 
@@ -2366,6 +2489,33 @@ function wireToday() {
     el.addEventListener("click", () => navigate(el.dataset.go));
   }
 
+  // Desktop digest board: act buttons (commit/snooze/discard), per-card draft
+  // preservation, and source-chip jumps. Shares onTodayAct with the stack.
+  const board = document.querySelector(".dg-board");
+  if (board) {
+    for (const card of board.querySelectorAll(".dg-card[data-card-id]")) {
+      const id = Number(card.dataset.cardId);
+      card.querySelector(".sg-draft__input")?.addEventListener("input", (e) => {
+        const c = todayState.deck.find((x) => x.id === id);
+        if (c && isSuggestion(c)) c.draft = e.target.value;
+      });
+    }
+    for (const btn of board.querySelectorAll("[data-act]")) {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        onTodayAct(btn.dataset.act, Number(btn.dataset.id));
+      });
+    }
+    for (const chip of board.querySelectorAll("[data-src-jump]")) {
+      chip.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const cid = Number(chip.dataset.id);
+        if (chip.dataset.chat && Number.isFinite(cid)) navigate("thread", { chat: chip.dataset.chat, aroundId: cid });
+      });
+    }
+    return;
+  }
+
   const stack = document.querySelector(".today .story-stack");
   if (!stack) return;
 
@@ -2414,7 +2564,9 @@ function onTodayAct(act, id) {
   let finalText;
   let flash;
   if (act === "commit") {
-    const input = document.querySelector(".today .sg-draft__input");
+    const input =
+      document.querySelector(`[data-card-id="${id}"] .sg-draft__input`) ||
+      document.querySelector(".today .sg-draft__input");
     const draftValue = input ? input.value : (card.draft ?? card.proposedText);
     const res = commitActionFor(card, draftValue);
     action = res.action;
@@ -2670,6 +2822,8 @@ async function renderAgenda() {
   agendaState.meetings = Array.isArray(meetings) ? meetings : [];
   agendaState.todos = Array.isArray(todos) ? todos : [];
   agendaState.monthOffset = 0;
+  setNavCount("meetings", agendaState.meetings.length);
+  setNavCount("todos", agendaState.todos.filter((t) => !t.done).length);
   paintAgenda();
 }
 
