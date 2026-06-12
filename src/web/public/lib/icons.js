@@ -50,6 +50,24 @@ const PATHS = {
     '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/>'
     + '<path d="M16 5.2a3.2 3.2 0 0 1 0 5.6M17.5 20a5.5 5.5 0 0 0-3-4.9"/>',
   target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.4"/>',
+  // ── Command-center port glyphs ────────────────────────
+  inbox:
+    '<path d="M3 13h4l1.5 2.5h7L17 13h4"/>'
+    + '<path d="M5.5 5h13l2.5 8v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5z"/>',
+  source: '<path d="M20 5v6a3 3 0 0 1-3 3H5m4-4-4 4 4 4"/>',
+  phone:
+    '<path d="M5 4h3.8l1.8 4.6-2.4 1.6a11.5 11.5 0 0 0 5 5l1.6-2.4 4.6 1.8V20'
+    + 'a1.8 1.8 0 0 1-2 1.8A16.5 16.5 0 0 1 3.2 6 1.8 1.8 0 0 1 5 4z"/>',
+  pin: '<path d="M12 21s7-5.5 7-11a7 7 0 1 0-14 0c0 5.5 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+  link:
+    '<path d="M9 13.5l5-5M8.5 7.5l1.8-1.8a3.5 3.5 0 0 1 5 5l-1.8 1.8'
+    + 'M11.5 16.5l-1.8 1.8a3.5 3.5 0 0 1-5-5l1.8-1.8"/>',
+  google: '<circle cx="12" cy="12" r="8.5"/><path d="M12 9.2h4.4a4.6 4.6 0 1 1-1.4-3.1"/>',
+  copy:
+    '<rect x="9" y="9" width="11" height="11" rx="2.5"/>'
+    + '<path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/>',
+  more: '<circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="M20.5 20.5 16.5 16.5"/>',
 };
 
 /**
@@ -62,9 +80,12 @@ export function icon(name, { size = 20, cls = "" } = {}) {
   const p = PATHS[name];
   if (!p) return "";
   const klass = cls ? `ic ${cls}` : "ic";
+  // Size via inline style as well as attributes: the ported prototype CSS sets a
+  // default `svg.ic{width:20px;height:20px}`, which would otherwise pin every icon
+  // to 20px regardless of the requested size. Inline style wins over the stylesheet.
   return (
-    `<svg class="${klass}" width="${size}" height="${size}" viewBox="0 0 24 24" `
-    + 'fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
+    `<svg class="${klass}" width="${size}" height="${size}" style="width:${size}px;height:${size}px" `
+    + 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" '
     + `stroke-linejoin="round" aria-hidden="true">${p}</svg>`
   );
 }
