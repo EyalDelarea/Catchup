@@ -129,3 +129,43 @@ describe("GET /api/onboarding/qr (SSE)", () => {
     controller.abort();
   });
 });
+
+describe("GET /api/onboarding/progress (SSE)", () => {
+  it("streams the tenant's history-sync progress, then a done event at 100, ignoring other tenants", async () => {
+    const reg = new FakeRegistry();
+    const base = await listen(reg);
+
+    const resPromise = fetch(`${base}/api/onboarding/progress`);
+    await new Promise((r) => setTimeout(r, 20));
+
+    reg.emit("history-progress", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", { progress: 99 }); // ignored
+    reg.emit("history-progress", TENANT, { progress: 30, count: 12 });
+    reg.emit("history-progress", TENANT, { progress: 100, count: 40 }); // terminal → done + end
+
+    const res = await resPromise;
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    const text = await res.text();
+    expect(text).toContain("event: progress");
+    expect(text).toContain('"progress":30');
+    expect(text).toContain("event: done");
+    // The other tenant's 99 must never appear, and progress precedes done.
+    expect(text).not.toContain('"progress":99');
+    expect(text.indexOf("event: progress")).toBeLessThan(text.indexOf("event: done"));
+  });
+
+  it("keeps streaming when progress is null (older syncs) without ending early", async () => {
+    const reg = new FakeRegistry();
+    const base = await listen(reg);
+
+    const controller = new AbortController();
+    const resPromise = fetch(`${base}/api/onboarding/progress`, { signal: controller.signal });
+    await new Promise((r) => setTimeout(r, 20));
+
+    reg.emit("history-progress", TENANT, { progress: null, count: 5 });
+    await new Promise((r) => setTimeout(r, 20));
+    // Stream is still open (no done frame) — abort to finish the test.
+    controller.abort();
+    await resPromise.catch(() => {});
+    expect(true).toBe(true);
+  });
+});

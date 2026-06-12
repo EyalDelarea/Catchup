@@ -103,6 +103,22 @@ describe("TenantSessionRegistry — lifecycle", () => {
     created[0]!.emit("logged-out");
     expect(registry.snapshot().find((s) => s.tenantId === A)?.status).toBe("logged-out");
   });
+
+  it("re-emits history-progress with the tenant prepended (S5 scan-% feed)", async () => {
+    const { registry, created } = makeRegistry();
+    await registry.start(A);
+    await registry.start(B);
+
+    const seen: unknown[][] = [];
+    registry.on("history-progress", (...args) => seen.push(args));
+
+    const info = { progress: 42, isLatest: false, syncType: 2, count: 7 };
+    created[0]!.emit("history-progress", info);
+
+    expect(seen).toEqual([[A, info]]);
+    // B's session never fired — only A's progress is attributed.
+    expect(seen.every(([tenant]) => tenant === A)).toBe(true);
+  });
 });
 
 describe("TenantSessionRegistry — supervision", () => {

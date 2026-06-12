@@ -79,6 +79,11 @@ export function makeOnboardingRoutes(opts: OnboardingRoutesOptions) {
       return true;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/onboarding/progress") {
+      streamProgress(req, res, tenantId);
+      return true;
+    }
+
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "Not found." }));
     return true;
@@ -149,6 +154,44 @@ export function makeOnboardingRoutes(opts: OnboardingRoutesOptions) {
     if (current !== "connecting" && current !== "connected") {
       void registry.start(tenantId).catch(() => {});
     }
+  };
+
+  /**
+   * S5 — stream WhatsApp's history-sync progress (0–100) for this tenant after the
+   * link connects, so the onboarding pane can show a live "scanning your chats" ring.
+   * Each forwarded `history-progress` becomes a `progress` frame; reaching 100 emits a
+   * terminal `done` frame and ends the stream. Scoped to the requesting tenant only.
+   */
+  const streamProgress = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    tenantId: string,
+  ): void => {
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    const send = (event: string, data: unknown) => res.write(sseFrame(event, data));
+
+    const onProgress = (...args: unknown[]): void => {
+      if (args[0] !== tenantId) return;
+      const info = args[1] as { progress?: number | null; count?: number } | undefined;
+      const progress = info?.progress ?? null;
+      send("progress", { progress, count: info?.count ?? 0 });
+      // WhatsApp reports 100 on the final chunk; treat that as completion.
+      if (progress != null && progress >= 100) {
+        send("done", { tenantId });
+        cleanup();
+        res.end();
+      }
+    };
+    const cleanup = (): void => {
+      registry.off("history-progress", onProgress);
+    };
+
+    registry.on("history-progress", onProgress);
+    req.on("close", cleanup);
   };
 
   return { handle, statusOf };

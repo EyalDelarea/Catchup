@@ -16,8 +16,9 @@ import { DEFAULT_TENANT_ID } from "../db/tenant-context.js";
  * Every other tenant gets `<authRoot>/<tenantId>`.
  *
  * Events (re-emitted with the tenant prepended):
- *   "message"  (tenantId, msg)   — for tenant-scoped ingest
- *   "qr"       (tenantId, qr)    — consumed by T4's web onboarding flow
+ *   "message"           (tenantId, msg)   — for tenant-scoped ingest
+ *   "qr"                (tenantId, qr)     — consumed by T4's web onboarding flow
+ *   "history-progress"  (tenantId, info)   — drives S5's onboarding scan-% ring
  *   "connected" / "disconnected" / "logged-out"  (tenantId)
  */
 
@@ -226,6 +227,11 @@ export class TenantSessionRegistry extends EventEmitter {
     });
     ev.on("qr", (...args: unknown[]) => {
       this.emit("qr", tenantId, ...args);
+    });
+    // S5: WhatsApp's history-sync progress (0–100), forwarded so the onboarding
+    // pane can show a live "scanning your chats" ring after the link connects.
+    ev.on("history-progress", (...args: unknown[]) => {
+      this.emit("history-progress", tenantId, ...args);
     });
   }
 }
