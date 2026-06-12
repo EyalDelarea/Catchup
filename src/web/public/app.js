@@ -1706,6 +1706,41 @@ function wireSources() {
 
 const settingsState = { prefs: null };
 
+/** Morning-notification preview (§8): a lock-screen push mock overlaid on the
+ *  main column. Dismiss by tapping the backdrop, the "סגירה" button, or Esc. */
+function showNotifPreview() {
+  const host = document.querySelector(".main");
+  if (!host || document.getElementById("notif-preview")) return;
+  const el = document.createElement("div");
+  el.className = "notif-preview";
+  el.id = "notif-preview";
+  el.setAttribute("role", "dialog");
+  el.setAttribute("aria-label", "תצוגה מקדימה של התראת הבוקר");
+  el.innerHTML = `
+    <div>
+      <div class="notif-card">
+        <span class="notif-app">${brandGlyph(38)}</span>
+        <div class="notif-body">
+          <div class="notif-head">CatchApp<span class="when">עכשיו</span></div>
+          <div class="notif-title">הסיכום של היום מוכן ✦</div>
+          <div class="notif-text">5 דברים מחכים לך · קריאה של דקה.</div>
+        </div>
+      </div>
+      <button class="notif-dismiss" type="button">סגירה</button>
+    </div>`;
+  const close = () => {
+    el.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  // Backdrop click or "סגירה" closes; clicks inside the card do not.
+  el.addEventListener("click", (e) => {
+    if (e.target === el || e.target.closest(".notif-dismiss")) close();
+  });
+  document.addEventListener("keydown", onKey);
+  host.appendChild(el);
+}
+
 /** The Settings screen (§8): privacy callout, daily digest, display mode,
  *  and the experimental suggestion-engine config. Fetch-on-entry, then paint. */
 async function renderSettings() {
@@ -1818,6 +1853,7 @@ function paintSettings() {
         <div class="setrow">
           ${icon("bell", { cls: "set-ico" })}
           <div class="setrow__body"><h4>התראת בוקר</h4><p>תזכורת עדינה כשהסיכום מוכן</p></div>
+          <button class="btn btn-ghost btn-sm" data-act="notif-preview" type="button" style="margin-inline-end:8px">תצוגה מקדימה</button>
           <button class="set-switch${prefs.morningNotification ? " is-on" : ""}" data-act="morning" type="button"
             role="switch" aria-checked="${prefs.morningNotification}" aria-label="התראת בוקר"><span class="set-switch__knob"></span></button>
         </div>
@@ -1890,6 +1926,9 @@ function wireSettings() {
     ?.addEventListener("click", () =>
       applyPrefChange({ morningNotification: !prefs.morningNotification }),
     );
+  document
+    .querySelector('[data-act="notif-preview"]')
+    ?.addEventListener("click", showNotifPreview);
 
   // Display mode — localStorage is the source of truth (lib/theme.js); we also
   // mirror the choice into prefs so a fresh device can pick it up.
