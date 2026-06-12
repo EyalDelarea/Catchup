@@ -1601,8 +1601,14 @@ function paintSources() {
         </button>
         <div class="sources-head__title">צ׳אטים</div>
       </div>
-      <p class="sources-callout">אתם בוחרים מה CatchApp רואה ·
-        <span class="mono" dir="ltr">${counts.active}/${counts.total}</span> פעילים</p>
+      <div class="sources-callout">
+        <span class="sources-callout__ico">${icon("filter", { size: 22 })}</span>
+        <div class="grow">
+          <b>אתם בוחרים מה CatchApp רואה</b>
+          <p>רק צ׳אטים מסומנים מוזנים לסיכום, לעדכונים ולהצעות. תייגו לפי הקשר כדי לכוון את המערכת.</p>
+        </div>
+        <span class="badge accent" dir="ltr">${counts.active}/${counts.total} פעילים</span>
+      </div>
       <div class="sources-toolbar">
         <input id="sources-search" class="src-search" type="search" placeholder="🔍  חיפוש צ׳אט…"
           aria-label="חיפוש צ׳אט" value="${escHtml(query)}" autocomplete="off" />
@@ -1619,6 +1625,7 @@ function paintSources() {
       ${sections.map(buildSourcesSection).join("")}
       ${filtered.length === 0 ? `<p class="empty-state">לא נמצאו צ׳אטים תואמים.</p>` : ""}
       ${removed.length ? buildRemovedSection(removed) : ""}
+      <p class="src-legend">מתג = הכללה/החרגה · ✕ = הסרה · ירח = השתקת הצעות · ״קבוצה״ ליצירת קטגוריה</p>
     </div>`;
   wireSources();
 }
@@ -1628,17 +1635,22 @@ function buildSourcesSection(section) {
   const n = sectionCount(section.scopes);
   const anyIncluded = section.scopes.some((s) => s.included);
   const bulkLabel = anyIncluded ? "כבה הכול" : "הפעל הכול";
+  const rows = section.scopes.map((s, i) => (i ? '<div class="divide"></div>' : "") + buildSourceRow(s)).join("");
   return `
     <div class="src-section">
       <div class="src-section__head">
         <span class="src-section__title">${title} <span class="src-section__count mono" dir="ltr">${n}</span></span>
         ${section.scopes.length ? `<button class="src-bulk" data-bulk="${anyIncluded ? "off" : "on"}" data-cat="${section.category?.id ?? ""}" type="button">${bulkLabel}</button>` : ""}
       </div>
-      ${section.scopes.map(buildSourceRow).join("") || `<p class="src-empty-cat">אין צ׳אטים בקטגוריה זו</p>`}
+      ${section.scopes.length ? `<div class="src-card surface">${rows}</div>` : `<p class="src-empty-cat">אין צ׳אטים בקטגוריה זו</p>`}
     </div>`;
 }
 
 function buildSourceRow(s) {
+  const name = formatGroupName(s.group);
+  const catName = sourcesState.categories.find((c) => c.id === s.categoryId)?.name;
+  const status = !s.included ? "מוחרג — לא ינוטר" : s.muted ? "מושתק · עדכונים בלבד" : "מוזן ל-CatchApp";
+  const statusLine = catName ? `${escHtml(status)} · ${escHtml(catName)}` : escHtml(status);
   const cats = sourcesState.categories
     .map(
       (c) =>
@@ -1646,14 +1658,11 @@ function buildSourceRow(s) {
     )
     .join("");
   return `
-    <div class="src-row" data-group="${escHtml(s.group)}">
-      <button class="src-switch${s.included ? " is-on" : ""}" data-act="toggle" type="button"
-        role="switch" aria-checked="${s.included}" aria-label="${s.included ? "מוזן" : "מוחרג"}">
-        <span class="src-switch__knob"></span>
-      </button>
+    <div class="src-row${s.included ? "" : " src-row--off"}" data-group="${escHtml(s.group)}">
+      ${avatarHtml(name, hueFromName(s.group), 38)}
       <div class="src-row__body">
-        <div class="src-row__name">${escHtml(formatGroupName(s.group))}</div>
-        <div class="src-row__meta mono" dir="ltr">${s.messageCount}</div>
+        <div class="src-row__name">${escHtml(name)}</div>
+        <div class="src-row__status">${statusLine}</div>
       </div>
       <select class="src-cat" data-act="cat" aria-label="קטגוריה">
         <option value=""${s.categoryId == null ? " selected" : ""}>ללא</option>
@@ -1668,6 +1677,10 @@ function buildSourceRow(s) {
           : ""
       }
       <button class="src-remove" data-act="remove" type="button" aria-label="הסר">✕</button>
+      <button class="src-switch${s.included ? " is-on" : ""}" data-act="toggle" type="button"
+        role="switch" aria-checked="${s.included}" aria-label="${s.included ? "מוזן" : "מוחרג"}">
+        <span class="src-switch__knob"></span>
+      </button>
     </div>`;
 }
 

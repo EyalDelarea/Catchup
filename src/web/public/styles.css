@@ -2617,13 +2617,17 @@ body::after {
 .sources-head { display: flex; align-items: center; gap: 10px; }
 .sources-head__title { font-weight: 700; color: var(--ink); font-size: var(--text-lg); }
 .sources-callout {
-  font-size: var(--text-sm);
-  color: var(--ink-2);
+  display: flex;
+  gap: 13px;
+  align-items: flex-start;
   background: var(--accent-weak);
-  border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  padding: 8px 12px;
+  padding: 14px 16px;
 }
+.sources-callout__ico { color: var(--accent-ink); flex: none; margin-block-start: 1px; }
+.sources-callout b { color: var(--accent-ink); font-size: var(--text-md); }
+.sources-callout p { margin: 3px 0 0; font-size: var(--text-base); color: var(--ink-2); line-height: 1.4; }
+.sources-callout .badge.accent { align-self: center; white-space: nowrap; }
 .sources-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .src-search {
   flex: 1 1 140px;
@@ -2666,26 +2670,29 @@ body::after {
 .src-bulk { font: inherit; font-size: var(--text-xs); border: 0; background: transparent; color: var(--accent-ink); cursor: pointer; }
 .src-empty-cat { font-size: var(--text-sm); color: var(--muted); padding-inline-start: 4px; }
 
+/* One surface card per category, hairline dividers between rows. */
+.src-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg, 16px); overflow: visible; }
+.divide { height: 1px; background: var(--line); }
 .src-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface);
+  gap: 13px;
+  padding: 14px 16px;
 }
+.src-row--off { opacity: 0.55; }
+.src-row--off .src-row__name { color: var(--ink-2); }
 .src-row__body { flex: 1 1 auto; min-inline-size: 0; }
-.src-row__name { color: var(--ink); font-size: var(--text-base); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.src-row__meta { font-size: var(--text-xs); color: var(--muted); }
+.src-row__name { color: var(--ink); font-size: var(--text-base); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-row__status { font-size: var(--text-sm); color: var(--muted); margin-block-start: 2px; }
+.src-legend { font-size: var(--text-xs); color: var(--muted); text-align: center; margin: 8px 0 0; }
 
 .src-switch {
   flex: 0 0 auto;
-  inline-size: 40px;
-  block-size: 24px;
+  inline-size: 42px;
+  block-size: 25px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--line);
-  background: var(--seg-off);
+  background: var(--surface-2);
   position: relative;
   cursor: pointer;
   padding: 0;
@@ -2696,13 +2703,14 @@ body::after {
   position: absolute;
   inset-block-start: 2px;
   inset-inline-start: 2px;
-  inline-size: 18px;
-  block-size: 18px;
+  inline-size: 19px;
+  block-size: 19px;
   border-radius: 50%;
-  background: var(--surface);
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
   transition: inset-inline-start 0.18s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.src-switch.is-on .src-switch__knob { inset-inline-start: 18px; }
+.src-switch.is-on .src-switch__knob { inset-inline-start: 21px; }
 @media (prefers-reduced-motion: reduce) {
   .src-switch, .src-switch__knob { transition: none; }
 }
