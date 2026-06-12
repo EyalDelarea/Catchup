@@ -1,61 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <!-- Glacier aurora gradient for background glow -->
-    <radialGradient id="bgGlow" cx="50%" cy="40%" r="60%">
-      <stop offset="0%" stop-color="#0d1a2e" />
-      <stop offset="100%" stop-color="#080b11" />
-    </radialGradient>
-    <!-- Icy cyan gradient for the speech bubble -->
-    <linearGradient id="bubbleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#bae6fd" />
-      <stop offset="60%" stop-color="#7dd3fc" />
-      <stop offset="100%" stop-color="#38bdf8" />
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6f9d84" />
+      <stop offset="55%" stop-color="#52806a" />
+      <stop offset="100%" stop-color="#3f6a55" />
     </linearGradient>
-    <!-- Aurora shimmer gradient -->
-    <linearGradient id="auroraGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#7dd3fc" stop-opacity="0" />
-      <stop offset="30%" stop-color="#7dd3fc" stop-opacity="0.18" />
-      <stop offset="60%" stop-color="#a5f3fc" stop-opacity="0.28" />
-      <stop offset="100%" stop-color="#7dd3fc" stop-opacity="0" />
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.32" />
+      <stop offset="46%" stop-color="#ffffff" stop-opacity="0" />
     </linearGradient>
-    <!-- Summary lines gradient -->
-    <linearGradient id="lineGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#7dd3fc" />
-      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.5" />
-    </linearGradient>
-    <clipPath id="roundedSquare">
-      <rect x="0" y="0" width="512" height="512" rx="108" ry="108" />
-    </clipPath>
   </defs>
-
-  <!-- Rounded square tile background -->
-  <rect x="0" y="0" width="512" height="512" rx="108" ry="108" fill="url(#bgGlow)" />
-
-  <!-- Subtle aurora band across the upper portion -->
-  <ellipse cx="256" cy="170" rx="280" ry="60" fill="url(#auroraGrad)" clip-path="url(#roundedSquare)" />
-  <ellipse cx="256" cy="200" rx="220" ry="35" fill="url(#auroraGrad)" opacity="0.6" clip-path="url(#roundedSquare)" />
-
-  <!-- Speech bubble body (rounded rectangle) -->
-  <rect x="96" y="140" width="300" height="190" rx="36" ry="36" fill="url(#bubbleGrad)" />
-
-  <!-- Speech bubble tail (pointing down-right, WhatsApp-style) -->
-  <path d="M 310 318 L 350 370 L 290 330 Z" fill="url(#bubbleGrad)" />
-
-  <!-- Summary text lines inside the bubble (abstract document glyph) -->
-  <!-- Line 1 - full width -->
-  <rect x="130" y="180" width="200" height="13" rx="6.5" fill="#080b11" opacity="0.65" />
-  <!-- Line 2 - full width -->
-  <rect x="130" y="203" width="200" height="13" rx="6.5" fill="#080b11" opacity="0.65" />
-  <!-- Line 3 - shorter (summary truncation cue) -->
-  <rect x="130" y="226" width="140" height="13" rx="6.5" fill="#080b11" opacity="0.65" />
-  <!-- Line 4 - bullet + short -->
-  <circle cx="141" cy="262" r="6" fill="#080b11" opacity="0.55" />
-  <rect x="155" y="256" width="130" height="11" rx="5.5" fill="#080b11" opacity="0.55" />
-  <!-- Line 5 - bullet + short -->
-  <circle cx="141" cy="286" r="6" fill="#080b11" opacity="0.55" />
-  <rect x="155" y="280" width="100" height="11" rx="5.5" fill="#080b11" opacity="0.55" />
-
-  <!-- Thin icy-cyan border on the tile for depth -->
-  <rect x="0" y="0" width="512" height="512" rx="108" ry="108"
-        fill="none" stroke="#7dd3fc" stroke-width="6" stroke-opacity="0.18" />
+  <!-- Sage rounded-square tile -->
+  <rect width="512" height="512" rx="120" ry="120" fill="url(#tile)" />
+  <rect width="512" height="512" rx="120" ry="120" fill="url(#sheen)" />
+  <!-- "זינוק" (swoosh) mark: speech bubble + motion lines, scaled from the 24-grid -->
+  <svg x="96" y="96" width="320" height="320" viewBox="0 0 24 24">
+    <path d="M2.5 8.6 H6" stroke="#ffffff" stroke-width="2" stroke-linecap="round" opacity="0.42" />
+    <path d="M1.6 12.6 H5.6" stroke="#ffffff" stroke-width="2" stroke-linecap="round" opacity="0.42" />
+    <path d="M10 5 h8.4 a2.8 2.8 0 0 1 2.8 2.8 v5 a2.8 2.8 0 0 1 -2.8 2.8 h-4.4 l-4 3 v-3 a2.8 2.8 0 0 1 -2.8 -2.8 V7.8 A2.8 2.8 0 0 1 10 5 z" fill="#ffffff" />
+  </svg>
 </svg>

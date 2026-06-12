@@ -232,15 +232,18 @@ function startHealthPolling() {
 
 /* ── 4. Shell: nav rail + appbar + mobile bottom nav ─────── */
 
-/** The CatchApp brand mark (check-in-a-tile), matching the prototype glyph. */
-function brandGlyph(size = 34) {
+/** The CatchApp brand mark — "זינוק" (swoosh): a speech bubble with motion
+ *  lines ("catch up fast"), the logo the team locked in. `d3` adds the 3D
+ *  app-icon treatment used on large/login surfaces. */
+function brandGlyph(size = 34, { d3 = false } = {}) {
   const r = Math.round(size * 0.29);
   return (
-    `<div class="bglyph v-check" style="width:${size}px;height:${size}px;border-radius:${r}px;font-size:${size}px">`
-    + `<span class="dot"></span>`
-    + `<svg class="ck" viewBox="0 0 24 24" aria-hidden="true">`
-    + `<path d="M20 6.5 9.5 17 4 11.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`
-    + `</div>`
+    `<div class="bglyph v-swoosh${d3 ? " d3" : ""}" style="width:${size}px;height:${size}px;border-radius:${r}px;font-size:${size}px">`
+    + `<svg class="lg-svg" viewBox="0 0 24 24" aria-hidden="true">`
+    + `<path d="M2.5 8.6 H6" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".42"/>`
+    + `<path d="M1.6 12.6 H5.6" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".42"/>`
+    + `<path d="M10 5 h8.4 a2.8 2.8 0 0 1 2.8 2.8 v5 a2.8 2.8 0 0 1 -2.8 2.8 h-4.4 l-4 3 v-3 a2.8 2.8 0 0 1 -2.8 -2.8 V7.8 A2.8 2.8 0 0 1 10 5 z" fill="currentColor"/>`
+    + `</svg></div>`
   );
 }
 
