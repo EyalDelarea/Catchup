@@ -24,8 +24,8 @@ export type SuggestGenerateDeps = {
   pool: pg.Pool;
   /** Read the total summary's per-chat entries by id. */
   loadPerChat: (pool: pg.Pool, totalSummaryId: number) => Promise<PerChatEntry[]>;
-  /** Included group ids (S4 scope filter). */
-  loadIncludedGroupIds: (pool: pg.Pool) => Promise<number[]>;
+  /** Suggestible group ids — included AND not muted (S4 scope filter + §7 mute). */
+  loadSuggestibleGroupIds: (pool: pg.Pool) => Promise<number[]>;
   /** The opaque engine_config blob from the S5 prefs store. */
   loadEngineConfigRaw: (pool: pg.Pool) => Promise<unknown>;
   /** Per-(kind,chat) feedback bias. */
@@ -53,8 +53,8 @@ export function makeSuggestGenerateHandler(deps: SuggestGenerateDeps) {
     if (!config.on) return; // master switch off → clean no-op
 
     const perChat = await deps.loadPerChat(deps.pool, totalSummaryId);
-    const included = new Set(await deps.loadIncludedGroupIds(deps.pool));
-    const inScope = filterInScope(perChat, included);
+    const suggestible = new Set(await deps.loadSuggestibleGroupIds(deps.pool));
+    const inScope = filterInScope(perChat, suggestible);
     if (inScope.length === 0) return;
 
     const bias = await deps.loadBias(deps.pool);

@@ -228,6 +228,17 @@ export function createScopeCategory(name) {
 }
 
 /**
+ * Wipe the suggestion engine's learned feedback bias (§8 "איפוס למידה").
+ * @returns {Promise<unknown>}
+ */
+export function resetSuggestionLearning() {
+  return fetch("/api/suggestions/reset-learning", { method: "POST" }).then((r) => {
+    if (!r.ok) throw new Error(`resetSuggestionLearning ${r.status}`);
+    return r.json().catch(() => ({}));
+  });
+}
+
+/**
  * @typedef {{
  *   digestTimes: string,
  *   morningNotification: boolean,

@@ -168,17 +168,34 @@ export async function upsertGroupByWhatsappId(
  * messages (last_message_at IS NULL) sink to the bottom; name is the tiebreaker
  * so equal-recency chats stay in a stable, predictable order.
  */
-export async function listGroups(
-  client: pg.Pool | pg.PoolClient,
-): Promise<{ name: string; source: string; messageCount: number; lastMessageAt: Date | null }[]> {
+export async function listGroups(client: pg.Pool | pg.PoolClient): Promise<
+  {
+    name: string;
+    source: string;
+    messageCount: number;
+    lastMessageAt: Date | null;
+    newCount: number;
+  }[]
+> {
   const { rows } = await client.query<{
     name: string;
     source: string;
     message_count: string;
     last_message_at: Date | null;
+    new_count: string;
   }>(
     `
-    SELECT g.name, g.source, COUNT(m.id) AS message_count, MAX(m.sent_at) AS last_message_at
+    SELECT g.name, g.source,
+           COUNT(m.id) AS message_count,
+           MAX(m.sent_at) AS last_message_at,
+           -- "חדשות": messages that arrived since this chat was last summarized
+           -- (an un-summarized chat counts all its messages as new to catch up on).
+           COUNT(m.id) FILTER (
+             WHERE m.sent_at > COALESCE(
+               (SELECT MAX(s.created_at) FROM summaries s WHERE s.group_id = g.id),
+               '-infinity'::timestamptz
+             )
+           ) AS new_count
     FROM groups g
     LEFT JOIN messages m ON m.group_id = g.id
     GROUP BY g.id, g.name, g.source
@@ -190,6 +207,7 @@ export async function listGroups(
     source: r.source,
     messageCount: Number(r.message_count),
     lastMessageAt: r.last_message_at ?? null,
+    newCount: Number(r.new_count),
   }));
 }
 

@@ -2,7 +2,12 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { NormalizedMessage } from "../../importer/types.js";
 import { createTestDatabase } from "../../test/db.js";
-import { listIncludedGroupIds, listScopes, upsertScope } from "./chat-scopes.js";
+import {
+  listIncludedGroupIds,
+  listScopes,
+  listSuggestibleGroupIds,
+  upsertScope,
+} from "./chat-scopes.js";
 import { upsertGroup } from "./groups.js";
 import { insertMessages } from "./messages.js";
 import { upsertParticipant } from "./participants.js";
@@ -80,11 +85,46 @@ describe("chat-scopes repository", () => {
   });
 
   describe("listScopes", () => {
-    it("projects an un-scoped group as excluded/uncategorized/not-removed (default-off)", async () => {
+    it("projects an un-scoped group as excluded/uncategorized/not-removed/not-muted (default-off)", async () => {
       await seedGroupWithMessage("cs-projection");
       const row = (await listScopes(pool)).find((r) => r.group === "cs-projection")!;
-      expect(row).toMatchObject({ included: false, categoryId: null, removed: false });
+      expect(row).toMatchObject({
+        included: false,
+        categoryId: null,
+        removed: false,
+        muted: false,
+      });
       expect(row.messageCount).toBe(1);
+    });
+  });
+
+  describe("per-chat mute (§7 third state)", () => {
+    it("upsertScope round-trips muted and listScopes projects it", async () => {
+      const g = await seedGroupWithMessage("cs-mute");
+      await upsertScope(pool, { groupId: g, included: true });
+      expect((await listScopes(pool)).find((r) => r.group === "cs-mute")!.muted).toBe(false);
+      await upsertScope(pool, { groupId: g, muted: true });
+      const row = (await listScopes(pool)).find((r) => r.group === "cs-mute")!;
+      // muting must not change inclusion — it still gets summarized.
+      expect(row).toMatchObject({ included: true, muted: true });
+      await upsertScope(pool, { groupId: g, muted: false });
+      expect((await listScopes(pool)).find((r) => r.group === "cs-mute")!.muted).toBe(false);
+    });
+
+    it("listSuggestibleGroupIds excludes muted chats but listIncludedGroupIds keeps them", async () => {
+      const plain = await seedGroupWithMessage("cs-sugg-plain");
+      const muted = await seedGroupWithMessage("cs-sugg-muted");
+      await upsertScope(pool, { groupId: plain, included: true });
+      await upsertScope(pool, { groupId: muted, included: true, muted: true });
+
+      const suggestible = await listSuggestibleGroupIds(pool);
+      const included = await listIncludedGroupIds(pool);
+
+      // muted chat is still summarized (included) ...
+      expect(included).toEqual(expect.arrayContaining([plain, muted]));
+      // ... but never produces suggestions.
+      expect(suggestible).toContain(plain);
+      expect(suggestible).not.toContain(muted);
     });
   });
 });

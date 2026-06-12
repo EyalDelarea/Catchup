@@ -52,6 +52,35 @@ function applyInline(text) {
 }
 
 /**
+ * Strip inline source-citation markers the model emits, e.g. `^[#3, #5]` or
+ * `[#1], [#2]`. The product surfaces sources via the tappable `.src` / `.sum-jump`
+ * affordance (which carries the real messageId), so the raw `[#n]` numbers are
+ * noise that the design never shows — drop them, including any leading caret and
+ * the comma joiners between a run of them. Only `#`-prefixed brackets are touched,
+ * so chat tags (`[Bar Hevr]`) and other brackets survive.
+ *
+ * @param {string} text - already HTML-escaped text
+ * @returns {string}
+ */
+function stripCitations(text) {
+  return text.replace(/\s*\^?\s*\[#[^\]\n]*\](?:\s*,?\s*\^?\s*\[#[^\]\n]*\])*/g, "");
+}
+
+/**
+ * Render a single line of inline Markdown (bold + chat tags) to safe HTML, with
+ * citation markers stripped. Use for text that lives inside its own element (a
+ * summary bullet `<li>`, a card line) where the block-level wrapping of
+ * {@link renderMarkdown} (`<p>`/`<ul>`) would be wrong.
+ *
+ * @param {string} text - raw single-line text (may contain model output)
+ * @returns {string} - safe inline HTML; empty string for empty input
+ */
+export function renderInline(text) {
+  if (text == null || String(text).trim() === "") return "";
+  return applyInline(stripCitations(escapeHtml(String(text))));
+}
+
+/**
  * Render a block of lines (no blank-line gaps within) to HTML.
  * The lines are already HTML-escaped.
  *
@@ -106,8 +135,12 @@ export function renderMarkdown(md) {
   // 1. Escape HTML FIRST — nothing from md reaches the DOM as raw markup
   const escaped = escapeHtml(md);
 
-  // 2. Split into blank-line-separated blocks
-  const rawBlocks = escaped.split(/\n{2,}/);
+  // 2. Drop inline source-citation markers (`^[#3, #5]`) — the source-jump
+  //    affordance carries the real messageId, so these raw numbers are noise.
+  const cleaned = stripCitations(escaped);
+
+  // 3. Split into blank-line-separated blocks
+  const rawBlocks = cleaned.split(/\n{2,}/);
 
   const parts = [];
 

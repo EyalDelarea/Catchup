@@ -64,6 +64,7 @@ async function getScopes(res: http.ServerResponse, deps: ServerDeps): Promise<vo
           included: s.included,
           categoryId: s.categoryId,
           removed: s.removed,
+          muted: s.muted,
         })),
       ),
     );
@@ -100,6 +101,7 @@ async function putScopes(
         update.categoryId = rec["categoryId"] as number | null;
       }
       if (typeof rec["removed"] === "boolean") update.removed = rec["removed"] as boolean;
+      if (typeof rec["muted"] === "boolean") update.muted = rec["muted"] as boolean;
       updates.push(update);
     }
     await upsertScopes(deps.pool, updates);

@@ -9,6 +9,8 @@ export type ScopeRow = {
   included: boolean;
   categoryId: number | null;
   removed: boolean;
+  /** Muted chats stay in catch-up/Updates but generate no proactive suggestions. */
+  muted: boolean;
 };
 
 /** A single scope change (one chat). `removed` true→soft-remove, false→restore. */
@@ -17,6 +19,7 @@ export type ScopeUpdate = {
   included?: boolean;
   categoryId?: number | null;
   removed?: boolean;
+  muted?: boolean;
 };
 
 /**
@@ -33,6 +36,7 @@ export async function listScopes(client: pg.Pool | pg.PoolClient): Promise<Scope
     included: boolean;
     category_id: string | null;
     removed: boolean;
+    muted: boolean;
   }>(
     `
     SELECT g.name,
@@ -41,11 +45,12 @@ export async function listScopes(client: pg.Pool | pg.PoolClient): Promise<Scope
            MAX(m.sent_at) AS last_message_at,
            COALESCE(cs.included, false) AS included,
            cs.category_id,
-           (cs.removed_at IS NOT NULL) AS removed
+           (cs.removed_at IS NOT NULL) AS removed,
+           COALESCE(cs.muted, false) AS muted
     FROM groups g
     LEFT JOIN chat_scopes cs ON cs.group_id = g.id
     LEFT JOIN messages m ON m.group_id = g.id
-    GROUP BY g.id, g.name, g.source, cs.included, cs.category_id, cs.removed_at
+    GROUP BY g.id, g.name, g.source, cs.included, cs.category_id, cs.removed_at, cs.muted
     ORDER BY last_message_at DESC NULLS LAST, g.name ASC
     `,
   );
@@ -57,6 +62,7 @@ export async function listScopes(client: pg.Pool | pg.PoolClient): Promise<Scope
     included: r.included,
     categoryId: r.category_id === null ? null : Number(r.category_id),
     removed: r.removed,
+    muted: r.muted,
   }));
 }
 
@@ -92,6 +98,12 @@ export async function upsertScope(
     vals.push(expr);
     sets.push(`removed_at = ${expr}`);
   }
+  if (update.muted !== undefined) {
+    params.push(update.muted);
+    cols.push("muted");
+    vals.push(`$${params.length}`);
+    sets.push("muted = EXCLUDED.muted");
+  }
   sets.push("updated_at = now()");
 
   await client.query(
@@ -122,6 +134,24 @@ export async function listIncludedGroupIds(client: pg.Pool | pg.PoolClient): Pro
     FROM groups g
     JOIN chat_scopes cs ON cs.group_id = g.id
     WHERE cs.included AND cs.removed_at IS NULL
+    ORDER BY g.id ASC
+    `,
+  );
+  return rows.map((r) => Number(r.id));
+}
+
+/**
+ * The suggestion filter: included group ids that are NOT muted. Muted chats are
+ * still summarized (they stay in `listIncludedGroupIds`) but produce no proactive
+ * suggestions — the §7 "third state". A strict subset of `listIncludedGroupIds`.
+ */
+export async function listSuggestibleGroupIds(client: pg.Pool | pg.PoolClient): Promise<number[]> {
+  const { rows } = await client.query<{ id: string }>(
+    `
+    SELECT g.id
+    FROM groups g
+    JOIN chat_scopes cs ON cs.group_id = g.id
+    WHERE cs.included AND cs.removed_at IS NULL AND NOT cs.muted
     ORDER BY g.id ASC
     `,
   );
