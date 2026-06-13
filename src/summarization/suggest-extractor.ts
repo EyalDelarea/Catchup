@@ -33,11 +33,11 @@ export function parseSuggestDrafts(
     const proposedText = typeof o.proposedText === "string" ? o.proposedText.trim() : "";
     if (!Number.isFinite(groupId) || !validGroupIds.has(groupId) || proposedText === "") continue;
     const reason = typeof o.reason === "string" ? o.reason.trim() : "";
-    const sourceMessageId =
-      typeof o.sourceMessageId === "number" && Number.isFinite(o.sourceMessageId)
-        ? o.sourceMessageId
-        : null;
-    drafts.push({ kind, groupId, proposedText, reason, sourceMessageId });
+    // The extractor's input is summary text with no message ids, so any
+    // `sourceMessageId` the model emits is fabricated — passing it through would
+    // break the suggestions→messages(id) FK (the 23503 crash) or, on a
+    // coincidental hit, mis-cite an unrelated message. Suggestions carry none.
+    drafts.push({ kind, groupId, proposedText, reason, sourceMessageId: null });
   }
   return drafts;
 }
