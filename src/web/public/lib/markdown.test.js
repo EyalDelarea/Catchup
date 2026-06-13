@@ -161,6 +161,46 @@ describe("renderMarkdown — citation markers", () => {
     expect(out).toContain('<bdi class="chat-tag">Bar Hevr</bdi>');
     expect(out).not.toContain("[#");
   });
+
+  // The model also emits citations WITHOUT the `#` — bracketed (`[31]`,
+  // `[32, 33]`) or bare-caret (`^131, 185`). These slipped past the old
+  // `[#…]`-only strip; `[31]` even rendered as a green `.chat-tag` chip.
+  it("strips bare bracketed numeric refs `[31]` (no chat-tag chip leaks)", () => {
+    const out = renderMarkdown("מסירה של רהיטים [31], הודעה על כרטיס [1].");
+    expect(out).not.toContain("[31]");
+    expect(out).not.toContain('chat-tag">31');
+    expect(out).not.toContain('chat-tag">1');
+    expect(out).toContain("מסירה של רהיטים");
+  });
+
+  it("strips a multi-number bracket `[32, 33]`", () => {
+    const out = renderMarkdown("התלהבות מהציוד [32, 33].");
+    expect(out).not.toContain("[32");
+    expect(out).not.toContain("33]");
+    expect(out).toContain("התלהבות מהציוד");
+  });
+
+  it("strips bare caret refs `^131, 185` and `^242`", () => {
+    const out = renderMarkdown("נופים מרשימים ^131, 185 ונוף ההרים ^242.");
+    expect(out).not.toContain("^131");
+    expect(out).not.toContain("185");
+    expect(out).not.toContain("^242");
+    expect(out).toContain("נופים מרשימים");
+    expect(out).toContain("ונוף ההרים");
+  });
+
+  it("leaves bare prose numbers (not caret/bracket-marked) intact", () => {
+    const out = renderMarkdown("כ-290 אלף הודעות נשלחו ב-2025.");
+    expect(out).toContain("290");
+    expect(out).toContain("2025");
+  });
+
+  it("keeps a chat tag adjacent to a bare numeric ref", () => {
+    const out = renderMarkdown("- [Bar Hevr] שיתף קובץ [12]");
+    expect(out).toContain('<bdi class="chat-tag">Bar Hevr</bdi>');
+    expect(out).not.toContain("[12]");
+    expect(out).not.toContain('chat-tag">12');
+  });
 });
 
 describe("renderInline", () => {

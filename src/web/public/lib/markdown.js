@@ -52,18 +52,42 @@ function applyInline(text) {
 }
 
 /**
- * Strip inline source-citation markers the model emits, e.g. `^[#3, #5]` or
- * `[#1], [#2]`. The product surfaces sources via the tappable `.src` / `.sum-jump`
- * affordance (which carries the real messageId), so the raw `[#n]` numbers are
- * noise that the design never shows — drop them, including any leading caret and
- * the comma joiners between a run of them. Only `#`-prefixed brackets are touched,
- * so chat tags (`[Bar Hevr]`) and other brackets survive.
+ * Strip the inline source-citation markers the model emits. It is INCONSISTENT
+ * about the format, so we handle every numeric variant we've seen leak:
+ *   - bracketed, hash-prefixed: `^[#3, #5]`, `[#1], [#2]`   (the original form)
+ *   - bracketed, bare numbers:  `[31]`, `[32, 33]`          (these were slipping
+ *     past the old `[#…]`-only strip and rendering as green `.chat-tag` chips —
+ *     `applyInline` turns any surviving `[…]` into a chip)
+ *   - caret, no brackets:       `^242`, `^131, 185`, `^#4, #5`
+ * The product surfaces sources via the tappable `.src` / `.sum-jump` affordance
+ * (which carries the real messageId), so these raw numbers are noise the design
+ * never shows — drop them, with any leading caret and the comma joiners between a
+ * run of them.
+ *
+ * Only PURELY-NUMERIC bracket contents are touched, so real chat tags
+ * (`[Bar Hevr]`, `[Flopi 06.06.26 🎉]`) survive for the chat-tag chip. Bare prose
+ * numbers ("כ-290 אלף") are untouched — a marker must be bracketed or caret-led.
  *
  * @param {string} text - already HTML-escaped text
  * @returns {string}
  */
 function stripCitations(text) {
-  return text.replace(/\s*\^?\s*\[#[^\]\n]*\](?:\s*,?\s*\^?\s*\[#[^\]\n]*\])*/g, "");
+  // Each marker is matched on its own (the `g` flag handles repeated/adjacent
+  // ones) and the inner number list is comma-ANCHORED (`(?:,\s*#?\d+)*`) so
+  // there is no ambiguous `\s*` repetition — i.e. linear, no catastrophic
+  // backtracking (CodeQL `js/redos`).
+  return (
+    text
+      // Bracketed numeric refs (optional leading caret / `#`): [31], [32, 33], ^[#3, #5].
+      .replace(/\^?\[#?\d+(?:,\s*#?\d+)*\]/g, "")
+      // Bare caret refs with no brackets: ^242, ^131, 185.
+      .replace(/\^#?\d+(?:,\s*#?\d+)*/g, "")
+      // A removed marker can strand whitespace before punctuation, or a joiner
+      // comma between two markers — tidy those so the prose reads naturally.
+      .replace(/ +([,.;:])/g, "$1")
+      .replace(/,(\s*[.;:])/g, "$1")
+      .replace(/ {2,}/g, " ")
+  );
 }
 
 /**

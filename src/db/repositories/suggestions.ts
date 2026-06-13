@@ -33,9 +33,13 @@ export async function insertSuggestions(
 ): Promise<void> {
   for (const d of drafts) {
     await client.query(
+      // Defense in depth: resolve source_message_id through messages so an
+      // unknown id collapses to NULL instead of violating the FK — a violation
+      // throws, failing the job and crash-looping the bus retry. Under RLS the
+      // subquery is tenant-scoped, so a cross-tenant id also degrades to NULL.
       `INSERT INTO suggestions
          (total_summary_id, kind, group_id, proposed_text, reason, source_message_id)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+       VALUES ($1, $2, $3, $4, $5, (SELECT id FROM messages WHERE id = $6))`,
       [d.totalSummaryId, d.kind, d.groupId, d.proposedText, d.reason, d.sourceMessageId ?? null],
     );
   }

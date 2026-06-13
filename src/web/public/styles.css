@@ -3456,36 +3456,12 @@ button.srcchip:hover { filter: brightness(0.97); }
 .ppl-detail__actions .btn-primary { flex: 1; }
 
 /* ── Meetings & To-dos (§6) ──────────────────────────────── */
-.duo { display: flex; flex-direction: column; gap: 22px; }
-.duo__col { display: flex; flex-direction: column; gap: 12px; min-inline-size: 0; }
-.duo__sec {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  font-size: var(--text-md);
-  font-weight: 700;
-  color: var(--ink);
-}
-.duo__sec .ic { color: var(--accent-ink); }
 
 /* month calendar */
 .cal { padding: 14px; }
 .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .cal-head b { font-size: var(--text-base); color: var(--ink); }
 .cal-nav { display: flex; gap: 4px; }
-.cal-navbtn {
-  display: inline-grid;
-  place-items: center;
-  inline-size: 30px;
-  block-size: 30px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--ink-2);
-  cursor: pointer;
-}
-.cal-navbtn:hover { background: var(--hover); color: var(--ink); }
 .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
 .cal-dow { margin-bottom: 4px; }
 .cal-dow span { text-align: center; font-size: var(--text-xs); color: var(--muted); font-weight: 600; padding-block: 2px; }
@@ -3501,25 +3477,10 @@ button.srcchip:hover { filter: brightness(0.97); }
   font-size: var(--text-sm);
   color: var(--ink);
 }
-.cal-cell.is-empty { background: transparent; }
-.cal-cell.is-today { background: var(--accent); color: var(--on-accent); font-weight: 700; }
 .cal-n { line-height: 1; }
-.cal-dot { inline-size: 5px; block-size: 5px; border-radius: 50%; background: var(--accent); }
-.cal-cell.is-today .cal-dot { background: var(--on-accent); }
 
 /* agenda timeline */
-.agenda-timeline { display: flex; flex-direction: column; gap: 16px; margin-top: 4px; }
 .day-group { display: flex; flex-direction: column; gap: 8px; }
-.day-group__head { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); color: var(--ink-2); }
-.day-pill {
-  background: var(--accent-weak);
-  color: var(--accent-ink);
-  font-weight: 700;
-  padding: 3px 10px;
-  border-radius: var(--radius-pill);
-  font-size: var(--text-xs);
-}
-.day-group__count { color: var(--muted); }
 .tl { display: flex; flex-direction: column; }
 .tl-item { display: grid; grid-template-columns: 46px 18px 1fr; align-items: stretch; gap: 8px; }
 .tl-time { font-size: var(--text-sm); color: var(--ink-2); padding-block-start: 14px; text-align: start; }
@@ -3536,65 +3497,22 @@ button.srcchip:hover { filter: brightness(0.97); }
 }
 .tl-card { padding: 11px 13px; margin-block: 6px; }
 .tl-card h4 { margin: 0; font-size: var(--text-base); font-weight: 700; color: var(--ink); }
-.tl-card__meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
-.tl-owner { display: inline-flex; align-items: center; gap: 4px; font-size: var(--text-xs); color: var(--muted); }
-.tl-owner .ic { width: 13px; height: 13px; }
 
 /* to-do checklist */
 .checklist { padding: 16px; }
-.checklist__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
-.checklist__head b { font-size: var(--text-base); color: var(--ink); font-weight: 700; }
-.checklist__bar { block-size: 8px; border-radius: var(--radius-pill); background: var(--seg-off); overflow: hidden; margin-bottom: 14px; }
-.checklist__bar > b { display: block; block-size: 100%; background: var(--accent); border-radius: var(--radius-pill); transition: inline-size 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
-.checklist__rows { display: flex; flex-direction: column; gap: 4px; }
 .cl-row { display: flex; align-items: flex-start; gap: 11px; padding: 9px 4px; }
 .cl-row.is-done { opacity: 0.55; }
-.cl-box {
-  flex: none;
-  inline-size: 24px;
-  block-size: 24px;
-  border-radius: 50%;
-  border: 1.8px solid var(--line);
-  background: var(--surface);
-  color: transparent;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-.cl-box .ic { width: 14px; height: 14px; }
-.cl-box.is-on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.cl-row__body { flex: 1 1 auto; min-inline-size: 0; }
-.cl-row__title { font-size: var(--text-base); color: var(--ink); }
-.cl-row.is-done .cl-row__title { text-decoration: line-through; }
-.cl-row__meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 5px; }
 
-/* desktop two-pane / two-column */
+/* desktop two-pane */
 @media (min-width: 900px) {
   .split { display: grid; grid-template-columns: minmax(0, 1fr) 320px; align-items: start; }
   .ppl-detail { position: sticky; inset-block-start: 18px; }
-  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; align-items: start; }
   .entity-nav { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ppl-row, .cl-box, .checklist__bar > b { transition: none; }
+  .ppl-row { transition: none; }
 }
-
-/* ── §6 local .ics export (S8) ──────────────────────────── */
-.duo__sechead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.ics-export {
-  font-size: var(--text-xs);
-  color: var(--accent-ink);
-  background: var(--accent-weak);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  padding: 4px 10px;
-  text-decoration: none;
-  white-space: nowrap;
-}
-.ics-export:hover { background: var(--surface-2); }
-
 
 /* ═══════════════════════════════════════════════════════════
    COMMAND-CENTER REDESIGN — ported verbatim from the Hi-Fi prototype.
@@ -4123,7 +4041,6 @@ h2.sec .ic{ width:15px; height:15px; }
 
 /* people detail */
 .split{ display:grid; grid-template-columns:1fr 320px; gap:18px; align-items:start; }
-.duo{ display:grid; grid-template-columns:1fr 1fr; gap:22px; align-items:start; }
 .rawbody{ flex:1; min-height:0; display:flex; flex-direction:column; }
 
 /* meetings — agenda timeline */
@@ -4151,6 +4068,8 @@ h2.sec .ic{ width:15px; height:15px; }
 .cl-title{ font-size:15px; font-weight:700; margin-bottom:6px; }
 .cbox{ width:24px; height:24px; flex:none; border-radius:50%; border:2px solid var(--line); background:var(--surface); color:transparent; cursor:pointer; display:grid; place-items:center; margin-top:1px; transition:.15s; }
 .cbox.on{ background:var(--accent); border-color:transparent; color:var(--on-accent); }
+/* must follow the rules above to win on source order (equal specificity) */
+@media (prefers-reduced-motion: reduce) { .cbox, .cl-progress b { transition: none; } }
 
 /* google calendar connect + month calendar */
 .gcal{ padding:16px; margin-bottom:18px; }
@@ -4252,7 +4171,6 @@ h2.sec .ic{ width:15px; height:15px; }
 
 /* ===================== responsive (container) ===================== */
 @media (max-width:1000px){
-  .duo{ grid-template-columns:1fr; gap:28px; }
   .mt-split{ grid-template-columns:1fr; gap:22px; }
   .mt-aside{ position:static; max-width:380px; }
 }
@@ -4274,7 +4192,6 @@ h2.sec .ic{ width:15px; height:15px; }
   .botnav button.on{ color:var(--accent-ink); background:var(--accent-weak); }
   .appbar h1{ font-size:19px; }
   .split{ grid-template-columns:1fr; }
-  .duo{ grid-template-columns:1fr; gap:26px; }
   .content{ padding:18px; }
   .lab-grid{ grid-template-columns:1fr 1fr; }
   .tiles{ max-width:440px; }
