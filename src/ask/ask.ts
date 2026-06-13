@@ -21,7 +21,35 @@ export type AskResult = { answer: string; citations: Citation[]; candidateCount:
 
 const NO_INFO = "אין מידע בטווח הזמן שנבדק.";
 
-/** Retrieve+fuse candidates for a question. Shared by ask() and askStream(). */
+/**
+ * Max time to wait for a SINGLE retriever before dropping it. A slow or cold
+ * embedder (bge-m3 loading, or Ollama busy with a summary) must never stall the
+ * whole query — we degrade to whichever retrievers answered in time (lexical is
+ * fast and index-backed). Without this, a hung embed call blocks the Promise.all
+ * past the client's stall timeout and the ask reads as "no response".
+ */
+const RETRIEVE_TIMEOUT_MS = 25_000;
+
+/** Resolve `p`, or `fallback` if it rejects or doesn't settle within `ms`. */
+function settleWithin<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
+/** Retrieve+fuse candidates for a question. Shared by ask() and askStream().
+ *  Each retriever is time-boxed + failure-tolerant so one slow/failed retriever
+ *  degrades to the others instead of hanging the query. */
 async function gather(
   deps: AskDeps,
   question: string,
@@ -31,7 +59,9 @@ async function gather(
   const window = resolveWindow(question, now, deps.lookbackDays ?? 90);
   const limit = opts.limit ?? deps.defaultLimit ?? 30;
   const lists = await Promise.all(
-    deps.retrievers.map((r) => r.retrieve({ question, window, chat: opts.chat, limit })),
+    deps.retrievers.map((r) =>
+      settleWithin(r.retrieve({ question, window, chat: opts.chat, limit }), RETRIEVE_TIMEOUT_MS, [] as Candidate[]),
+    ),
   );
   return fuse(lists).slice(0, limit);
 }
