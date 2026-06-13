@@ -54,6 +54,20 @@ describe("extractEntities", () => {
     expect(meetings[0]).toMatchObject({ groupId: 5, title: "פגישה ביום חמישי 14:00 במשרד" });
   });
 
+  it("keeps a deadline to-do out of Meetings even with a clock/day keyword", () => {
+    // "עד" marks a deadline — this is a due date, not a meeting at 18:00.
+    const { meetings, todos } = extractEntities([b("לשלם עד מחר ב-18:00", 40)], 5, [], NOW);
+    expect(meetings).toEqual([]);
+    expect(todos.map((t) => t.sourceMessageId)).toEqual([40]);
+    expect(iso(todos[0]?.when ?? null)).toBe("2026-06-11T18:00:00.000Z");
+  });
+
+  it("does not treat עד inside a word (מועד / עדכון) as a deadline", () => {
+    // A real meeting keyword + clock with no delimited עד → stays a meeting.
+    const { meetings } = extractEntities([b("מועד הפגישה 10:00", 41)], 5, [], NOW);
+    expect(meetings.map((m) => m.sourceMessageId)).toEqual([41]);
+  });
+
   it("drops bullets without a sourceMessageId (can't dedup or jump)", () => {
     const { meetings, todos } = extractEntities([b("משימה ללא מקור")], 5);
     expect(meetings).toEqual([]);

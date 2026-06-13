@@ -24,6 +24,10 @@ export type ExtractedEntities = {
 const MEETING_RE =
   /\d{1,2}:\d{2}|פגיש|מפגש|להיפגש|ביום\s|יום\s(ראשון|שני|שלישי|רביעי|חמישי|שישי|שבת)|מחר|מחרתיים/;
 
+// A delimited "עד" (by/until) marks a DEADLINE — a todo's due date, not a meeting
+// time — so it overrides the meeting heuristic. Bounded to avoid מועד / עדכון etc.
+const DEADLINE_RE = /(?:^|[^֐-׿])עד(?![֐-׿])/;
+
 /** Match a known participant name appearing in the bullet text → owner, else null. */
 function detectOwner(text: string, participantNames: string[]): string | null {
   for (const name of participantNames) {
@@ -123,7 +127,8 @@ export function extractEntities(
       sourceMessageId: b.sourceMessageId,
       when: parseHebrewWhen(title, now),
     };
-    (MEETING_RE.test(title) ? meetings : todos).push(item);
+    const isMeeting = MEETING_RE.test(title) && !DEADLINE_RE.test(title);
+    (isMeeting ? meetings : todos).push(item);
   }
   return { meetings, todos };
 }
