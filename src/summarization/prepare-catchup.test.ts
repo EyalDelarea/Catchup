@@ -188,7 +188,16 @@ describe("prepareCatchup", () => {
     // Watermark at the only message
     await upsertWatermark(pool, g, { sentAt: t1, messageId: id1 });
 
-    // Insert a prior watermark summary
+    // Insert a prior watermark summary with a full structured (version 2) output.
+    const cachedOutput = {
+      version: 2 as const,
+      overview: "cached overview",
+      tldr: "the gist",
+      topics: [{ text: "topic one", sourceMessageId: id1 }],
+      decisions: [],
+      openQuestions: [],
+      actionItems: [],
+    };
     await insertSummary(pool, {
       groupId: g,
       summaryType: "watermark",
@@ -198,7 +207,7 @@ describe("prepareCatchup", () => {
         messageCount: 1,
         usedFallback: true,
       },
-      output: { overview: "cached overview" },
+      output: cachedOutput,
       model: "gemma4:26b",
     });
 
@@ -206,7 +215,9 @@ describe("prepareCatchup", () => {
 
     expect(result.kind).toBe("cache-hit");
     if (result.kind !== "cache-hit") throw new Error("unreachable");
-    expect(result.summary).toBe("cached overview");
+    // The cache-hit carries the FULL structured output — not a flattened overview
+    // string — so the web layer can render the structured §3 card.
+    expect(result.summary).toEqual(cachedOutput);
     expect(result.generatedAt instanceof Date).toBe(true);
   });
 

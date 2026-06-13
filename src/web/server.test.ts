@@ -216,6 +216,23 @@ describe("web server", () => {
     expect(text).not.toContain("event: token");
     expect(text).not.toContain("event: done");
 
+    // Regression guard: the cached event must carry a *structured* (version 2)
+    // summary — the same normalized shape as `done` — so the client renders the
+    // structured §3 card. A flattened overview string here is what made
+    // "מה שפספסתי" fall back to the old markdown card on a cache hit.
+    const cachedFrame = text.split("\n\n").find((f) => f.includes("event: cached"));
+    expect(cachedFrame).toBeTruthy();
+    const cachedData = cachedFrame!
+      .split("\n")
+      .find((l) => l.startsWith("data: "))!
+      .slice("data: ".length);
+    const cachedPayload = JSON.parse(cachedData);
+    expect(cachedPayload.summary.version).toBe(2);
+    expect(cachedPayload.summary).toHaveProperty("overview");
+    expect(cachedPayload.summary).toHaveProperty("topics");
+    expect(cachedPayload.summary).toHaveProperty("decisions");
+    expect(cachedPayload.summary).toHaveProperty("openQuestions");
+
     // No additional summary row inserted
     const { rows: after } = await pool.query(
       `SELECT COUNT(*) AS cnt FROM summaries WHERE group_id=$1 AND summary_type='watermark'`,

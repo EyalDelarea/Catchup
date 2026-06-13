@@ -97,8 +97,10 @@ export async function handleSummarize(
         return;
       }
       if (prepared.kind === "cache-hit") {
+        // Same normalized shape as the `done` event below, so the client renders
+        // the structured §3 card (not the legacy markdown card) on a cache hit.
         send("cached", {
-          summary: prepared.summary,
+          summary: normalizeSummaryOutput(prepared.summary),
           generatedAt: prepared.generatedAt.toISOString(),
         });
         res.end();

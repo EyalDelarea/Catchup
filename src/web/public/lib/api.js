@@ -88,7 +88,7 @@ export function getMessages({ chat, aroundId, limit }) {
  *   syncing(data)  — {phase, fetched, fetchMs, partial} — progress while fetching messages
  *   status(data)   — {messages, usedFallback, stale}    — pre-summarise metadata
  *   token(data)    — {delta}                            — incremental LLM output token
- *   cached(data)   — {summary, generatedAt}             — served from cache; stream ends here
+ *   cached(data)   — {summary, generatedAt}             — served from cache (summary = normalized structured summary); stream ends here
  *   empty()        — no messages found; stream ends here
  *   done(data)     — {summaryId, elapsedMs, fetchMs, summarizeMs, fetched, partial, stale}
  *   error(data)    — {message}                          — server-side error; stream ends here
