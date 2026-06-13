@@ -4068,6 +4068,8 @@ h2.sec .ic{ width:15px; height:15px; }
 .cl-title{ font-size:15px; font-weight:700; margin-bottom:6px; }
 .cbox{ width:24px; height:24px; flex:none; border-radius:50%; border:2px solid var(--line); background:var(--surface); color:transparent; cursor:pointer; display:grid; place-items:center; margin-top:1px; transition:.15s; }
 .cbox.on{ background:var(--accent); border-color:transparent; color:var(--on-accent); }
+/* must follow the rules above to win on source order (equal specificity) */
+@media (prefers-reduced-motion: reduce) { .cbox, .cl-progress b { transition: none; } }
 
 /* google calendar connect + month calendar */
 .gcal{ padding:16px; margin-bottom:18px; }
