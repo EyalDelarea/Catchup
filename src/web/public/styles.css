@@ -1471,11 +1471,11 @@ body::after {
   width: 54px; height: 48px;
   margin-left: -27px;
   border-radius: 18px 18px 20px 20px;
-  background: linear-gradient(157deg, #cdeeff 0%, #7fd2fb 52%, #3aa8ec 100%);
-  border: 1.5px solid rgba(225, 247, 255, 0.95);
-  box-shadow: 0 10px 22px rgba(13, 110, 168, 0.45),
+  background: linear-gradient(157deg, #e1ebe5 0%, #9cbcad 52%, #52806a 100%);
+  border: 1.5px solid rgba(231, 239, 233, 0.95);
+  box-shadow: 0 10px 22px rgba(46, 77, 61, 0.40),
               inset 0 2px 5px rgba(255, 255, 255, 0.7),
-              inset 0 -9px 13px rgba(6, 40, 64, 0.42);
+              inset 0 -9px 13px rgba(30, 50, 40, 0.42);
 }
 /* eyes — dark, glossy "reading" eyes with a moving glint */
 .gl-eye {
@@ -1483,8 +1483,8 @@ body::after {
   top: 20px;
   width: 13px; height: 13px;
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 32%, #0e3f5e, #051f30 72%);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5), 0 0 0 1.5px rgba(6, 40, 64, 0.25);
+  background: radial-gradient(circle at 50% 32%, #2e4d3d, #16261d 72%);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5), 0 0 0 1.5px rgba(46, 77, 61, 0.25);
   overflow: hidden;
 }
 .gl-eye--l { left: 10px; }
@@ -1495,8 +1495,8 @@ body::after {
   width: 4.5px; height: 4.5px;
   margin: -2.25px 0 0 -2.25px;
   border-radius: 50%;
-  background: #eafaff;
-  box-shadow: 0 0 4px rgba(234, 250, 255, 0.9);
+  background: #eef5f0;
+  box-shadow: 0 0 4px rgba(231, 239, 233, 0.9);
 }
 /* brows — dark, readable on the bright head */
 .gl-brow {
@@ -1504,7 +1504,7 @@ body::after {
   top: 13px;
   width: 13px; height: 2.5px;
   border-radius: 2px;
-  background: rgba(6, 40, 64, 0.55);
+  background: rgba(46, 77, 61, 0.55);
 }
 .gl-brow--l { left: 10px; }
 .gl-brow--r { right: 10px; }
@@ -1517,7 +1517,7 @@ body::after {
   transform: rotateX(54deg);
   border-radius: 4px;
   background: linear-gradient(180deg, rgba(82, 128, 106, 0.5), rgba(82, 128, 106, 0.16));
-  border: 1px solid rgba(170, 230, 255, 0.55);
+  border: 1px solid rgba(124, 158, 138, 0.5);
   box-shadow: 0 7px 15px rgba(82, 128, 106, 0.3);
 }
 .gl-reader__book::before,
@@ -1550,14 +1550,14 @@ body::after {
   margin-top: -10px;
   border-radius: 9px 9px 9px 3px;
   background: linear-gradient(150deg, rgba(82, 128, 106, 0.42), rgba(82, 128, 106, 0.12));
-  border: 1px solid rgba(160, 228, 255, 0.5);
+  border: 1px solid rgba(124, 158, 138, 0.5);
   box-shadow: 0 4px 12px rgba(82, 128, 106, 0.25);
   opacity: 0;
 }
 .gl-msg::before,
 .gl-msg::after {
   content: ""; position: absolute; left: 5px; right: 5px; height: 2px;
-  border-radius: 2px; background: rgba(230, 245, 255, 0.6);
+  border-radius: 2px; background: rgba(231, 239, 233, 0.6);
 }
 .gl-msg::before { top: 6px; }
 .gl-msg::after { top: 12px; right: 12px; }
