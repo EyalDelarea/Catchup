@@ -31,6 +31,7 @@ const PATHS = {
   check: '<path d="M20 6.5 9.5 17 4 11.5"/>',
   chevL: '<path d="M14.5 6 8.5 12l6 6"/>',
   chevR: '<path d="M9.5 6 15.5 12l-6 6"/>',
+  chevD: '<path d="M6 9.5 12 15.5l6-6"/>',
   // ── Today (§2) glyphs ─────────────────────────────────
   plus: '<path d="M12 5v14M5 12h14"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',

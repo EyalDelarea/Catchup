@@ -14,15 +14,16 @@ const KIND_INSTRUCTION: Record<SuggestionKind, string> = {
 /**
  * Build the extraction prompt for one suggestion kind over the in-scope per-chat
  * summaries. Demands a STRICT JSON array so the extractor can parse it
- * deterministically. Pure — no IO. The model must echo a `sourceMessageId` from
- * the chat when one applies, so the §2 source chip + S2 jump work.
+ * deterministically. Pure — no IO. The input is summary text only (no message
+ * ids), so the prompt deliberately does NOT ask for a `source_message_id`: any
+ * id the model invented would be ungrounded and break the messages(id) FK.
  */
 export function buildSuggestPrompt(kind: SuggestionKind, perChat: PerChatEntry[]): SummaryPrompt {
   const system = [
     "אתה עוזר שמחלץ הצעות מתוך סיכומי צ׳אטים בוואטסאפ.",
     KIND_INSTRUCTION[kind],
     "החזר אך ורק מערך JSON תקין, ללא טקסט נוסף, בצורה:",
-    '[{"groupId": <number>, "proposedText": "<hebrew>", "reason": "<hebrew, why>", "sourceMessageId": <number|null>}]',
+    '[{"groupId": <number>, "proposedText": "<hebrew>", "reason": "<hebrew, why>"}]',
     "אם אין פריטים רלוונטיים, החזר מערך ריק [].",
     "השתמש ב-groupId המדויק של הצ׳אט שממנו חולץ הפריט.",
   ].join("\n");
