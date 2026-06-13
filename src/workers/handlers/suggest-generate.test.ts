@@ -20,7 +20,7 @@ function makeDeps(over: Partial<SuggestGenerateDeps> = {}): SuggestGenerateDeps 
   return {
     pool: {} as never,
     loadPerChat: vi.fn().mockResolvedValue(perChat),
-    loadIncludedGroupIds: vi.fn().mockResolvedValue([1, 2]),
+    loadSuggestibleGroupIds: vi.fn().mockResolvedValue([1, 2]),
     loadEngineConfigRaw: vi.fn().mockResolvedValue({ on: true, proact: "מאוזן" }),
     loadBias: vi.fn().mockResolvedValue(new Map()),
     extract: vi.fn().mockResolvedValue([]),
@@ -50,7 +50,7 @@ describe("suggestGenerateHandler", () => {
       ),
     );
     const deps = makeDeps({
-      loadIncludedGroupIds: vi.fn().mockResolvedValue([1]), // group 2 excluded
+      loadSuggestibleGroupIds: vi.fn().mockResolvedValue([1]), // group 2 excluded (or muted)
       loadEngineConfigRaw: vi.fn().mockResolvedValue({
         on: true,
         kinds: { task: true, meeting: false, followup: false, recap: false },

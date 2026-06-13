@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { renderMarkdown } from "./markdown.js";
+import { renderInline, renderMarkdown } from "./markdown.js";
 
 describe("renderMarkdown — headings", () => {
   it("## heading → <h3>", () => {
@@ -139,6 +139,56 @@ describe("renderMarkdown — empty / whitespace input", () => {
 
   it("whitespace-only → empty string", () => {
     expect(renderMarkdown("   \n  \n  ")).toBe("");
+  });
+});
+
+describe("renderMarkdown — citation markers", () => {
+  it("strips a single `^[#3, #5]` marker", () => {
+    const out = renderMarkdown("גיא פרסם את לוח הזמנים ^[#3, #5].");
+    expect(out).not.toContain("#3");
+    expect(out).not.toContain("[#");
+    expect(out).toContain("לוח הזמנים");
+  });
+
+  it("strips a run of separate `[#1], [#2]` markers", () => {
+    const out = renderMarkdown("אין עליו מפתח [#1], [#2].");
+    expect(out).not.toContain("[#");
+    expect(out).not.toContain("#2");
+  });
+
+  it("keeps chat tags (no #) intact", () => {
+    const out = renderMarkdown("- [Bar Hevr] עדכון ^[#7]");
+    expect(out).toContain('<bdi class="chat-tag">Bar Hevr</bdi>');
+    expect(out).not.toContain("[#");
+  });
+});
+
+describe("renderInline", () => {
+  it("renders **bold** without block wrapping", () => {
+    const out = renderInline("**זמינות לעזרה:** אייל עדכן");
+    expect(out).toContain("<strong>זמינות לעזרה:</strong>");
+    expect(out).not.toContain("<p>");
+    expect(out).not.toContain("<ul>");
+  });
+
+  it("strips inline citation markers", () => {
+    const out = renderInline("אין עליו מפתח ^[#1], [#2].");
+    expect(out).not.toContain("[#");
+    expect(out).not.toContain("**");
+    expect(out).toContain("אין עליו מפתח");
+  });
+
+  it("escapes HTML before transforming", () => {
+    const out = renderInline("<b>x</b> **y**");
+    expect(out).not.toContain("<b>x</b>");
+    expect(out).toContain("&lt;b&gt;");
+    expect(out).toContain("<strong>y</strong>");
+  });
+
+  it("empty / null → empty string", () => {
+    expect(renderInline("")).toBe("");
+    expect(renderInline(null)).toBe("");
+    expect(renderInline("   ")).toBe("");
   });
 });
 

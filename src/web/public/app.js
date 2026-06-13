@@ -14,16 +14,16 @@
  * Teardown: EventSource is closed when leaving a streaming view
  */
 
-import { actOnSuggestion, askStream, createScopeCategory, getGroups, getMeetings, getMessages, getPeople, getPreferences, getScopeCategories, getScopes, getStatus, getSummaries, getToday, getTodos, putPreferences, putScopes, setTodoDone, summarizeStream } from "./lib/api.js";
+import { actOnSuggestion, askStream, createScopeCategory, getGroups, getMeetings, getMessages, getPeople, getPreferences, getScopeCategories, getScopes, getStatus, getSummaries, getToday, getTodos, putPreferences, putScopes, resetSuggestionLearning, setTodoDone, summarizeStream } from "./lib/api.js";
 import { avatarTint, buildMonthGrid, eventDaySet, groupMeetingsByDay, peopleStatusMeta, relativeDay, todoProgress } from "./lib/agenda.js";
 import { activeCount, filterScopes, groupByCategory, partitionRemoved, sectionCount } from "./lib/scopes.js";
 import { DIGEST_CHOICES, ENGINE_KINDS, PROACT_LEVELS, isDigestSelected, normalizeEngineConfig, toggleDigestTime } from "./lib/prefs.js";
 import { buildDeck, clampIndex, commitActionFor, emptyTally, greeting, indexAfterRemoval, isSuggestion, leavingVariant, peekCount, recordTally, removeCardById, segmentFills, suggestionConfig, tallyBits, tileCounts, TILE_KINDS } from "./lib/today.js";
 import { formatAgo, presetToSince, validateRangeInput } from "./lib/time.js";
-import { renderMarkdown } from "./lib/markdown.js";
+import { renderInline, renderMarkdown } from "./lib/markdown.js";
 import { deriveHealth } from "./lib/health.js";
 import { shouldStartBackgroundRefresh } from "./lib/open-state.js";
-import { PHASE_LABELS, PHASES, phaseFill, activeZoneIndex, phaseCaption, scanFill } from "./lib/phase-loader.js";
+import { scanFill } from "./lib/phase-loader.js";
 import { appendToken, beginQuestion, createConversation, failAnswer, finishAnswer, loadConversation, saveConversation, setPhase } from "./lib/ama-conversation.js";
 import { DEMO_GROUPS, DEMO_SUMMARY, DEMO_SUMMARIES, DEMO_TOTAL_HIGHLIGHTS, DEMO_TOTAL_PERCHAT } from "./lib/demo-data.js";
 import { applyTheme, readStoredTheme, resolveInitialTheme, setTheme } from "./lib/theme.js";
@@ -57,6 +57,9 @@ let totalLoaderTimer = null;
 let healthInterval = null;
 /** Cached groups list. */
 let cachedGroups = [];
+/** Updates (§3) category filter + the category list backing its chips. */
+let catchupFilter = "הכול";
+let catchupCategories = [];
 /** Active AMA conversation (restored from sessionStorage when the panel opens). */
 let amaConversation = createConversation();
 /** Scope of the active AMA conversation, for persistence keying. */
@@ -384,10 +387,13 @@ async function loadGroupsIntoList() {
   // Scope filter (S4 §3): hide excluded/removed chats. Resilient — on any scope
   // failure, fall back to showing all groups (default-on).
   try {
-    const excluded = new Set(
-      (await getScopes()).filter((s) => !s.included || s.removed).map((s) => s.group),
-    );
-    groups = groups.filter((g) => !excluded.has(g.name));
+    const byName = new Map((await getScopes()).map((s) => [s.group, s]));
+    groups = groups
+      .filter((g) => {
+        const s = byName.get(g.name);
+        return s ? s.included && !s.removed : false;
+      })
+      .map((g) => ({ ...g, categoryId: byName.get(g.name)?.categoryId ?? null }));
   } catch {
     /* show all on scope-load failure */
   }
@@ -424,6 +430,13 @@ async function renderCatchup() {
   paneMain.innerHTML = `<div class="content"><p class="thread-loading">טוען עדכונים…</p></div>`;
 
   if (cachedGroups.length === 0 && !DEMO) await loadGroupsIntoList();
+  if (!DEMO && catchupCategories.length === 0) {
+    try {
+      catchupCategories = await getScopeCategories();
+    } catch {
+      /* chips fall back to just "הכול" */
+    }
+  }
   const groups = cachedGroups;
 
   if (!groups.length) {
@@ -433,24 +446,55 @@ async function renderCatchup() {
           <div class="empty-ic">${icon("filter", { size: 26 })}</div>
           <h3>אין צ׳אטים מוזנים</h3>
           <p>בחרו אילו שיחות יזינו את CatchApp כדי לקבל עדכונים.</p>
-          <button class="btn btn-soft" id="catchup-manage" type="button">${icon("filter", { size: 16 })}ניהול צ׳אטים</button>
+          <button class="btn btn-soft" id="catchup-manage" type="button">${icon("filter", { size: 15 })}ניהול צ׳אטים</button>
         </div>
       </div>`;
     document.getElementById("catchup-manage")?.addEventListener("click", () => navigate("sources"));
     return;
   }
 
-  const cards = groups.map((g) => buildUpdateCard(g)).join("");
+  // Category chips: "הכול" + any category that has at least one included chat.
+  const usedCatIds = new Set(groups.map((g) => g.categoryId).filter((id) => id != null));
+  const catChips = catchupCategories
+    .filter((c) => usedCatIds.has(c.id))
+    .map((c) => ({ name: c.name, id: c.id }));
+  const filterNames = ["הכול", ...catChips.map((c) => c.name)];
+  if (!filterNames.includes(catchupFilter)) catchupFilter = "הכול";
+
+  const visible =
+    catchupFilter === "הכול"
+      ? groups
+      : groups.filter((g) => catChips.find((c) => c.name === catchupFilter)?.id === g.categoryId);
+
+  const chips = filterNames
+    .map((n) => `<span class="chip${n === catchupFilter ? " on" : ""}" data-filter="${escHtml(n)}">${escHtml(n)}</span>`)
+    .join("");
+
+  const listOrEmpty =
+    visible.length === 0
+      ? `<div class="empty">
+          <div class="empty-ic">${icon("inbox", { size: 26 })}</div>
+          <h3>אין עדכונים בקטגוריה זו</h3>
+          <p>נסו קטגוריה אחרת, או הוסיפו עוד צ׳אטים לקבוצה הזו.</p>
+        </div>`
+      : `<div class="list">${visible.map((g) => buildUpdateCard(g)).join("")}</div>`;
+
   paneMain.innerHTML = `
     <div class="content">
       <div class="filters">
-        <span class="muted" style="font-weight:700">קבץ לפי:</span>
-        <span class="chip on">הכול</span>
+        <span class="muted" style="font-size:13px;font-weight:700">קבץ לפי:</span>
+        ${chips}
         <span class="chip cat-manage" id="catchup-manage">${icon("filter", { size: 14 })}נהל צ׳אטים</span>
       </div>
-      <div class="list">${cards}</div>
+      ${listOrEmpty}
     </div>`;
   document.getElementById("catchup-manage")?.addEventListener("click", () => navigate("sources"));
+  paneMain.querySelector(".filters")?.addEventListener("click", (e) => {
+    const ch = e.target.closest(".chip[data-filter]");
+    if (!ch) return;
+    catchupFilter = ch.dataset.filter;
+    renderCatchup();
+  });
   for (const card of paneMain.querySelectorAll(".itemcard[data-group]")) {
     card.addEventListener("click", () => navigate("detail", card.dataset.group));
   }
@@ -460,17 +504,16 @@ function buildUpdateCard(g) {
   const name = formatGroupName(g.name);
   const hue = g.hue ?? hueFromName(g.name);
   const sum = g.sum || "הקישו לסיכום מה שפספסתם בשיחה הזו.";
-  const newBadge = g.n ? `<span class="badge accent">${g.n} חדשות</span>` : "";
-  const who = g.who || (g.messageCount != null ? `${g.messageCount} הודעות` : "");
+  const n = g.newCount ?? g.n;
+  const newBadge = n ? `<span class="badge accent">${n} חדשות</span>` : "";
   const ago = g.lastMessageAt ? formatAgo(g.lastMessageAt) : "";
-  const meta = [who, ago].filter(Boolean).join(" · ");
   return `
     <div class="itemcard surface" data-group="${escHtml(g.name)}" role="button" tabindex="0">
       ${avatarHtml(name, hue, 40)}
       <div class="grow">
         <h4>${escHtml(name)}${newBadge}</h4>
         <p>${escHtml(sum)}</p>
-        ${meta ? `<div class="meta"><span class="muted">${escHtml(meta)}</span></div>` : ""}
+        ${ago ? `<div class="meta"><span class="muted" style="font-size:12px;font-weight:600">${escHtml(ago)}</span></div>` : ""}
       </div>
       <span class="btn btn-soft" style="align-self:center">פתח ${icon("chevL", { size: 15 })}</span>
     </div>`;
@@ -849,34 +892,43 @@ function onError(data) {
 /* ── 5d. Phase Tube + summary builders ───────────────────── */
 
 /**
- * Liquid Phase Tube — phase-aware loader.
- * @param {{ phase: string, messages?: number, elapsed?: number }} opts
+ * The playful "summarizing" loader (.sumload): a bobbing brand glyph in a
+ * pulsing ring, orbiting dots, rising chat bubbles, twinkling sparkles and an
+ * indeterminate bar. All motion is CSS and gated behind prefers-reduced-motion.
  */
-function buildPhaseTube({ phase = "sync", messages = 0, elapsed = 0 } = {}) {
-  const fill = phaseFill(phase);
-  const active = activeZoneIndex(phase);
-  const caption = phaseCaption(phase, { messages });
-  const elapsedStr = elapsed > 0 ? `${elapsed}ש׳` : "";
-  // Labels render in phase order; RTL places the first (סנכרון) on the right.
-  const labels = PHASES.map((p, i) =>
-    `<span class="phase-tube__label${i <= active ? " is-lit" : ""}${i === active ? " is-active" : ""}">${PHASE_LABELS[p]}</span>`
-  ).join("");
+function buildSumLoader(title, quip, compact = false) {
   return `
-    <div class="phase-tube-wrap glass-card" role="status" aria-live="polite" aria-label="${escHtml(caption)}">
-      <div class="phase-tube__aurora" aria-hidden="true"></div>
-      <div class="phase-tube__cap">
-        <span class="phase-tube__caption">${escHtml(caption)}</span>
-        <span class="phase-tube__elapsed" id="tube-elapsed">${escHtml(elapsedStr)}</span>
+    <div class="sumload${compact ? " sumload--compact" : ""}" role="status" aria-live="polite" aria-label="${escHtml(title)}">
+      <div class="sumload-scene" aria-hidden="true">
+        <div class="sumload-floats"><i></i><i></i><i></i></div>
+        <div class="sumload-orbit"><i></i><i></i><i></i></div>
+        <div class="sumload-ring"></div>
+        <div class="sumload-core">${brandGlyph(compact ? 30 : 38)}</div>
+        <span class="sumload-spark s1">${icon("sparkle", { size: 13 })}</span>
+        <span class="sumload-spark s2">${icon("sparkle", { size: 11 })}</span>
+        <span class="sumload-spark s3">${icon("sparkle", { size: 12 })}</span>
       </div>
-      <div class="phase-tube" aria-hidden="true">
-        <div class="phase-tube__liq" style="width:${fill}%"></div>
-        <span class="phase-tube__zone" style="right:25%"></span>
-        <span class="phase-tube__zone" style="right:50%"></span>
-        <span class="phase-tube__zone" style="right:75%"></span>
-      </div>
-      <div class="phase-tube__labels">${labels}</div>
-    </div>
-  `;
+      <div class="sumload-title">${escHtml(title)}</div>
+      <div class="sumload-quip">${escHtml(quip)}</div>
+      <div class="sumload-bar"><b></b></div>
+    </div>`;
+}
+
+/**
+ * Summarize loader (phase-aware copy). Name + signature are kept so existing
+ * call sites — and the now no-op tube updaters — need no change; the retired
+ * Glacier "phase tube" is replaced by the designed .sumload scene.
+ * @param {{ phase?: string }} opts
+ */
+function buildPhaseTube({ phase = "sync" } = {}) {
+  const copy = {
+    sync: ["מתחבר לוואטסאפ…", "טוען את ההודעות האחרונות…"],
+    read: ["קורא את ההודעות…", "עובר על מה שפספסת…"],
+    summarize: ["בונה את הסיכום…", "מתמצת לכמה שורות ✦"],
+    done: ["מסיים…", "כמעט שם ✦"],
+  };
+  const [title, quip] = copy[phase] || copy.sync;
+  return buildSumLoader(title, quip);
 }
 
 /** Update the live elapsed counter inside the tube. */
@@ -926,7 +978,9 @@ function buildSummaryCardDone(text, statusText, stale) {
 function renderSumBullets(bullets) {
   return bullets
     .map((b) => {
-      const text = escHtml(b.text);
+      // Inline markdown (bold label + chat tags), citation markers stripped —
+      // the source-jump button carries the real messageId for attribution.
+      const text = renderInline(b.text);
       if (b.sourceMessageId) {
         return `<li><button type="button" class="sum-jump" data-id="${b.sourceMessageId}">` +
           `<span class="sum-jump__text">${text}</span>` +
@@ -1348,8 +1402,8 @@ function renderAma(scope) {
 /** Starter prompts shown above the input on the global Ask, before any question. */
 const AMA_SUGGESTIONS = [
   "מה הכי דחוף מכל השיחות שלי?",
-  "מה פספסתי היום?",
-  "אילו החלטות פתוחות צריך לסגור?",
+  "סכם את כל הקבוצות מהשבוע",
+  "למי עדיין לא חזרתי?",
 ];
 
 /** Suggestion-chip row — only on the global Ask with an empty thread. */
@@ -1406,7 +1460,18 @@ function submitAmaQuestion(scope) {
       renderAmaMessages();
     },
     citations: (d) => finishAnswer(reply, d.citations),
-    done: settle,
+    done: (d) => {
+      // Show the designed "no results" surface when the answer cited nothing AND
+      // either retrieval was empty or the model returned its no-relevant-info
+      // marker — an answer that actually found something always carries citations.
+      const noCites = !(reply.citations && reply.citations.length);
+      const noInfo = /אין הודעות רלוונט|אין מידע/.test(reply.text || "");
+      if (noCites && (d?.candidateCount === 0 || noInfo)) {
+        reply.noResults = true;
+        reply.pending = false;
+      }
+      settle();
+    },
     error: (d) => {
       // A dropped connection after the answer completed is not a failure.
       if (reply.pending) failAnswer(reply, d.message);
@@ -1428,9 +1493,16 @@ function renderAmaMessages() {
       return `<div class="msg me"><div class="bubble">${escHtml(m.text)}</div></div>`;
     }
     if (m.pending && !m.text) {
-      const label =
-        m.phase === "searching" ? "מחפש בהודעות…" : m.phase === "synthesizing" ? "מנסח תשובה…" : "חושב…";
-      return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble writing">${label}<span class="caret"></span></div></div></div>`;
+      const [title, sub] =
+        m.phase === "synthesizing"
+          ? ["מנסח תשובה…", "מסכם את מה שנמצא"]
+          : m.phase === "searching"
+            ? ["מחפש בכל ההיסטוריה…", "קורא הודעות רלוונטיות"]
+            : ["חושב…", ""];
+      return `<div class="msg ai"><div class="ask-state"><span class="sg-spark">${icon("sparkle", { size: 16 })}</span><div><b>${title}</b>${sub ? `<div class="ask-sub">${sub}</div>` : ""}</div><span class="ob-dots"><i></i><i></i><i></i></span></div></div>`;
+    }
+    if (m.noResults) {
+      return `<div class="msg ai"><div class="empty err"><div class="empty-ic err-ic err-ic--wiggle">${icon("search", { size: 26 })}<span class="err-ring"></span></div><h3>לא מצאתי על זה כלום</h3><p>לא נמצאו הודעות רלוונטיות בשיחות שבחרת. נסו לנסח אחרת או להרחיב את טווח הצ׳אטים.</p></div></div>`;
     }
     if (m.error) {
       return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble" style="color:var(--warn-ink)">${escHtml(m.error)}</div></div></div>`;
@@ -1447,7 +1519,7 @@ function renderAmaSources(citations) {
   if (!citations?.length) return "";
   const items = citations.map((c) =>
     `<button type="button" class="src" data-chat="${escHtml(c.chat)}" data-id="${c.messageId}">` +
-    `${icon("source", { size: 13 })}<span>[${c.n}] ${escHtml(formatGroupName(c.chat))}</span>` +
+    `${icon("source", { size: 13 })}<span><span dir="ltr">[${c.n}]</span> ${escHtml(formatGroupName(c.chat))}</span>` +
     `<span class="src-date" dir="ltr"> · ${escHtml(fmtTime(c.sentAt))}</span></button>`
   ).join("");
   return `<div class="cites">${items}</div>`;
@@ -1514,6 +1586,15 @@ async function renderThread(chat, aroundId) {
 
 const SEG_LABEL = { all: "הכול", included: "מוזנים", excluded: "מוחרגים" };
 const sourcesState = { scopes: [], categories: [], query: "", segment: "all" };
+let sourcesMenuWired = false;
+
+/** Close every open per-row ⋯ overflow menu in Sources. */
+function closeAllSourceMenus() {
+  for (const m of document.querySelectorAll(".src-row .cl-menu")) m.hidden = true;
+  for (const b of document.querySelectorAll('.src-row [data-act="menu"]')) {
+    b.setAttribute("aria-expanded", "false");
+  }
+}
 
 /** The Sources control center (§7): whitelist/blacklist + categorize chats. */
 async function renderSources() {
@@ -1547,8 +1628,14 @@ function paintSources() {
         </button>
         <div class="sources-head__title">צ׳אטים</div>
       </div>
-      <p class="sources-callout">אתם בוחרים מה CatchApp רואה ·
-        <span class="mono" dir="ltr">${counts.active}/${counts.total}</span> פעילים</p>
+      <div class="sources-callout">
+        <span class="sources-callout__ico">${icon("filter", { size: 22 })}</span>
+        <div class="grow">
+          <b>אתם בוחרים מה CatchApp רואה</b>
+          <p>רק צ׳אטים מסומנים מוזנים לסיכום, לעדכונים ולהצעות. תייגו לפי הקשר כדי לכוון את המערכת.</p>
+        </div>
+        <span class="badge accent" dir="ltr">${counts.active}/${counts.total} פעילים</span>
+      </div>
       <div class="sources-toolbar">
         <input id="sources-search" class="src-search" type="search" placeholder="🔍  חיפוש צ׳אט…"
           aria-label="חיפוש צ׳אט" value="${escHtml(query)}" autocomplete="off" />
@@ -1565,6 +1652,7 @@ function paintSources() {
       ${sections.map(buildSourcesSection).join("")}
       ${filtered.length === 0 ? `<p class="empty-state">לא נמצאו צ׳אטים תואמים.</p>` : ""}
       ${removed.length ? buildRemovedSection(removed) : ""}
+      <p class="src-legend">מתג = הכללה/החרגה · ✕ = הסרה · ירח = השתקת הצעות · ״קבוצה״ ליצירת קטגוריה</p>
     </div>`;
   wireSources();
 }
@@ -1574,38 +1662,56 @@ function buildSourcesSection(section) {
   const n = sectionCount(section.scopes);
   const anyIncluded = section.scopes.some((s) => s.included);
   const bulkLabel = anyIncluded ? "כבה הכול" : "הפעל הכול";
+  const rows = section.scopes.map((s, i) => (i ? '<div class="divide"></div>' : "") + buildSourceRow(s)).join("");
   return `
     <div class="src-section">
       <div class="src-section__head">
         <span class="src-section__title">${title} <span class="src-section__count mono" dir="ltr">${n}</span></span>
         ${section.scopes.length ? `<button class="src-bulk" data-bulk="${anyIncluded ? "off" : "on"}" data-cat="${section.category?.id ?? ""}" type="button">${bulkLabel}</button>` : ""}
       </div>
-      ${section.scopes.map(buildSourceRow).join("") || `<p class="src-empty-cat">אין צ׳אטים בקטגוריה זו</p>`}
+      ${section.scopes.length ? `<div class="src-card surface">${rows}</div>` : `<p class="src-empty-cat">אין צ׳אטים בקטגוריה זו</p>`}
     </div>`;
 }
 
 function buildSourceRow(s) {
-  const cats = sourcesState.categories
-    .map(
-      (c) =>
-        `<option value="${c.id}"${s.categoryId === c.id ? " selected" : ""}>${escHtml(c.name)}</option>`,
-    )
+  const name = formatGroupName(s.group);
+  const catName = sourcesState.categories.find((c) => c.id === s.categoryId)?.name;
+  const status = !s.included ? "מוחרג — לא ינוטר" : s.muted ? "מושתק · עדכונים בלבד" : "מוזן ל-CatchApp";
+  const statusLine = catName ? `${escHtml(status)} · ${escHtml(catName)}` : escHtml(status);
+  const moveItems = sourcesState.categories
+    .filter((c) => c.id !== s.categoryId)
+    .map((c) => `<button data-act="cat" data-cat="${c.id}" type="button">${escHtml(c.name)}${icon("chevL", { size: 13 })}</button>`)
     .join("");
+  const toNone = s.categoryId != null ? `<button data-act="cat" data-cat="" type="button">ללא קטגוריה${icon("chevL", { size: 13 })}</button>` : "";
   return `
-    <div class="src-row" data-group="${escHtml(s.group)}">
+    <div class="src-row${s.included ? "" : " src-row--off"}" data-group="${escHtml(s.group)}">
+      ${avatarHtml(name, hueFromName(s.group), 38)}
+      <div class="src-row__body">
+        <div class="src-row__name">${escHtml(name)}</div>
+        <div class="src-row__status">${statusLine}</div>
+      </div>
+      ${
+        s.included
+          ? `<button class="src-mute${s.muted ? " is-on" : ""}" data-act="mute" type="button"
+        aria-pressed="${s.muted ? "true" : "false"}"
+        aria-label="${s.muted ? "בטל השתקת הצעות" : "השתק הצעות"}"
+        title="${s.muted ? "ההצעות מושתקות — הצ׳אט עדיין מופיע בעדכונים" : "השתק הצעות (הצ׳אט עדיין מופיע בעדכונים)"}">${icon("moon", { size: 15 })}</button>`
+          : ""
+      }
+      <div class="src-actions-wrap">
+        <button class="cl-ico" data-act="menu" type="button" aria-haspopup="true" aria-expanded="false" aria-label="פעולות">${icon("more", { size: 18 })}</button>
+        <div class="cl-menu surface" hidden>
+          <button data-act="toggle" type="button">${s.included ? "הסר מהסיכום" : "כלול בסיכום"}${icon(s.included ? "x" : "check", { size: 14 })}</button>
+          <div class="cl-menu-label">העבר לקבוצה</div>
+          ${moveItems}${toNone}
+          <div class="divide"></div>
+          <button class="danger" data-act="remove" type="button">הסר מהרשימה${icon("trash", { size: 14 })}</button>
+        </div>
+      </div>
       <button class="src-switch${s.included ? " is-on" : ""}" data-act="toggle" type="button"
         role="switch" aria-checked="${s.included}" aria-label="${s.included ? "מוזן" : "מוחרג"}">
         <span class="src-switch__knob"></span>
       </button>
-      <div class="src-row__body">
-        <div class="src-row__name">${escHtml(formatGroupName(s.group))}</div>
-        <div class="src-row__meta mono" dir="ltr">${s.messageCount}</div>
-      </div>
-      <select class="src-cat" data-act="cat" aria-label="קטגוריה">
-        <option value=""${s.categoryId == null ? " selected" : ""}>ללא</option>
-        ${cats}
-      </select>
-      <button class="src-remove" data-act="remove" type="button" aria-label="הסר">✕</button>
     </div>`;
 }
 
@@ -1633,6 +1739,7 @@ async function applyScopeChange(updates) {
     if (u.included !== undefined) row.included = u.included;
     if (u.categoryId !== undefined) row.categoryId = u.categoryId;
     if (u.removed !== undefined) row.removed = u.removed;
+    if (u.muted !== undefined) row.muted = u.muted;
   }
   paintSources();
   try {
@@ -1683,9 +1790,16 @@ function wireSources() {
   }
   for (const row of document.querySelectorAll(".src-row[data-group]")) {
     const group = row.dataset.group;
-    row.querySelector('[data-act="toggle"]')?.addEventListener("click", () => {
+    // The include switch AND the menu's "כלול/הסר מהסיכום" item both toggle inclusion.
+    for (const t of row.querySelectorAll('[data-act="toggle"]')) {
+      t.addEventListener("click", () => {
+        const s = sourcesState.scopes.find((x) => x.group === group);
+        applyScopeChange([{ group, included: !s.included }]);
+      });
+    }
+    row.querySelector('[data-act="mute"]')?.addEventListener("click", () => {
       const s = sourcesState.scopes.find((x) => x.group === group);
-      applyScopeChange([{ group, included: !s.included }]);
+      applyScopeChange([{ group, muted: !s.muted }]);
     });
     row.querySelector('[data-act="remove"]')?.addEventListener("click", () =>
       applyScopeChange([{ group, removed: true }]),
@@ -1693,16 +1807,107 @@ function wireSources() {
     row.querySelector('[data-act="restore"]')?.addEventListener("click", () =>
       applyScopeChange([{ group, removed: false }]),
     );
-    row.querySelector('[data-act="cat"]')?.addEventListener("change", (e) => {
-      const val = e.target.value;
-      applyScopeChange([{ group, categoryId: val === "" ? null : Number(val) }]);
-    });
+    for (const cb of row.querySelectorAll('[data-act="cat"]')) {
+      cb.addEventListener("click", () => {
+        const val = cb.dataset.cat;
+        applyScopeChange([{ group, categoryId: val === "" ? null : Number(val) }]);
+      });
+    }
+    // ⋯ overflow menu (move-to-group + remove): open one at a time.
+    const menuBtn = row.querySelector('[data-act="menu"]');
+    const menu = row.querySelector(".cl-menu");
+    if (menuBtn && menu) {
+      menuBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const willOpen = menu.hidden;
+        closeAllSourceMenus();
+        menu.hidden = !willOpen;
+        menuBtn.setAttribute("aria-expanded", String(willOpen));
+      });
+      menu.addEventListener("click", (e) => e.stopPropagation());
+    }
+  }
+  // Close any open ⋯ menu on an outside click (wired once).
+  if (!sourcesMenuWired) {
+    sourcesMenuWired = true;
+    document.addEventListener("click", closeAllSourceMenus);
   }
 }
 
 /* ── 7d. Settings (preferences §8) ───────────────────────── */
 
 const settingsState = { prefs: null };
+
+/** Morning-notification preview (§8): a lock-screen push mock overlaid on the
+ *  main column. Dismiss by tapping the backdrop, the "סגירה" button, or Esc. */
+function showNotifPreview() {
+  const host = document.querySelector(".main");
+  if (!host || document.getElementById("notif-preview")) return;
+  const el = document.createElement("div");
+  el.className = "notif-preview";
+  el.id = "notif-preview";
+  el.setAttribute("role", "dialog");
+  el.setAttribute("aria-label", "תצוגה מקדימה של התראת הבוקר");
+  el.innerHTML = `
+    <div>
+      <div class="notif-card">
+        <span class="notif-app">${brandGlyph(38)}</span>
+        <div class="notif-body">
+          <div class="notif-head">CatchApp<span class="when">עכשיו</span></div>
+          <div class="notif-title">הסיכום של היום מוכן ✦</div>
+          <div class="notif-text">5 דברים מחכים לך · קריאה של דקה.</div>
+        </div>
+      </div>
+      <button class="notif-dismiss" type="button">סגירה</button>
+    </div>`;
+  const close = () => {
+    el.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  // Backdrop click or "סגירה" closes; clicks inside the card do not.
+  el.addEventListener("click", (e) => {
+    if (e.target === el || e.target.closest(".notif-dismiss")) close();
+  });
+  document.addEventListener("keydown", onKey);
+  host.appendChild(el);
+}
+
+/** A centered warn-tinted confirm dialog (§8 delete-everything). Calls onConfirm
+ *  when the danger button is pressed; dismisses on backdrop / cancel / Esc. */
+function showConfirm({ title, body, confirmLabel, onConfirm }) {
+  const host = document.querySelector(".main");
+  if (!host || document.getElementById("confirm-overlay")) return;
+  const el = document.createElement("div");
+  el.className = "notif-preview";
+  el.id = "confirm-overlay";
+  el.setAttribute("role", "dialog");
+  el.setAttribute("aria-label", title);
+  el.innerHTML = `
+    <div class="confirm-card surface">
+      <div class="confirm-ic">${icon("trash", { size: 22 })}</div>
+      <b>${escHtml(title)}</b>
+      <p>${escHtml(body)}</p>
+      <div class="confirm-row">
+        <button class="btn btn-ghost" type="button" data-confirm="cancel">ביטול</button>
+        <button class="btn btn-danger" type="button" data-confirm="ok">${escHtml(confirmLabel)}</button>
+      </div>
+    </div>`;
+  const close = () => {
+    el.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  el.addEventListener("click", (e) => {
+    if (e.target === el || e.target.closest('[data-confirm="cancel"]')) return close();
+    if (e.target.closest('[data-confirm="ok"]')) {
+      close();
+      onConfirm?.();
+    }
+  });
+  document.addEventListener("keydown", onKey);
+  host.appendChild(el);
+}
 
 /** The Settings screen (§8): privacy callout, daily digest, display mode,
  *  and the experimental suggestion-engine config. Fetch-on-entry, then paint. */
@@ -1790,52 +1995,6 @@ function paintSettings() {
         </div>
       </div>
 
-      <h2 class="set-sec">פרטיות ונתונים</h2>
-      <div class="set-card">
-        <div class="setrow">
-          ${icon("lock", { cls: "set-ico" })}
-          <div class="setrow__body"><h4>אחסון מקומי בלבד</h4><p>שמירת ההודעות והסיכומים על המכשיר</p></div>
-          <span class="set-switch is-on" role="img" aria-label="פעיל"><span class="set-switch__knob"></span></span>
-        </div>
-        <div class="set-divide"></div>
-        <div class="setrow">
-          ${icon("cloud", { cls: "set-ico" })}
-          <div class="setrow__body"><h4>גיבוי לענן</h4><p>כבוי כברירת מחדל — שום דבר לא יוצא בלי אישורך</p></div>
-          <span class="set-switch is-disabled" role="img" aria-label="כבוי (לא זמין)"><span class="set-switch__knob"></span></span>
-        </div>
-        <div class="set-divide"></div>
-        <div class="setrow">
-          ${icon("trash", { cls: "set-ico" })}
-          <div class="setrow__body"><h4>נתק וואטסאפ ומחק הכול</h4><p>הסרה מלאה של הנתונים מהמכשיר</p></div>
-          <button class="set-btn set-btn--danger" type="button" disabled>מחיקה</button>
-        </div>
-      </div>
-
-      <h2 class="set-sec">הסיכום היומי</h2>
-      <div class="set-card">
-        <div class="setrow">
-          ${icon("bell", { cls: "set-ico" })}
-          <div class="setrow__body"><h4>התראת בוקר</h4><p>תזכורת עדינה כשהסיכום מוכן</p></div>
-          <button class="set-switch${prefs.morningNotification ? " is-on" : ""}" data-act="morning" type="button"
-            role="switch" aria-checked="${prefs.morningNotification}" aria-label="התראת בוקר"><span class="set-switch__knob"></span></button>
-        </div>
-        <div class="set-divide"></div>
-        <div class="setrow setrow--stack">
-          ${icon("clock", { cls: "set-ico" })}
-          <div class="setrow__body"><h4>שעות הסיכום</h4><p>מתי להכין את הסיכום היומי</p></div>
-        </div>
-        <div class="set-chips" role="group" aria-label="שעות הסיכום">${digestChips}</div>
-      </div>
-
-      <h2 class="set-sec">תצוגה</h2>
-      <div class="set-card">
-        <div class="setrow">
-          ${icon("sliders", { cls: "set-ico" })}
-          <div class="setrow__body"><h4>מצב תצוגה</h4><p>בהיר או כהה — נשמר במכשיר</p></div>
-          <div class="set-seg" role="group" aria-label="מצב תצוגה">${themeSeg}</div>
-        </div>
-      </div>
-
       <h2 class="set-sec">מנוע ההצעות <span class="beta">ניסיוני</span></h2>
       <div class="set-card">
         <div class="setrow">
@@ -1863,9 +2022,62 @@ function paintSettings() {
           ${icon("filter", { cls: "set-ico" })}
           <div class="setrow__body"><h4>צ׳אטים מוזנים</h4><p>בחרו אילו שיחות המנוע ינתח</p></div>
           <button class="set-btn" id="settings-manage" type="button">ניהול ${icon("chevL", { size: 16 })}</button>
+        </div>
+        <div class="set-divide"></div>
+        <div class="setrow">
+          ${icon("sparkle", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>איפוס למידה</h4><p>אפסו את ההעדפות שנלמדו והתחילו מחדש</p></div>
+          <button class="set-btn" data-act="engine-reset" type="button">אפס</button>
         </div>`
             : ""
         }
+      </div>
+
+      <h2 class="set-sec">פרטיות ונתונים</h2>
+      <div class="set-card">
+        <div class="setrow">
+          ${icon("lock", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>אחסון מקומי בלבד</h4><p>שמירת ההודעות והסיכומים על המכשיר</p></div>
+          <span class="set-switch is-on" role="img" aria-label="פעיל"><span class="set-switch__knob"></span></span>
+        </div>
+        <div class="set-divide"></div>
+        <div class="setrow">
+          ${icon("cloud", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>גיבוי לענן</h4><p>כבוי כברירת מחדל — שום דבר לא יוצא בלי אישורך</p></div>
+          <span class="set-switch is-disabled" role="img" aria-label="כבוי (לא זמין)"><span class="set-switch__knob"></span></span>
+        </div>
+        <div class="set-divide"></div>
+        <div class="setrow">
+          ${icon("trash", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>נתק וואטסאפ ומחק הכול</h4><p>הסרה מלאה של הנתונים מהמכשיר</p></div>
+          <button class="set-btn set-btn--danger" data-act="wipe" type="button">מחיקה</button>
+        </div>
+      </div>
+
+      <h2 class="set-sec">הסיכום היומי</h2>
+      <div class="set-card">
+        <div class="setrow">
+          ${icon("bell", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>התראת בוקר</h4><p>תזכורת עדינה כשהסיכום מוכן</p></div>
+          <button class="btn btn-ghost btn-sm" data-act="notif-preview" type="button" style="margin-inline-end:8px">תצוגה מקדימה</button>
+          <button class="set-switch${prefs.morningNotification ? " is-on" : ""}" data-act="morning" type="button"
+            role="switch" aria-checked="${prefs.morningNotification}" aria-label="התראת בוקר"><span class="set-switch__knob"></span></button>
+        </div>
+        <div class="set-divide"></div>
+        <div class="setrow setrow--stack">
+          ${icon("clock", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>שעות הסיכום</h4><p>מתי להכין את הסיכום היומי</p></div>
+        </div>
+        <div class="set-chips" role="group" aria-label="שעות הסיכום">${digestChips}</div>
+      </div>
+
+      <h2 class="set-sec">תצוגה</h2>
+      <div class="set-card">
+        <div class="setrow">
+          ${icon("sliders", { cls: "set-ico" })}
+          <div class="setrow__body"><h4>מצב תצוגה</h4><p>בהיר או כהה — נשמר במכשיר</p></div>
+          <div class="set-seg" role="group" aria-label="מצב תצוגה">${themeSeg}</div>
+        </div>
       </div>
     </div>`;
   wireSettings();
@@ -1888,6 +2100,9 @@ function wireSettings() {
     ?.addEventListener("click", () =>
       applyPrefChange({ morningNotification: !prefs.morningNotification }),
     );
+  document
+    .querySelector('[data-act="notif-preview"]')
+    ?.addEventListener("click", showNotifPreview);
 
   // Display mode — localStorage is the source of truth (lib/theme.js); we also
   // mirror the choice into prefs so a fresh device can pick it up.
@@ -1919,6 +2134,38 @@ function wireSettings() {
       applyPrefChange({ engineConfig: { ...engine, proact: btn.dataset.val } }),
     );
   }
+  document.querySelector('[data-act="engine-reset"]')?.addEventListener("click", (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    resetSuggestionLearning()
+      .then(() => {
+        btn.textContent = "אופס ✓";
+      })
+      .catch(() => {
+        btn.textContent = "לא הצליח";
+      })
+      .finally(() => setTimeout(() => { btn.textContent = "אפס"; btn.disabled = false; }, 1800));
+  });
+  document.querySelector('[data-act="wipe"]')?.addEventListener("click", () => {
+    showConfirm({
+      title: "למחוק הכול?",
+      body: "ניתוק וואטסאפ ומחיקת כל ההודעות, הסיכומים והנתונים מהמכשיר. אי אפשר לבטל.",
+      confirmLabel: "מחק הכול",
+      // No server-side wipe endpoint yet — be honest rather than fake success.
+      onConfirm: () => showMainToast("המחיקה עדיין לא זמינה — נתקו ידנית בהגדרות וואטסאפ"),
+    });
+  });
+}
+
+/** A transient toast pinned to the bottom of the main column (reuses .dg-flash). */
+function showMainToast(text) {
+  const host = document.querySelector(".main");
+  if (!host) return;
+  const t = document.createElement("div");
+  t.className = "dg-flash show";
+  t.textContent = text;
+  host.appendChild(t);
+  setTimeout(() => t.remove(), 2400);
 }
 
 /** Apply + persist a theme choice and keep the appbar toggle icon in sync. */
@@ -1999,7 +2246,14 @@ async function renderToday() {
   teardownStream();
   setView("today");
   setAppbar("today");
-  paneMain.innerHTML = `<div class="content wide"><div class="today"><p class="thread-loading">טוען את הסיכום…</p></div></div>`;
+  // Re-paint Today when the viewport crosses the board/stack breakpoint (once).
+  if (!todayState.mediaWired && window.matchMedia) {
+    todayState.mediaWired = true;
+    window.matchMedia("(min-width: 780px)").addEventListener("change", () => {
+      if (layout?.dataset.view === "today") paintToday();
+    });
+  }
+  paneMain.innerHTML = `<div class="content wide"><div class="dg-loading surface">${buildSumLoader("בונה את הסיכום היומי…", "עובר על הצ׳אטים שבחרת ✦")}</div></div>`;
 
   let data = null;
   try {
@@ -2032,36 +2286,51 @@ async function renderToday() {
 /** Command-center side-rail data: today's meetings, open to-dos, follow-up
  *  people. Best-effort against the live endpoints; demo uses small fixtures. */
 async function loadTodaySide() {
-  if (DEMO) return DEMO_SIDE;
-  const [meetings, todos, people] = await Promise.all([
+  if (DEMO) return { ...DEMO_SIDE, discover: [] };
+  const [meetings, todos, people, scopes] = await Promise.all([
     getMeetings().catch(() => []),
     getTodos().catch(() => []),
     getPeople().catch(() => []),
+    getScopes().catch(() => []),
   ]);
-  return { meetings, todos, people };
+  // "שיחות שאולי פיספת": chats with recent activity that aren't included yet
+  // (default-OFF) and weren't removed — the design's discover/miss nudge. Top 3.
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const discover = (Array.isArray(scopes) ? scopes : [])
+    .filter((s) => !s.included && !s.removed && s.messageCount > 0 && s.lastMessageAt && new Date(s.lastMessageAt).getTime() > weekAgo)
+    .sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt))
+    .slice(0, 3)
+    .map((s) => ({ name: s.group, hue: hueFromName(s.group), why: `${s.messageCount} הודעות · פעילה לאחרונה` }));
+  return { meetings, todos, people, discover };
 }
 
 function paintToday() {
   const total = todayState.deck.length;
   const hasSuggestionsLeft = todayState.deck.some(isSuggestion);
 
-  let body;
-  if (total === 0) {
-    body = todayState.acted > 0 ? buildDoneState(todayState.tally) : buildEmptyToday(todayState.engineOn);
-  } else if (!hasSuggestionsLeft && todayState.acted > 0) {
-    body = buildDoneState(todayState.tally);
+  // Desktop ≥780px = the web-native digest board (v2); narrower = the v1 phone
+  // Stories stack. Both share the deck + onTodayAct; only the hero markup differs.
+  let hero;
+  if (isBoardLayout()) {
+    hero = buildDigestBoard(total, hasSuggestionsLeft);
   } else {
-    body = buildStoryStack();
+    let body;
+    if (total === 0) {
+      body = todayState.acted > 0 ? buildDoneState(todayState.tally) : buildEmptyToday(todayState.engineOn);
+    } else if (!hasSuggestionsLeft && todayState.acted > 0) {
+      body = buildDoneState(todayState.tally);
+    } else {
+      body = buildStoryStack();
+    }
+    hero = `
+      <div class="today">
+        ${buildTodayHeader(new Date())}
+        <div class="today-note">${icon("sparkle", { size: 13 })}<span>הצעות חכמות שנבנות מהשיחות — ומתחדדות לפי הבחירות שלך</span></div>
+        ${body}
+        <div class="today-foot">${buildTodayFoot(total, hasSuggestionsLeft)}</div>
+        ${buildTiles()}
+      </div>`;
   }
-
-  const hero = `
-    <div class="today">
-      ${buildTodayHeader(new Date())}
-      <div class="today-note">${icon("sparkle", { size: 13 })}<span>הצעות חכמות שנבנות מהשיחות — ומתחדדות לפי הבחירות שלך</span></div>
-      ${body}
-      <div class="today-foot">${buildTodayFoot(total, hasSuggestionsLeft)}</div>
-      ${buildTiles()}
-    </div>`;
 
   paneMain.innerHTML = `
     <div class="content wide">
@@ -2095,10 +2364,11 @@ function buildTodayHeader(now) {
 /** The desktop command-center side rail: meetings today · open to-dos ·
  *  follow-up people · an Ask shortcut. Each row links to its full screen. */
 function buildCommandSide() {
-  const side = todayState.side || { meetings: [], todos: [], people: [] };
+  const side = todayState.side || { meetings: [], todos: [], people: [], discover: [] };
   const meetings = (side.meetings || []).slice(0, 3);
   const openTodos = (side.todos || []).filter((t) => !t.done).slice(0, 4);
   const followups = (side.people || []).filter((p) => p.warn || p.status?.includes("מתקרר")).slice(0, 3);
+  const discover = (side.discover || []).slice(0, 3);
 
   const meetingRows = meetings.length
     ? meetings.map((m) => `
@@ -2148,10 +2418,132 @@ function buildCommandSide() {
       </div>
       <div class="cc-panel-body">${followRows}</div>
     </div>
+    ${
+      discover.length
+        ? `<div class="cc-panel surface">
+      <div class="cc-panel-h" data-go="sources">
+        <span class="cc-panel-ic">${icon("filter", { size: 16 })}</span>
+        <b>שיחות שאולי פיספת</b><span class="cc-count">${discover.length}</span>
+        <span class="cc-more">${icon("chevL", { size: 15 })}</span>
+      </div>
+      <div class="cc-panel-body">${discover
+        .map(
+          (d) => `
+        <div class="cc-row">
+          ${avatarHtml(formatGroupName(d.name), d.hue, 30)}
+          <div class="grow"><div class="cc-row-t">${escHtml(formatGroupName(d.name))}</div><div class="cc-row-s">${escHtml(d.why)}</div></div>
+          <button class="btn btn-soft btn-sm" data-add-chat="${escHtml(d.name)}" type="button">${icon("plus", { size: 14 })}הוסף</button>
+        </div>`,
+        )
+        .join("")}</div>
+    </div>`
+        : ""
+    }
     <div class="cc-ask surface" data-go="ama">
       <span class="cc-ask-ic">${icon("sparkle", { size: 18 })}</span>
       <div class="grow"><b>שאל את הצ׳אטים שלך</b><small>״מה הכי דחוף היום?״</small></div>
       ${icon("chevL", { size: 16 })}
+    </div>`;
+}
+
+/** True when the viewport is wide enough for the desktop digest board (v2). */
+function isBoardLayout() {
+  return window.matchMedia?.("(min-width: 780px)").matches ?? true;
+}
+
+/** The v2 board header: kicker, greeting, an inline date + remaining-count
+ *  subline, and the personalization note pill. */
+function buildDigestHead(now, left) {
+  let dateStr = "";
+  try {
+    const wd = now.toLocaleDateString("he-IL", { weekday: "long" });
+    dateStr = `<span class="dg-date">${escHtml(wd)} · <span class="mono" dir="ltr">${now.getDate()}.${now.getMonth() + 1}</span></span>`;
+  } catch {
+    /* leave the date blank if Intl is unavailable */
+  }
+  const countBit =
+    left > 0
+      ? `<span class="dg-bull">·</span><span>${left} ${left === 1 ? "כרטיס" : "כרטיסים"} להתעדכן · קריאה של דקה</span>`
+      : "";
+  return `
+    <div class="dg-head">
+      <div class="kicker" style="margin-bottom:5px">הסיכום היומי</div>
+      <div class="dg-greet">${escHtml(greeting(now.getHours()))}</div>
+      <div class="dg-subline">${dateStr}${countBit}</div>
+      <div class="dg-note">${icon("sparkle", { size: 13 })}<span>הצעות חכמות שנבנות מהשיחות — ומתחדדות לפי הבחירות שלך</span></div>
+    </div>`;
+}
+
+/** One wide digest-board row — a suggestion (edit-first + act buttons) or a
+ *  read-only info card. Acted on in place via onTodayAct (shared with the stack). */
+function buildDigestCard(card) {
+  if (isSuggestion(card)) {
+    const cfg = suggestionConfig(card.kind);
+    const draftVal = card.draft ?? card.proposedText;
+    let editor;
+    if (cfg.editable) {
+      editor = `<div class="cl-draft sg-draft">${icon("pencil", { size: 15 })}<input class="sg-draft__input" value="${escHtml(draftVal)}" aria-label="עריכת ההצעה" /></div>`;
+    } else {
+      const lines = String(card.proposedText).split("\n").map((s) => s.trim()).filter(Boolean);
+      const items = (lines.length ? lines : [card.proposedText]).map((l) => `<li>${escHtml(l)}</li>`).join("");
+      editor = `<div class="sg-recap"><ul>${items}</ul></div>`;
+    }
+    return `
+      <div class="dg-card surface s-suggest" data-card-id="${card.id}">
+        <div class="dgc-top">
+          <span class="sg-spark">${icon(cfg.icon, { size: 18 })}</span>
+          <div class="dgc-head">
+            <div class="kicker sg-kicker">${escHtml(cfg.kicker)} · מותאם אישית</div>
+            <h3 class="dgc-title">${escHtml(cfg.title(formatGroupName(card.chat)))}</h3>
+          </div>
+          <span class="sg-tag">${icon("sparkle", { size: 11 })}טיוטה</span>
+        </div>
+        ${editor}
+        <div class="dgc-reason">${icon("bolt", { size: 15 })}<span>${escHtml(card.reason)}</span></div>
+        <div class="dgc-foot">
+          ${buildSrcChip(card)}
+          <div class="dgc-actions">
+            <button class="btn btn-quiet btn-sm" type="button" data-act="discard" data-id="${card.id}">${icon("x", { size: 15 })}התעלם</button>
+            <button class="btn btn-quiet btn-sm" type="button" data-act="snooze" data-id="${card.id}">${icon("moon", { size: 15 })}נודניק</button>
+            <button class="btn btn-primary btn-sm" type="button" data-act="commit" data-id="${card.id}">${icon(cfg.commitIcon, { size: 15 })}${escHtml(cfg.commitLabel)}</button>
+          </div>
+        </div>
+      </div>`;
+  }
+  const isHi = card.variant === "highlights";
+  const title = isHi ? "עיקרי היום בכל הצ׳אטים" : formatGroupName(card.chat);
+  const kicker = isHi ? "מבט על היום" : "סיכום צ׳אט";
+  return `
+    <div class="dg-card surface" data-card-id="${card.id}">
+      <div class="dgc-top">
+        <span class="sg-spark">${icon(isHi ? "sparkle" : "message", { size: 18 })}</span>
+        <div class="dgc-head">
+          <div class="kicker">${escHtml(kicker)}</div>
+          <h3 class="dgc-title">${escHtml(title)}</h3>
+        </div>
+        <span class="badge accent">מידע</span>
+      </div>
+      <div class="dgc-body">${renderMarkdown(card.body)}</div>
+      <div class="dgc-foot">${buildSrcChip(card)}</div>
+    </div>`;
+}
+
+/** The desktop digest board (v2): head + a flat column of wide cards (or the
+ *  done / empty state), plus the flash slot. */
+function buildDigestBoard(total, hasSuggestionsLeft) {
+  let body;
+  if (total === 0) {
+    body = todayState.acted > 0 ? buildDoneState(todayState.tally) : buildEmptyToday(todayState.engineOn);
+  } else if (!hasSuggestionsLeft && todayState.acted > 0) {
+    body = buildDoneState(todayState.tally);
+  } else {
+    body = `<div class="dg-grid">${todayState.deck.map(buildDigestCard).join("")}</div>`;
+  }
+  return `
+    <div class="dg-board">
+      ${buildDigestHead(new Date(), total)}
+      ${body}
+      <div class="dg-flash" id="today-flash"></div>
     </div>`;
 }
 
@@ -2234,7 +2626,7 @@ function buildInfoCard(card, index, total) {
         <span class="badge accent">מידע</span>
       </div>
       <h3>${escHtml(title)}</h3>
-      <div class="body body--scroll">${escHtml(card.body)}</div>
+      <div class="body body--scroll">${renderMarkdown(card.body)}</div>
     </div>`;
   // Read-only: no accept/snooze/discard — just a hint to swipe on.
   const footer = `<div class="actions info-actions"><span class="info-hint">${icon("sparkle", { size: 14 })}סקירה — החליקו להמשך</span></div>`;
@@ -2246,9 +2638,9 @@ function buildInfoCard(card, index, total) {
 function buildSrcChip(card) {
   const label = escHtml(formatGroupName(card.chat));
   if (card.sourceMessageId == null) {
-    return `<span class="src">${icon("arrowL", { size: 13 })}<span>${label}</span></span>`;
+    return `<span class="src">${icon("source", { size: 13 })}<span>${label}</span></span>`;
   }
-  return `<button type="button" class="src" data-src-jump="1" data-chat="${escHtml(card.chat)}" data-id="${card.sourceMessageId}">${icon("arrowL", { size: 13 })}<span>${label}</span></button>`;
+  return `<button type="button" class="src" data-src-jump="1" data-chat="${escHtml(card.chat)}" data-id="${card.sourceMessageId}">${icon("source", { size: 13 })}<span>${label}</span></button>`;
 }
 
 function buildDoneState(tally) {
@@ -2312,6 +2704,49 @@ function wireToday() {
     el.addEventListener("click", () => navigate(el.dataset.go));
   }
 
+  // "שיחות שאולי פיספת" → one-tap add to scope, then drop the row + flash.
+  for (const btn of paneMain.querySelectorAll("[data-add-chat]")) {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const group = btn.dataset.addChat;
+      btn.disabled = true;
+      await putScopes([{ group, included: true }]).catch(() => {});
+      if (todayState.side?.discover) {
+        todayState.side.discover = todayState.side.discover.filter((d) => d.name !== group);
+      }
+      cachedGroups = []; // force the Updates list to re-fetch with the new chat
+      paintToday();
+      showTodayFlash("נוסף לצ׳אטים המוזנים ✓");
+    });
+  }
+
+  // Desktop digest board: act buttons (commit/snooze/discard), per-card draft
+  // preservation, and source-chip jumps. Shares onTodayAct with the stack.
+  const board = document.querySelector(".dg-board");
+  if (board) {
+    for (const card of board.querySelectorAll(".dg-card[data-card-id]")) {
+      const id = Number(card.dataset.cardId);
+      card.querySelector(".sg-draft__input")?.addEventListener("input", (e) => {
+        const c = todayState.deck.find((x) => x.id === id);
+        if (c && isSuggestion(c)) c.draft = e.target.value;
+      });
+    }
+    for (const btn of board.querySelectorAll("[data-act]")) {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        onTodayAct(btn.dataset.act, Number(btn.dataset.id));
+      });
+    }
+    for (const chip of board.querySelectorAll("[data-src-jump]")) {
+      chip.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const cid = Number(chip.dataset.id);
+        if (chip.dataset.chat && Number.isFinite(cid)) navigate("thread", { chat: chip.dataset.chat, aroundId: cid });
+      });
+    }
+    return;
+  }
+
   const stack = document.querySelector(".today .story-stack");
   if (!stack) return;
 
@@ -2360,7 +2795,9 @@ function onTodayAct(act, id) {
   let finalText;
   let flash;
   if (act === "commit") {
-    const input = document.querySelector(".today .sg-draft__input");
+    const input =
+      document.querySelector(`[data-card-id="${id}"] .sg-draft__input`) ||
+      document.querySelector(".today .sg-draft__input");
     const draftValue = input ? input.value : (card.draft ?? card.proposedText);
     const res = commitActionFor(card, draftValue);
     action = res.action;
@@ -2434,9 +2871,9 @@ function buildSrcJump({ chat, sourceMessageId, label }) {
   const text = escHtml(label ?? (chat ? formatGroupName(chat) : "מקור"));
   const id = Number(sourceMessageId);
   if (!chat || !Number.isFinite(id)) {
-    return `<span class="srcchip">${icon("arrowL", { size: 13 })}<span>${text}</span></span>`;
+    return `<span class="srcchip">${icon("source", { size: 13 })}<span>${text}</span></span>`;
   }
-  return `<button type="button" class="srcchip" data-src-jump="1" data-chat="${escHtml(chat)}" data-id="${id}">${icon("arrowL", { size: 13 })}<span>${text}</span></button>`;
+  return `<button type="button" class="srcchip" data-src-jump="1" data-chat="${escHtml(chat)}" data-id="${id}">${icon("source", { size: 13 })}<span>${text}</span></button>`;
 }
 
 /** Delegate source-chip clicks within a container to the S2 thread jump. */
@@ -2495,14 +2932,11 @@ function paintPeople() {
 
   const sel = Math.max(0, Math.min(peopleState.selected, people.length - 1));
   peopleState.selected = sel;
-  const warmWaiting = people.filter((p) => p.openThreads > 0).length;
-
   paneMain.innerHTML = `
     <div class="people">
       ${buildEntityNav("people-back")}
       <div class="entity-head">
         <div class="entity-head__title">${icon("users", { size: 18 })} אנשים</div>
-        <span class="entity-count mono" dir="ltr">${warmWaiting}/${people.length}</span>
       </div>
       <div class="split">
         <div class="ppl-list" role="list">
@@ -2529,7 +2963,7 @@ function buildPersonRow(p, isSel) {
           <span class="entity-badge${meta.warn ? " is-warn" : ""}">${escHtml(meta.label)}</span>
         </div>
         <p class="ppl-row__note">${note}</p>
-        <div class="ppl-row__meta">קשר אחרון · ${escHtml(last)}${open}</div>
+        <div class="ppl-row__meta"><span class="muted">${escHtml(last)}</span>${open}</div>
       </div>
     </button>`;
 }
@@ -2556,7 +2990,7 @@ function buildPersonDetail(p) {
         <div class="ppl-detail__row">${icon("message", { size: 16 })}<span>שיחות פתוחות</span><b class="mono" dir="ltr">${p.openThreads}</b></div>
       </div>
       <div class="ppl-detail__divide"></div>
-      <div class="ppl-next__kicker">${icon("target", { size: 13 })} הצעד הבא</div>
+      <div class="ppl-next__kicker">הצעד הבא</div>
       <div class="ppl-next surface">
         <span>${p.nextStep ? escHtml(p.nextStep) : "אין צעד פתוח כרגע"}</span>
         ${p.nextStep ? chip : ""}
@@ -2616,6 +3050,8 @@ async function renderAgenda() {
   agendaState.meetings = Array.isArray(meetings) ? meetings : [];
   agendaState.todos = Array.isArray(todos) ? todos : [];
   agendaState.monthOffset = 0;
+  setNavCount("meetings", agendaState.meetings.length);
+  setNavCount("todos", agendaState.todos.filter((t) => !t.done).length);
   paintAgenda();
 }
 
@@ -2950,13 +3386,19 @@ function resolveInitialRoute() {
 // login/register pane. /verify + /reset are the emailed-link landing pages.
 
 async function authGate() {
-  const token = new URLSearchParams(location.search).get("token");
+  const params = new URLSearchParams(location.search);
+  const token = params.get("token");
   if (location.pathname === "/verify" && token) {
     await renderVerifyResult(token);
     return false;
   }
   if (location.pathname === "/reset" && token) {
     renderResetForm(token);
+    return false;
+  }
+  // Review the guided onboarding any time (even when already linked).
+  if (params.get("onboarding") === "preview") {
+    renderOnboardingFlow({ preview: true });
     return false;
   }
   const me = await fetch("/api/auth/me").catch(() => null);
@@ -2975,121 +3417,472 @@ async function authGate() {
   }
   // No session. Distinguish single-user (APIs open) from multi-tenant (gated).
   const probe = await fetch("/api/status").catch(() => null);
-  if (probe && probe.status !== 401) return true;
+  if (probe && probe.status !== 401) {
+    // Single-user: run the guided first-run flow once — only when a WhatsApp
+    // link is actually pending (the onboarding registry is mounted AND not yet
+    // connected) and the user hasn't already completed/skipped it.
+    let onboarded = false;
+    try {
+      onboarded = localStorage.getItem("catchapp-onboarded") === "1";
+    } catch {
+      /* ignore */
+    }
+    if (!onboarded) {
+      const ob = await fetch("/api/onboarding/status").catch(() => null);
+      if (ob?.ok) {
+        const { status } = await ob.json();
+        if (status && status !== "connected") {
+          renderOnboardingFlow({ initialStatus: status });
+          return false;
+        }
+      }
+    }
+    return true;
+  }
   renderAuthPane("login");
   return false;
 }
 
-/**
- * T4 onboarding pane: link a WhatsApp account by scanning a QR. Opens the
- * /api/onboarding/qr SSE stream (server renders the QR to a data URL); when the
- * session reports "connected" we reload into the app.
+/* ── §1 Onboarding — guided 5-step first-run flow ────────────
+ *
+ * welcome → connect (QR) → scanning → choose chats → digest time → ready.
+ * Seeds the suggestion engine's scopes so the very first digest is already
+ * focused. Reuses the real /api/onboarding/qr + /progress SSE streams and
+ * getGroups/putScopes/putPreferences. Runs on first-run (single-user OR the
+ * multi-tenant gate) and is reachable any time via ?onboarding=preview.
  */
+const OB_STEPS = ["ברוכים הבאים", "חיבור", "סריקה", "צ׳אטים", "סיום"];
+const OB_WIDTHS = { 0: 560, 1: 660, 2: 520, 3: 680, 4: 540 };
+const OB_TIMES = ["07:00", "08:00", "09:00", "20:00"];
+const obState = {
+  step: 0,
+  preview: false,
+  initialStatus: null,
+  chats: [],
+  loadedChats: false,
+  digestTime: "08:00",
+  morningNotif: true,
+  timers: [],
+};
+
+/** Entry point. The multi-tenant gate passes the link status; ?onboarding=preview
+ *  passes {preview:true} so the flow can be reviewed even when already linked. */
 function renderOnboarding(initialStatus) {
-  authShell(`
-    <p class="auth-card__sub">כדי להתחיל, חברו את חשבון הוואטסאפ שלכם.</p>
-    <div id="qr-box" class="qr-box" aria-live="polite">
-      <div class="qr-spinner" aria-hidden="true"></div>
-      <p id="qr-hint" class="qr-hint">מכינים קוד QR…</p>
-    </div>
-    <ol class="qr-steps">
-      <li>פתחו וואטסאפ בטלפון → הגדרות → מכשירים מקושרים</li>
-      <li>הקישו "קישור מכשיר" וסרקו את הקוד שלמעלה</li>
-    </ol>
-    <p id="qr-status" class="qr-status"></p>
-    <button type="button" id="auth-logout" class="auth-link">התנתקות</button>
-  `);
-  const logout = document.getElementById("auth-logout");
-  if (logout)
-    logout.onclick = async () => {
-      await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
-      location.href = "/";
-    };
+  renderOnboardingFlow({ initialStatus });
+}
 
-  if (initialStatus === "logged-out" || initialStatus === "failed") {
-    setOnboardingStatus(
-      initialStatus === "logged-out"
-        ? "החיבור נותק. סרקו שוב כדי לקשר מחדש."
-        : "החיבור נכשל. מנסים שוב…",
-    );
+function renderOnboardingFlow({ initialStatus = null, preview = false } = {}) {
+  obState.step = 0;
+  obState.preview = preview;
+  obState.initialStatus = initialStatus;
+  obState.chats = [];
+  obState.loadedChats = false;
+  obState.digestTime = "08:00";
+  obState.morningNotif = true;
+  obTeardown();
+  obPaint();
+}
+
+/** Stop the active SSE + any scan timers (called on every step change). */
+function obTeardown() {
+  if (activeEventSource) {
+    activeEventSource.close();
+    activeEventSource = null;
   }
+  for (const t of obState.timers) {
+    clearInterval(t);
+    clearTimeout(t);
+  }
+  obState.timers = [];
+}
 
-  const es = new EventSource("/api/onboarding/qr");
-  activeEventSource = es;
-  es.addEventListener("qr", (e) => {
-    const { dataUrl } = JSON.parse(e.data);
-    const box = document.getElementById("qr-box");
-    if (box && dataUrl) {
-      box.innerHTML = `<img class="qr-img" src="${dataUrl}" alt="קוד QR לקישור וואטסאפ" width="264" height="264" />`;
+function obGo(step) {
+  obTeardown();
+  obState.step = step;
+  obPaint();
+}
+
+function obProgressHtml(step) {
+  return `<div class="ob-prog">${OB_STEPS.map((l, k) => {
+    const cls = k < step ? " done" : k === step ? " on" : "";
+    const dot = k < step ? icon("check", { size: 13 }) : String(k + 1);
+    const bar = k < OB_STEPS.length - 1 ? '<span class="ob-prog-bar"></span>' : "";
+    return `<div class="ob-prog-step${cls}"><span class="ob-prog-dot">${dot}</span><span class="ob-prog-lbl">${escHtml(l)}</span></div>${bar}`;
+  }).join("")}</div>`;
+}
+
+function obPaint() {
+  const step = obState.step;
+  const back =
+    step > 0 && step < 4
+      ? `<button class="ob-back" id="ob-back" type="button">${icon("chevR", { size: 16 })}חזרה</button>`
+      : "";
+  const card =
+    step === 0
+      ? obWelcomeHtml()
+      : step === 1
+        ? obConnectHtml()
+        : step === 2
+          ? obScanHtml()
+          : step === 3
+            ? obChatsHtml()
+            : obReadyHtml();
+  document.getElementById("layout").innerHTML = `
+    <div class="ob ob-flow ob-takeover">
+      <div style="width:min(${OB_WIDTHS[step]}px,100%)">
+        ${obProgressHtml(step >= 4 ? 4 : step)}
+        ${back}
+        ${card}
+      </div>
+    </div>`;
+  document.getElementById("ob-back")?.addEventListener("click", () => obGo(step - 1));
+  obWire(step);
+}
+
+function obWelcomeHtml() {
+  return `
+    <div class="ob-card surface shadow-sm ob-center">
+      <div style="display:grid;place-items:center;margin-bottom:22px">${brandGlyph(84, { d3: true })}</div>
+      <h2 class="ob-h">CatchApp</h2>
+      <p class="ob-p">סיכום יומי, מעקב אנשים, פגישות ומשימות — הכול מתוך הצ׳אטים שלך.<b> והכול נשאר אצלך בלבד.</b></p>
+      <div class="ob-bullets">
+        <div><span class="ob-bi">${icon("sparkle", { size: 16 })}</span>סיכום יומי שמתמצת את היום בדקה</div>
+        <div><span class="ob-bi">${icon("filter", { size: 16 })}</span>אתם בוחרים אילו צ׳אטים נכנסים</div>
+        <div><span class="ob-bi">${icon("lock", { size: 16 })}</span>הכול מעובד ונשמר על המכשיר</div>
+      </div>
+      <button class="btn btn-primary btn-lg btn-block" id="ob-welcome-cta" type="button">${icon("phone")}התחברות עם וואטסאפ</button>
+      <div class="trust-line">${icon("lock")}שום דבר לא עולה לענן בלי אישורך</div>
+    </div>`;
+}
+
+/** A deterministic QR-ish placeholder grid (13×13) shown until the real
+ *  server-rendered QR data-URL arrives over SSE. */
+function obQrCellsHtml() {
+  let cells = "";
+  for (let i = 0; i < 169; i++) {
+    const on = (Math.imul(i + 1, 2654435761) >>> 27) & 1;
+    cells += `<i class="${on ? "" : "off"}"></i>`;
+  }
+  return cells;
+}
+
+function obConnectHtml() {
+  return `
+    <div class="ob-card surface shadow-sm" style="text-align:start;padding:34px">
+      <div class="ob-qr-grid">
+        <div>
+          <h2 class="ob-h" style="font-size:23px;text-align:start">חברו את הוואטסאפ שלכם</h2>
+          <p class="ob-p" style="font-size:14.5px;text-align:start;margin:0 0 18px">סריקה חד-פעמית. החיבור נשאר על המכשיר הזה.</p>
+          <ol class="steps">
+            <li><span class="sn">1</span><div>פתחו וואטסאפ בטלפון</div></li>
+            <li><span class="sn">2</span><div>היכנסו ל<b>הגדרות ← מכשירים מקושרים</b></div></li>
+            <li><span class="sn">3</span><div>הקישו <b>קישור מכשיר</b> וכוונו את המצלמה לקוד</div></li>
+          </ol>
+          <div class="trust-line" style="margin-top:20px">${icon("lock")}חיבור מוצפן מקצה לקצה · אנחנו לא רואים את ההודעות</div>
+        </div>
+        <div style="text-align:center">
+          <div class="qr" id="ob-qr">${obQrCellsHtml()}</div>
+          <p class="ob-p" id="ob-qr-hint" style="font-size:12px;margin:10px 0 0">${obState.preview ? "תצוגה מקדימה — קוד לדוגמה" : "מכינים קוד…"}</p>
+        </div>
+      </div>
+      <div class="divide" style="margin:24px 0 18px"></div>
+      <button class="btn btn-primary btn-block" id="ob-connect-cta" type="button">${icon("check")}סרקתי — המשך</button>
+    </div>`;
+}
+
+function obScanItems() {
+  return [
+    { t: "מתחבר לוואטסאפ", icon: "phone" },
+    { t: "קורא את 3 הימים האחרונים", icon: "message" },
+    { t: "מזהה אנשים, פגישות ומשימות", icon: "users" },
+    { t: "מחלץ משימות ופגישות", icon: "checks" },
+    { t: "בונה את הסיכום הראשון", icon: "sun" },
+  ];
+}
+
+function obScanHtml() {
+  const floats = [
+    ["12%", "0s", "2.6s", 150, 26],
+    ["26%", ".5s", "3.1s", 20, 20],
+    ["44%", "1.1s", "2.4s", 230, 30],
+    ["62%", ".3s", "3.4s", 60, 22],
+    ["78%", "1.4s", "2.8s", 330, 26],
+    ["88%", ".8s", "3.2s", 200, 18],
+  ]
+    .map(
+      ([l, d, dur, hue, s]) =>
+        `<span class="ob-float" style="inset-inline-start:${l};animation-delay:${d};animation-duration:${dur};--fh:${hue};width:${s}px;height:${s}px">${icon("message", { size: Math.round(s * 0.5) })}</span>`,
+    )
+    .join("");
+  const list = obScanItems()
+    .map(
+      (it, k) =>
+        `<div class="ob-scan-item" data-k="${k}"><span class="ob-scan-ic">${icon(it.icon, { size: 15 })}</span><span>${escHtml(it.t)}</span></div>`,
+    )
+    .join("");
+  return `
+    <div class="ob-card surface shadow-sm ob-center ob-scan">
+      <div class="ob-scan-stage">
+        <div class="ob-floats">${floats}</div>
+        <div class="ob-orbit"><i></i><i></i><i></i></div>
+        <div class="ob-scan-ring" id="ob-ring" style="--p:0">
+          <div class="ob-scan-inner">${brandGlyph(46)}<span class="ob-scan-pct mono" id="ob-pct" dir="ltr">0%</span></div>
+        </div>
+        <span class="ob-spark s1">${icon("sparkle", { size: 16 })}</span>
+        <span class="ob-spark s2">${icon("sparkle", { size: 12 })}</span>
+        <span class="ob-spark s3">${icon("sparkle", { size: 14 })}</span>
+      </div>
+      <h2 class="ob-h" style="font-size:22px">מכינים בשבילך הכול…</h2>
+      <p class="ob-quip" id="ob-quip">ממיין הודעות חשובות מרעש…</p>
+      <div class="ob-scan-list">${list}</div>
+    </div>`;
+}
+
+function obChatsHtml() {
+  const on = obState.chats.filter((c) => c.included).length;
+  const body = !obState.loadedChats
+    ? `<p class="ob-p" style="text-align:center">טוען את הצ׳אטים שלך…</p>`
+    : obState.chats.length === 0
+      ? `<p class="ob-p" style="text-align:center">לא נמצאו צ׳אטים עדיין — אפשר להמשיך ולבחור אחר כך.</p>`
+      : `<div class="ob-cat"><div class="ob-cat-head"><b>הצ׳אטים הפעילים שלך</b><button class="src-bulk" id="ob-bulk" type="button">${on === obState.chats.length ? "כבה הכול" : "הפעל הכול"}</button></div>
+          <div class="ob-chat-grid">${obState.chats
+            .map(
+              (c, i) =>
+                `<button class="ob-chat-pill${c.included ? " on" : ""}" data-i="${i}" type="button">${avatarHtml(formatGroupName(c.name), c.hue, 30)}<span class="ob-chat-name">${escHtml(formatGroupName(c.name))}</span><span class="ob-chat-check">${c.included ? icon("check", { size: 14 }) : icon("plus", { size: 14 })}</span></button>`,
+            )
+            .join("")}</div></div>`;
+  return `
+    <div class="ob-card surface shadow-sm ob-chats" style="text-align:start">
+      <div class="ob-chats-head">
+        <div>
+          <h2 class="ob-h" style="font-size:22px;text-align:start;margin:0 0 4px">אילו צ׳אטים שווה לעקוב אחריהם?</h2>
+          <p class="ob-p" style="font-size:14px;text-align:start;margin:0">בחרו את הצ׳אטים שיוזנו ל-CatchApp. תמיד אפשר לשנות אחר כך.</p>
+        </div>
+        <span class="badge accent ob-count" id="ob-count">${on} נבחרו</span>
+      </div>
+      <div class="ob-chip-hint">${icon("sparkle", { size: 13 })}רק המסומנים יוזנו לסיכום, לעדכונים ולהצעות</div>
+      <div class="ob-chats-scroll">${body}</div>
+      <div class="ob-foot">
+        <button class="btn btn-primary btn-block" id="ob-chats-cta" type="button"${on === 0 ? " disabled" : ""}>המשך עם ${on} צ׳אטים</button>
+        <button class="ob-skip" id="ob-chats-skip" type="button">אבחר אחר כך</button>
+      </div>
+    </div>`;
+}
+
+function obReadyHtml() {
+  const times = OB_TIMES.map(
+    (t) =>
+      `<button class="chip ob-time${t === obState.digestTime ? " on" : ""}" data-t="${t}" type="button"><span class="mono" dir="ltr">${t}</span></button>`,
+  ).join("");
+  return `
+    <div class="ob-card surface shadow-sm ob-center">
+      <div class="done-badge" style="width:60px;height:60px;margin-bottom:16px">${icon("check", { size: 30 })}</div>
+      <h2 class="ob-h">הכול מוכן ✦</h2>
+      <p class="ob-p">הסיכום הראשון שלך מחכה. מתי תרצו לקבל אותו כל בוקר?</p>
+      <div class="ob-times">${times}</div>
+      <button class="ob-notif" id="ob-notif" type="button" aria-pressed="${obState.morningNotif}">
+        <span><b>התראת בוקר עדינה</b><small>נזכיר לכם כשהסיכום מוכן</small></span>
+        <span class="switch${obState.morningNotif ? " on" : ""}"></span>
+      </button>
+      <button class="btn btn-primary btn-lg btn-block" id="ob-finish" type="button">${icon("sun")}כניסה לסיכום</button>
+      <div class="trust-line">${icon("lock")}הנתונים נשארים על המכשיר · בשליטתכם המלאה</div>
+    </div>`;
+}
+
+/** Per-step event wiring. */
+function obWire(step) {
+  if (step === 0) {
+    document.getElementById("ob-welcome-cta")?.addEventListener("click", () => obGo(1));
+    return;
+  }
+  if (step === 1) {
+    document.getElementById("ob-connect-cta")?.addEventListener("click", () => obGo(2));
+    if (obState.preview) return; // placeholder QR only — no live link in preview
+    const es = new EventSource("/api/onboarding/qr");
+    activeEventSource = es;
+    es.addEventListener("qr", (e) => {
+      const { dataUrl } = JSON.parse(e.data);
+      const box = document.getElementById("ob-qr");
+      const hint = document.getElementById("ob-qr-hint");
+      if (box && dataUrl) box.outerHTML = `<img class="qr-img" id="ob-qr" src="${dataUrl}" alt="קוד QR לקישור וואטסאפ" width="208" height="208" />`;
+      if (hint) hint.textContent = "סרקו עם הטלפון";
+    });
+    es.addEventListener("connected", () => obGo(2));
+    es.onerror = () => {}; // graceful: the manual "סרקתי — המשך" still advances
+    return;
+  }
+  if (step === 2) {
+    obRunScan();
+    return;
+  }
+  if (step === 3) {
+    if (!obState.loadedChats) {
+      obLoadChats().then(() => {
+        if (obState.step === 3) obPaint();
+      });
+      return;
     }
-  });
-  es.addEventListener("connected", () => {
-    es.close();
-    setOnboardingStatus("✅ מחובר! סורקים את הצ׳אטים שלכם…");
-    // S5: the link is up — WhatsApp now streams history. Show a live scan ring
-    // driven by /api/onboarding/progress, then load the app when the sync completes.
-    renderScanProgress();
-  });
-  es.addEventListener("logged-out", () => {
-    setOnboardingStatus("הקישור נדחה. רעננו ונסו שוב.");
-  });
-  es.onerror = () => setOnboardingStatus("שגיאת חיבור לשרת. רעננו את הדף.");
-}
-
-function setOnboardingStatus(text) {
-  const el = document.getElementById("qr-status");
-  if (el) el.textContent = text;
-}
-
-/**
- * S5 scan-progress ring: after the WhatsApp link connects, WhatsApp streams the
- * chat history. Replace the QR with a circular progress ring fed by the
- * /api/onboarding/progress SSE stream; load the app once the sync completes.
- * A safety timeout reloads anyway if the server never reports 100 (older syncs
- * report null progress) so onboarding can't get stuck on this screen.
- */
-function renderScanProgress() {
-  const box = document.getElementById("qr-box");
-  const steps = document.querySelector(".qr-steps");
-  if (steps) steps.remove();
-  if (box) {
-    const C = 2 * Math.PI * 52; // ring circumference (r=52)
-    box.innerHTML = `
-      <svg class="scan-ring" viewBox="0 0 120 120" width="160" height="160" aria-hidden="true">
-        <circle class="scan-ring__track" cx="60" cy="60" r="52" />
-        <circle class="scan-ring__fill" cx="60" cy="60" r="52"
-          style="stroke-dasharray:${C};stroke-dashoffset:${C}" />
-      </svg>
-      <p id="scan-pct" class="qr-hint">0%</p>`;
+    obWireChats();
+    return;
   }
-  const done = () => location.reload();
-  // Fallback: if no terminal 'done' arrives within 90s, load the app anyway.
-  let timer = setTimeout(done, 90000);
-  const es = new EventSource("/api/onboarding/progress");
-  activeEventSource = es;
-  es.addEventListener("progress", (e) => {
-    const { progress } = JSON.parse(e.data);
-    if (typeof progress === "number") setScanProgress(progress);
-  });
-  es.addEventListener("done", () => {
-    clearTimeout(timer);
-    es.close();
-    setScanProgress(100);
-    setOnboardingStatus("✅ הסריקה הושלמה! טוען את האפליקציה…");
-    timer = setTimeout(done, 600);
-  });
-  es.onerror = () => setOnboardingStatus("הסריקה ממשיכה ברקע…");
+  if (step === 4) {
+    for (const btn of document.querySelectorAll(".ob-time")) {
+      btn.addEventListener("click", () => {
+        obState.digestTime = btn.dataset.t;
+        obPaint();
+      });
+    }
+    document.getElementById("ob-notif")?.addEventListener("click", () => {
+      obState.morningNotif = !obState.morningNotif;
+      obPaint();
+    });
+    document.getElementById("ob-finish")?.addEventListener("click", obFinish);
+  }
 }
 
-function setScanProgress(pct) {
-  const clamped = Math.max(0, Math.min(100, pct));
-  const fill = document.querySelector(".scan-ring__fill");
-  const label = document.getElementById("scan-pct");
-  if (fill) {
-    const C = 2 * Math.PI * 52;
-    fill.style.strokeDashoffset = String(C * (1 - clamped / 100));
+/** Drive the scan ring + checklist with a timed simulation, overridden by real
+ *  /api/onboarding/progress events when a live sync is streaming. Advances to
+ *  the chat picker on completion. */
+function obRunScan() {
+  let pct = 0;
+  const quips = [
+    "ממיין הודעות חשובות מרעש…",
+    "מאתר מה מחכה לתשובה…",
+    "מחבר נקודות בין שיחות…",
+    "כמעט שם — מסדר את הבוקר שלך ✦",
+  ];
+  let q = 0;
+  const items = obScanItems().length;
+  const apply = (p) => {
+    pct = Math.max(0, Math.min(100, p));
+    const ring = document.getElementById("ob-ring");
+    const pctEl = document.getElementById("ob-pct");
+    if (ring) ring.style.setProperty("--p", String(pct));
+    if (pctEl) pctEl.textContent = `${Math.round(pct)}%`;
+    const active = Math.min(items - 1, Math.floor(pct / (100 / items)));
+    for (const el of document.querySelectorAll(".ob-scan-item")) {
+      const k = Number(el.dataset.k);
+      const ok = pct >= (k + 1) * (100 / items);
+      el.classList.toggle("ok", ok);
+      el.classList.toggle("active", !ok && k === active);
+      let dots = el.querySelector(".ob-dots");
+      if (!ok && k === active && !dots) {
+        dots = document.createElement("span");
+        dots.className = "ob-dots";
+        dots.innerHTML = "<i></i><i></i><i></i>";
+        el.appendChild(dots);
+      } else if ((ok || k !== active) && dots) {
+        dots.remove();
+      }
+      if (ok && !el.querySelector(".ob-scan-tick")) {
+        const tick = document.createElement("span");
+        tick.className = "ob-scan-tick";
+        tick.innerHTML = icon("check", { size: 13 });
+        el.appendChild(tick);
+      }
+    }
+  };
+  const finish = () => {
+    obTeardown();
+    if (obState.step === 2) obGo(3);
+  };
+  const tick = setInterval(() => {
+    apply(pct + 1);
+    if (pct >= 100) {
+      clearInterval(tick);
+      setTimeout(finish, 600);
+    }
+  }, 55);
+  const quipTimer = setInterval(() => {
+    q = (q + 1) % quips.length;
+    const el = document.getElementById("ob-quip");
+    if (el) el.textContent = quips[q];
+  }, 1700);
+  obState.timers.push(tick, quipTimer);
+  if (!obState.preview) {
+    const es = new EventSource("/api/onboarding/progress");
+    activeEventSource = es;
+    es.addEventListener("progress", (e) => {
+      const { progress } = JSON.parse(e.data);
+      if (typeof progress === "number") apply(Math.max(pct, progress));
+    });
+    es.addEventListener("done", () => {
+      apply(100);
+      finish();
+    });
+    es.onerror = () => {}; // fall back to the timed simulation
   }
-  if (label) label.textContent = `${Math.round(clamped)}%`;
+}
+
+/** Load the user's most-active chats into the picker (default all included). */
+async function obLoadChats() {
+  let groups = [];
+  try {
+    groups = await getGroups();
+  } catch {
+    groups = [];
+  }
+  obState.chats = groups
+    .slice(0, 40)
+    .map((g) => ({ name: g.name, hue: hueFromName(g.name), included: true }));
+  obState.loadedChats = true;
+}
+
+function obWireChats() {
+  const recount = () => {
+    const on = obState.chats.filter((c) => c.included).length;
+    const cnt = document.getElementById("ob-count");
+    if (cnt) cnt.textContent = `${on} נבחרו`;
+    const cta = document.getElementById("ob-chats-cta");
+    if (cta) {
+      cta.textContent = `המשך עם ${on} צ׳אטים`;
+      cta.disabled = on === 0;
+    }
+    const bulk = document.getElementById("ob-bulk");
+    if (bulk) bulk.textContent = on === obState.chats.length ? "כבה הכול" : "הפעל הכול";
+  };
+  for (const pill of document.querySelectorAll(".ob-chat-pill")) {
+    pill.addEventListener("click", () => {
+      const i = Number(pill.dataset.i);
+      obState.chats[i].included = !obState.chats[i].included;
+      pill.classList.toggle("on", obState.chats[i].included);
+      pill.querySelector(".ob-chat-check").innerHTML = obState.chats[i].included
+        ? icon("check", { size: 14 })
+        : icon("plus", { size: 14 });
+      recount();
+    });
+  }
+  document.getElementById("ob-bulk")?.addEventListener("click", () => {
+    const allOn = obState.chats.every((c) => c.included);
+    for (const c of obState.chats) c.included = !allOn;
+    obPaint();
+  });
+  document.getElementById("ob-chats-cta")?.addEventListener("click", () => obCommitChats(true));
+  document.getElementById("ob-chats-skip")?.addEventListener("click", () => obCommitChats(false));
+}
+
+/** Persist the chat selection (seeding the engine's scopes) then advance. In
+ *  preview mode we don't write — the flow is just being reviewed. */
+async function obCommitChats(useSelection) {
+  if (!obState.preview && obState.loadedChats && obState.chats.length) {
+    const updates = obState.chats.map((c) => ({ group: c.name, included: useSelection ? c.included : false }));
+    await putScopes(updates).catch(() => {});
+  }
+  obGo(4);
+}
+
+/** Save the digest preferences, mark onboarding done, and enter the app. */
+async function obFinish() {
+  if (!obState.preview) {
+    await putPreferences({ digestTimes: obState.digestTime, morningNotification: obState.morningNotif }).catch(() => {});
+    try {
+      localStorage.setItem("catchapp-onboarded", "1");
+    } catch {
+      /* ignore storage failures */
+    }
+  }
+  obTeardown();
+  location.href = "/"; // drops ?onboarding=preview; boot loads the app
 }
 
 /* ── T5 operator dashboard (/admin) ──────────────────────────────────────── */

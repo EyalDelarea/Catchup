@@ -433,7 +433,7 @@ async function main(): Promise<void> {
   if (requestedTypes.includes("suggest.generate")) {
     const { makeSuggestGenerateHandler } = await import("./handlers/suggest-generate.js");
     const { getTotalSummaryById } = await import("../db/repositories/total-summaries.js");
-    const { listIncludedGroupIds } = await import("../db/repositories/chat-scopes.js");
+    const { listSuggestibleGroupIds } = await import("../db/repositories/chat-scopes.js");
     const { getPreferences } = await import("../db/repositories/user-preferences.js");
     const { insertSuggestions, loadBias } = await import("../db/repositories/suggestions.js");
     const { makeOllamaExtractor } = await import("../summarization/suggest-extractor.js");
@@ -449,7 +449,7 @@ async function main(): Promise<void> {
     handlers["suggest.generate"] = makeSuggestGenerateHandler({
       pool,
       loadPerChat: async (p, id) => (await getTotalSummaryById(p, id))?.output.perChat ?? [],
-      loadIncludedGroupIds: (p) => listIncludedGroupIds(p),
+      loadSuggestibleGroupIds: (p) => listSuggestibleGroupIds(p),
       loadEngineConfigRaw: async (p) => (await getPreferences(p))?.engineConfig ?? {},
       loadBias: (p) => loadBias(p),
       extract: makeOllamaExtractor(suggestSummarizer),
