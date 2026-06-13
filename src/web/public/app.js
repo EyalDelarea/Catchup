@@ -15,7 +15,7 @@
  */
 
 import { actOnSuggestion, askStream, createScopeCategory, getGroups, getMeetings, getMessages, getPeople, getPreferences, getScopeCategories, getScopes, getStatus, getSummaries, getToday, getTodos, putPreferences, putScopes, resetSuggestionLearning, setTodoDone, summarizeStream } from "./lib/api.js";
-import { avatarTint, buildMonthGrid, eventDaySet, groupMeetingsByDay, peopleStatusMeta, relativeDay, todoProgress } from "./lib/agenda.js";
+import { avatarTint, buildMonthGrid, eventDaySet, groupMeetingsByDay, peopleStatusMeta, relativeDay, sourceDateLabel, todoProgress } from "./lib/agenda.js";
 import { activeCount, filterScopes, groupByCategory, partitionRemoved, sectionCount } from "./lib/scopes.js";
 import { DIGEST_CHOICES, ENGINE_KINDS, PROACT_LEVELS, isDigestSelected, normalizeEngineConfig, toggleDigestTime } from "./lib/prefs.js";
 import { buildDeck, clampIndex, commitActionFor, emptyTally, greeting, indexAfterRemoval, isSuggestion, leavingVariant, peekCount, recordTally, removeCardById, segmentFills, suggestionConfig, tallyBits, tileCounts, TILE_KINDS } from "./lib/today.js";
@@ -3260,7 +3260,10 @@ function buildChecklist(todos) {
 }
 
 function buildTodoRow(t) {
-  const chip = buildSrcJump({ chat: t.chat, sourceMessageId: t.sourceMessageId });
+  // Source chip = chat name · source-message date (e.g. "רונית אדרי · 9 ביוני").
+  const srcDate = sourceDateLabel(t.sourceAt);
+  const label = t.chat && srcDate ? `${formatGroupName(t.chat)} · ${srcDate}` : undefined;
+  const chip = buildSrcJump({ chat: t.chat, sourceMessageId: t.sourceMessageId, label });
   const due = dueLabel(t.dueAt);
   const dueBadge = due ? `<span class="badge">${escHtml(due)}</span>` : "";
   return `

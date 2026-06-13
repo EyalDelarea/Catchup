@@ -186,6 +186,23 @@ export function buildMonthGrid(year, monthIndex, { today = null, events = new Se
   return cells;
 }
 
+// ── Source chip: message date ────────────────────────────
+
+/**
+ * Short Hebrew "day month" label for a source-message ISO timestamp, e.g.
+ * "2026-06-09T..." → "9 ביוני". Used in the to-do/meeting source chip
+ * ("רונית אדרי · 9 ביוני"). Formatted over the UTC day to stay consistent with
+ * the rest of the agenda's UTC date math. Empty string for null/unparseable.
+ * @param {string|null|undefined} iso
+ * @returns {string}
+ */
+export function sourceDateLabel(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("he-IL", { day: "numeric", month: "long", timeZone: "UTC" });
+}
+
 // ── To-dos: progress ─────────────────────────────────────
 
 /**
