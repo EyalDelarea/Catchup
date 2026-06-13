@@ -3786,8 +3786,15 @@ function obRunScan() {
     obTeardown();
     if (obState.step === 2) obGo(3);
   };
+  // Live link: let the REAL history-sync progress drive completion. The simulated
+  // fill only animates up to a cap, then waits for the real `done` — so we never
+  // advance to the chat picker before the user's chats have actually synced. A safety
+  // timeout still advances if no progress/`done` ever arrives (already-synced account,
+  // or a stream error). Preview keeps filling to 100 on its own.
+  const live = !obState.preview;
+  const simCap = live ? 90 : 100;
   const tick = setInterval(() => {
-    apply(pct + 1);
+    if (pct < simCap) apply(Math.min(pct + 1, simCap));
     if (pct >= 100) {
       clearInterval(tick);
       setTimeout(finish, 600);
@@ -3799,7 +3806,7 @@ function obRunScan() {
     if (el) el.textContent = quips[q];
   }, 1700);
   obState.timers.push(tick, quipTimer);
-  if (!obState.preview) {
+  if (live) {
     const es = new EventSource("/api/onboarding/progress");
     activeEventSource = es;
     es.addEventListener("progress", (e) => {
@@ -3810,7 +3817,14 @@ function obRunScan() {
       apply(100);
       finish();
     });
-    es.onerror = () => {}; // fall back to the timed simulation
+    es.onerror = () => {}; // the safety timeout below still advances the flow
+    // Safety net: never stall on the scan step if no progress/`done` arrives.
+    obState.timers.push(
+      setTimeout(() => {
+        apply(100);
+        finish();
+      }, 45000),
+    );
   }
 }
 
