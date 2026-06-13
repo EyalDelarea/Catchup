@@ -1475,11 +1475,13 @@ function askEmptyHtml(scope) {
 /** Ask context bar: scope pill + (when scoped) exit + clear. */
 function askCtxBarHtml(scope) {
   const scoped = scope != null;
-  const hasThread = amaConversation.messages.length > 0;
+  // Offer "clear" only when there's a settled thread to clear — not mid-stream
+  // (clearing is blocked while a job is in flight, so the button would no-op).
+  const canClear = amaConversation.messages.length > 0 && !workingForScope(askStore, scope ?? null);
   return `<div class="ask-ctxbar${scoped ? " scoped" : ""}">
       ${scopePillHtml(scope)}
       ${scoped ? `<button type="button" class="ask-exit" id="ama-exit" title="חזרה לכל הצ׳אטים">${icon("inbox", { size: 15 })}כל הצ׳אטים</button>` : ""}
-      ${hasThread ? `<button type="button" class="ask-clear" id="ama-clear" title="נקה שיחה">${icon("trash", { size: 15 })}נקה שיחה</button>` : ""}
+      ${canClear ? `<button type="button" class="ask-clear" id="ama-clear" title="נקה שיחה">${icon("trash", { size: 15 })}נקה שיחה</button>` : ""}
     </div>`;
 }
 
@@ -1836,6 +1838,8 @@ function showAskToast(id) {
   );
   document.getElementById("ask-toast-view")?.addEventListener("click", () => openAskJob(id));
   document.getElementById("ask-toast-x")?.addEventListener("click", dismissAskToast);
+  // Auto-dismiss after a while; the bell badge stays as the durable indicator.
+  askToastTimer = setTimeout(dismissAskToast, 9000);
 }
 
 /** Open a job's answer: clear its unread, dismiss chrome, navigate to its scope, flash it. */
