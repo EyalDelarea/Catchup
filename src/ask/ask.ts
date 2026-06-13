@@ -60,7 +60,11 @@ async function gather(
   const limit = opts.limit ?? deps.defaultLimit ?? 30;
   const lists = await Promise.all(
     deps.retrievers.map((r) =>
-      settleWithin(r.retrieve({ question, window, chat: opts.chat, limit }), RETRIEVE_TIMEOUT_MS, [] as Candidate[]),
+      settleWithin(
+        r.retrieve({ question, window, chat: opts.chat, limit }),
+        RETRIEVE_TIMEOUT_MS,
+        [] as Candidate[],
+      ),
     ),
   );
   return fuse(lists).slice(0, limit);
