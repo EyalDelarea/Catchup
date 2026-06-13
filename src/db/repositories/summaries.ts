@@ -12,12 +12,17 @@ export type InsertSummaryInput = {
 /**
  * Returns the most recent catch-up (summary_type='watermark') summary for a
  * group, or null when none exists. Used by prepareCatchup to serve the cache.
+ *
+ * Returns the FULL structured `output` (not just `overview`) so the cache-hit
+ * path can re-render the same structured §3 card a fresh summary would — see
+ * `normalizeSummaryOutput`. Flattening to the overview string here is what made
+ * "מה שפספסתי" fall back to the old markdown card on a cache hit.
  */
 export async function getLatestCatchupSummary(
   client: pg.Pool | pg.PoolClient,
   groupId: number,
-): Promise<{ overview: string; createdAt: Date } | null> {
-  const { rows } = await client.query<{ output: { overview: string }; created_at: Date }>(
+): Promise<{ output: SummaryOutput; createdAt: Date } | null> {
+  const { rows } = await client.query<{ output: SummaryOutput; created_at: Date }>(
     `
     SELECT output, created_at
     FROM summaries
@@ -30,7 +35,7 @@ export async function getLatestCatchupSummary(
   );
   if (rows.length === 0) return null;
   const row = rows[0]!;
-  return { overview: row.output.overview, createdAt: row.created_at };
+  return { output: row.output, createdAt: row.created_at };
 }
 
 export type SummaryRow = {

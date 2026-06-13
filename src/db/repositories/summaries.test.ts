@@ -107,7 +107,7 @@ describe("summaries schema", () => {
     expect(result).toBeNull();
   });
 
-  it("getLatestCatchupSummary returns the most recent watermark row's overview and createdAt", async () => {
+  it("getLatestCatchupSummary returns the most recent watermark row's full structured output and createdAt", async () => {
     const { getLatestCatchupSummary } = await import("./summaries.js");
     const groupId = await upsertGroup(pool, { name: "S-glcs-order", source: "import" });
 
@@ -128,7 +128,16 @@ describe("summaries schema", () => {
     // Small delay to ensure different created_at
     await new Promise((r) => setTimeout(r, 10));
 
-    // Insert a newer watermark summary
+    // Insert a newer watermark summary with a full structured (version 2) output.
+    const newerOutput = {
+      version: 2 as const,
+      overview: "newer overview",
+      tldr: "the gist",
+      topics: [{ text: "topic A", sourceMessageId: 10 }],
+      decisions: [{ text: "decision A" }],
+      openQuestions: [],
+      actionItems: [],
+    };
     await insertSummary(pool, {
       groupId,
       summaryType: "watermark",
@@ -138,13 +147,15 @@ describe("summaries schema", () => {
         messageCount: 5,
         usedFallback: false,
       },
-      output: { overview: "newer overview" },
+      output: newerOutput,
       model: "gemma4:26b",
     });
 
     const result = await getLatestCatchupSummary(pool, groupId);
     expect(result).not.toBeNull();
-    expect(result!.overview).toBe("newer overview");
+    // The FULL structured output is returned (not just the overview string) so the
+    // cache-hit path can re-render the structured §3 card.
+    expect(result!.output).toEqual(newerOutput);
     expect(result!.createdAt instanceof Date).toBe(true);
   });
 });
