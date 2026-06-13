@@ -10,12 +10,12 @@ import {
   type SelectedMessageWithCursor,
   selectAfterCursor,
 } from "./select.js";
-import type { SummaryPrompt } from "./summarizer.js";
+import type { SummaryOutput, SummaryPrompt } from "./summarizer.js";
 
 export type { Cursor };
 
 export type PreparedCatchup =
-  | { kind: "cache-hit"; summary: string; generatedAt: Date }
+  | { kind: "cache-hit"; summary: SummaryOutput; generatedAt: Date }
   | { kind: "empty" }
   | {
       kind: "ready";
@@ -113,7 +113,9 @@ export async function prepareCatchup(
     if (wm !== null) {
       const latest = await getLatestCatchupSummary(client, group.id);
       if (latest) {
-        return { kind: "cache-hit", summary: latest.overview, generatedAt: latest.createdAt };
+        // Carry the full structured output — the web layer normalizes it so the
+        // cache-hit renders the same §3 card as a fresh summary.
+        return { kind: "cache-hit", summary: latest.output, generatedAt: latest.createdAt };
       }
     }
     return { kind: "empty" };
