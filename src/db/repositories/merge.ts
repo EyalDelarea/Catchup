@@ -12,6 +12,11 @@
  *   moved, so neither unique index (group_id,dedupe_key)/(group_id,external_id)
  *   is violated.
  * - imports (FK ON DELETE RESTRICT) are repointed to the survivor.
+ * - todos + meetings (FK ON DELETE CASCADE on source_message_id) are repointed off
+ *   any deleted dup message onto the survivor message it collides with, so user
+ *   state — a checked-off todo — is never silently cascade-dropped (DATA-6). A
+ *   colliding agenda row whose survivor counterpart already exists keeps the
+ *   survivor's row (propagating a `done` check rather than resetting it).
  * - read_watermarks + summaries (FK ON DELETE CASCADE) are removed with the dup.
  * - The dup is deleted BEFORE the survivor is (re)named, so UNIQUE(name) can't
  *   collide on the name the dup currently holds.
@@ -118,6 +123,8 @@ export type MergeResult = {
   movedMessages: number;
   deletedDuplicateMessages: number;
   movedImports: number;
+  repointedTodos: number;
+  repointedMeetings: number;
 };
 
 export async function mergeGroups(
@@ -145,6 +152,75 @@ export async function mergeGroups(
     [survivorId, dupId],
   );
 
+  // 1b. The dup group AND its colliding messages are about to be deleted (steps 2
+  //     and 4), and todos/meetings cascade off BOTH their group_id and their
+  //     source_message_id (each FK is ON DELETE CASCADE). Rescue them onto the
+  //     survivor so user state — a todo the user already checked off — is never
+  //     silently cascade-dropped (DATA-6).
+
+  // (a) Move every dup-group agenda row onto the survivor group (mirrors the
+  //     imports repoint below) so the step-4 group delete can't cascade them away.
+  await client.query(`UPDATE todos SET group_id = $1 WHERE group_id = $2`, [survivorId, dupId]);
+  await client.query(`UPDATE meetings SET group_id = $1 WHERE group_id = $2`, [survivorId, dupId]);
+
+  // (b) For rows whose source message is a COLLIDING dup (deleted in step 2, not
+  //     moved in step 1), repoint source_message_id onto the survivor message it
+  //     collides with — same dedupe_key, or same external_id, the very condition
+  //     that kept step 1 from moving it.
+  const dupToSurvivor = `
+    WITH dup_to_surv AS (
+      SELECT d.id AS dup_msg_id, surv.id AS surv_msg_id
+      FROM messages d
+      JOIN LATERAL (
+        SELECT s.id FROM messages s
+        WHERE s.group_id = $1
+          AND (s.dedupe_key = d.dedupe_key
+               OR (d.external_id IS NOT NULL AND s.external_id = d.external_id))
+        ORDER BY s.id
+        LIMIT 1
+      ) surv ON true
+      WHERE d.group_id = $2
+    )`;
+
+  // The (tenant_id, source_message_id) unique index forbids landing a repointed
+  // todo on a survivor message that ALREADY has one — that would abort the merge
+  // transaction. When both sides hold the todo, keep the survivor's row but carry
+  // the `done` check across first (a checked box is never reset), then let the
+  // dup's row cascade away with its message in step 2.
+  await client.query(
+    `${dupToSurvivor}
+     UPDATE todos surv SET done = true, updated_at = now()
+     FROM dup_to_surv m
+     JOIN todos dup ON dup.source_message_id = m.dup_msg_id
+     WHERE surv.source_message_id = m.surv_msg_id
+       AND surv.tenant_id = dup.tenant_id
+       AND dup.done = true
+       AND surv.done = false`,
+    [survivorId, dupId],
+  );
+  const repointedTodos = await client.query(
+    `${dupToSurvivor}
+     UPDATE todos t SET source_message_id = m.surv_msg_id, updated_at = now()
+     FROM dup_to_surv m
+     WHERE t.source_message_id = m.dup_msg_id
+       AND NOT EXISTS (
+         SELECT 1 FROM todos x
+         WHERE x.tenant_id = t.tenant_id AND x.source_message_id = m.surv_msg_id
+       )`,
+    [survivorId, dupId],
+  );
+  const repointedMeetings = await client.query(
+    `${dupToSurvivor}
+     UPDATE meetings mt SET source_message_id = m.surv_msg_id, updated_at = now()
+     FROM dup_to_surv m
+     WHERE mt.source_message_id = m.dup_msg_id
+       AND NOT EXISTS (
+         SELECT 1 FROM meetings x
+         WHERE x.tenant_id = mt.tenant_id AND x.source_message_id = m.surv_msg_id
+       )`,
+    [survivorId, dupId],
+  );
+
   // 2. Delete the remaining (colliding) dup messages so the dup group can go.
   const deleted = await client.query(`DELETE FROM messages WHERE group_id = $1`, [dupId]);
 
@@ -165,5 +241,7 @@ export async function mergeGroups(
     movedMessages: moved.rowCount ?? 0,
     deletedDuplicateMessages: deleted.rowCount ?? 0,
     movedImports: movedImports.rowCount ?? 0,
+    repointedTodos: repointedTodos.rowCount ?? 0,
+    repointedMeetings: repointedMeetings.rowCount ?? 0,
   };
 }
