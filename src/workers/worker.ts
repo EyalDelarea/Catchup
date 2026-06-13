@@ -374,6 +374,7 @@ async function main(): Promise<void> {
     const { prepareCatchup } = await import("../summarization/prepare-catchup.js");
     const { insertSummary } = await import("../db/repositories/summaries.js");
     const { upsertWatermark } = await import("../db/repositories/read-watermarks.js");
+    const { materializeEntities } = await import("../summarization/refresh-entities.js");
     const { OllamaSummarizer } = await import("../summarization/summarizer.js");
     const ollamaSummarizer = new OllamaSummarizer({
       host: config.summarization.ollamaHost,
@@ -392,6 +393,10 @@ async function main(): Promise<void> {
       },
       insertSummary,
       updateWatermark: upsertWatermark,
+      // Fill the To-dos/Meetings tab from the scheduled digest, not just the browser
+      // SSE path. `pool` is the tenant-scoped app pool and the handler runs inside
+      // runWithTenantContext, so the upserts are RLS-correct. Best-effort + logged.
+      refreshEntities: (p, groupId, output) => materializeEntities(p, groupId, output, logger),
       model: config.summarization.model,
       tokenBudget: config.summarization.tokenBudget,
     });

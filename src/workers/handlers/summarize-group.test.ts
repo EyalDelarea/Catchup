@@ -115,6 +115,25 @@ describe("makeSummarizeGroupHandler", () => {
     expect(updateWatermark).toHaveBeenCalledOnce();
   });
 
+  it("runs entity extraction on the generated path (digest fills the To-dos tab)", async () => {
+    const pool = makeFakePool("Test Group");
+    const refreshEntities = vi.fn().mockResolvedValue(undefined);
+
+    const handler = makeSummarizeGroupHandler({
+      pool,
+      prepareCatchup: vi.fn().mockResolvedValue(makeReadyCatchup()),
+      summarize: vi.fn().mockResolvedValue("Generated summary text"),
+      insertSummary: vi.fn().mockResolvedValue(42),
+      updateWatermark: vi.fn().mockResolvedValue(undefined),
+      refreshEntities,
+      model: "gemma4:26b",
+      tokenBudget: 24000,
+    });
+
+    await handler(makeJob("1"));
+    expect(refreshEntities).toHaveBeenCalledOnce();
+  });
+
   it("throws when the group is not found in the DB", async () => {
     const pool = makeFakePool(null); // no rows returned
     const prepareCatchup = vi.fn();

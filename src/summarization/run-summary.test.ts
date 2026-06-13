@@ -145,6 +145,62 @@ describe("summarizeAndPersist — new messages (generated)", () => {
   });
 });
 
+// ── entity extraction wiring (TRG-1 regression lock) ───────────────────────────
+
+describe("summarizeAndPersist — entity extraction", () => {
+  const groupId = 42;
+  const newWatermark = { sentAt: new Date("2026-06-04T10:00:00.000Z"), messageId: 123 };
+  const readyResult: PreparedCatchup = {
+    kind: "ready",
+    groupId,
+    prompt: { system: "sys", user: "user prompt" },
+    summaryType: "watermark",
+    parameters: {
+      fromExclusive: null,
+      toInclusive: { sentAt: newWatermark.sentAt.toISOString(), messageId: 123 },
+      messageCount: 5,
+      usedFallback: false,
+    },
+    messageCount: 5,
+    newWatermark,
+    usedFallback: false,
+  };
+
+  it("runs the injected extraction with the structured output after a generated summary", async () => {
+    const refreshEntities = vi.fn().mockResolvedValue(undefined);
+    const deps = makeDeps({
+      prepareCatchup: vi.fn().mockResolvedValue(readyResult),
+      summarize: vi.fn().mockResolvedValue("A great summary"),
+      insertSummary: vi.fn().mockResolvedValue(99),
+      updateWatermark: vi.fn().mockResolvedValue(undefined),
+      refreshEntities,
+    });
+
+    await summarizeAndPersist(deps, groupId);
+
+    expect(refreshEntities).toHaveBeenCalledOnce();
+    const [, gid, output] = refreshEntities.mock.calls[0]!;
+    expect(gid).toBe(groupId);
+    expect(output.version).toBe(2);
+  });
+
+  it("does NOT extract on a cache-hit (no fresh messages)", async () => {
+    const refreshEntities = vi.fn().mockResolvedValue(undefined);
+    const deps = makeDeps({
+      prepareCatchup: vi.fn().mockResolvedValue({
+        kind: "cache-hit",
+        summary: "y",
+        generatedAt: new Date("2026-06-04T08:00:00.000Z"),
+      } satisfies PreparedCatchup),
+      refreshEntities,
+    });
+
+    await summarizeAndPersist(deps, groupId);
+
+    expect(refreshEntities).not.toHaveBeenCalled();
+  });
+});
+
 // ── failure isolation ─────────────────────────────────────────────────────────
 
 describe("summarizeAndPersist — failure isolation", () => {

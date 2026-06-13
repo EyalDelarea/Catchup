@@ -85,6 +85,13 @@ export type SummarizeAndPersistDeps = {
   tokenBudget: number;
   /** Group name used to resolve the group in prepareCatchup. */
   groupName: string;
+  /**
+   * Optional: materialize meetings/todos/people from the just-persisted structured
+   * summary. Best-effort by contract (must never throw) — wire it to
+   * `materializeEntities` so the digest path fills the To-dos tab. Omitted →
+   * extraction is skipped (back-compat for callers that don't want it).
+   */
+  refreshEntities?: (pool: pg.Pool, groupId: number, output: SummaryOutput) => Promise<void>;
 };
 
 export type SummarizeResult = { status: "generated" | "cache-hit" };
@@ -114,6 +121,7 @@ export async function summarizeAndPersist(
     model,
     tokenBudget,
     groupName,
+    refreshEntities,
   } = deps;
 
   const FALLBACK_N = 25;
@@ -139,6 +147,13 @@ export async function summarizeAndPersist(
     insertSummary,
     updateWatermark,
   });
+
+  // Materialize meetings/todos/people from the structured decisions. This is what
+  // makes the scheduled digest (and CLI digest-run) fill the To-dos tab — without
+  // it, only the browser SSE path ever extracts. Best-effort by the dep's contract.
+  if (refreshEntities) {
+    await refreshEntities(pool, prepared.groupId, output);
+  }
 
   return { status: "generated" };
 }
