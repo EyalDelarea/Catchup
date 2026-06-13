@@ -335,16 +335,17 @@ function setNavCount(id, n) {
 }
 
 /** Appbar header for the current screen: title + subtitle + action icons + optional back. */
-function setAppbar(view, { back } = {}) {
+function setAppbar(view, { back, title, sub: subOverride } = {}) {
   const m = META[view] || { title: "", sub: "" };
-  const sub = typeof m.sub === "function" ? m.sub() : m.sub;
+  const resolvedTitle = title ?? m.title;
+  const sub = subOverride ?? (typeof m.sub === "function" ? m.sub() : m.sub);
   const backBtn = back
     ? `<button class="iconbtn" id="appbar-back" type="button" aria-label="חזרה">${icon("chevR", { size: 19 })}</button>`
     : "";
   topBar.innerHTML = `
     ${backBtn}
     <div>
-      <h1>${escHtml(m.title)}</h1>
+      <h1>${escHtml(resolvedTitle)}</h1>
       ${sub ? `<div class="sub">${sub}</div>` : ""}
     </div>
     <div class="acts">
@@ -552,9 +553,15 @@ function renderDetail(group, autoStart) {
   detailState.showingCachedCard = false;
   detailState.backgroundRefreshStarted = false;
 
-  paneMain.innerHTML = buildDetailShell(group, ago, fresh);
+  paneMain.innerHTML = buildDetailShell(group);
   setView("detail");
-  setAppbar("detail", { back: true });
+  setAppbar("detail", {
+    back: true,
+    title: formatGroupName(group),
+    sub: fresh
+      ? `<span class="dot-live"></span>פעיל${ago ? ` · ${escHtml(ago)}` : ""}`
+      : escHtml(ago),
+  });
   wireDetailButtons(group);
   if (!DEMO) loadHistory(group);
 
@@ -604,31 +611,27 @@ async function runDetailWithCacheFirst(group) {
   }
 }
 
-function buildDetailShell(group, ago, fresh) {
-  const freshLine = ago
-    ? `<div class="detail-gfresh">${fresh ? '<span class="gcard__live">● פעיל</span> · ' : ""}${escHtml(ago)}</div>`
-    : "";
+function buildDetailShell(group) {
+  // The chat identity (avatar/name/live/back) lives in the appbar (set in
+  // renderDetail) — here we render the design's summary-first body: time-range
+  // chips (.sum-ranges) + the structured .sum-card region + history + ask bar.
+  const ranges = [
+    ["catchup", "מה שפספסתי"],
+    ["24h", "24 שעות"],
+    ["3d", "3 ימים"],
+    ["week", "שבוע"],
+    ["month", "חודש"],
+    ["range", "טווח…"],
+  ];
+  const chips = ranges
+    .map(
+      ([k, l]) =>
+        `<span class="chip${k === "catchup" ? " on" : ""}" data-chip="${k}" role="button" tabindex="0" aria-pressed="${k === "catchup"}">${l}</span>`,
+    )
+    .join("");
   return `
     <div class="detail-view">
-      <nav class="detail-nav" aria-label="ניווט">
-        <button class="back-btn" id="back-btn" aria-label="חזרה לרשימת הקבוצות">
-          <span class="back-btn__arrow" aria-hidden="true">›</span> חזרה
-        </button>
-      </nav>
-
-      <div class="detail-ghead">
-        <h2 class="detail-gtitle">${escHtml(formatGroupName(group))}</h2>
-        ${freshLine}
-      </div>
-
-      <div class="chips mode-chips" role="group" aria-label="בחירת טווח זמן" id="mode-chips">
-        <button class="chip chip--active" data-chip="catchup" aria-pressed="true">מה שפספסתי</button>
-        <button class="chip" data-chip="24h" aria-pressed="false">24 שעות</button>
-        <button class="chip" data-chip="3d" aria-pressed="false">3 ימים</button>
-        <button class="chip" data-chip="week" aria-pressed="false">שבוע</button>
-        <button class="chip" data-chip="month" aria-pressed="false">חודש</button>
-        <button class="chip" data-chip="range" aria-pressed="false">טווח…</button>
-      </div>
+      <div class="sum-ranges" role="group" aria-label="בחירת טווח זמן" id="mode-chips">${chips}</div>
 
       <div id="summary-region" aria-live="polite" aria-atomic="false"></div>
 
@@ -706,7 +709,7 @@ function setActiveChip(chip) {
   if (!container) return;
   container.querySelectorAll(".chip[data-chip]").forEach((btn) => {
     const isActive = btn.dataset.chip === chip;
-    btn.classList.toggle("chip--active", isActive);
+    btn.classList.toggle("on", isActive);
     btn.setAttribute("aria-pressed", isActive ? "true" : "false");
   });
 }

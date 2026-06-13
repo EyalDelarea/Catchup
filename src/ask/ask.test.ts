@@ -64,6 +64,26 @@ describe("ask", () => {
     expect(res.answer).toContain("אין מידע");
   });
 
+  it("degrades to the surviving retrievers when one throws (e.g. a hung embedder)", async () => {
+    const throwing: Retriever = {
+      retrieve: async () => {
+        throw new Error("embedder unavailable");
+      },
+    };
+    const res = await ask(
+      {
+        summarizer: fakeSummarizer("קבעת עם יוסי [1]."),
+        retrievers: [throwing, fakeRetriever(cands)],
+        tokenBudget: 24000,
+      },
+      "עם מי קבעתי?",
+      NOW,
+    );
+    // The failed retriever is dropped; the good one's candidate still answers.
+    expect(res.candidateCount).toBe(1);
+    expect(res.citations.map((c) => c.messageId)).toEqual([101]);
+  });
+
   it("trims lowest-ranked candidates to fit a tiny token budget", async () => {
     const many: Candidate[] = Array.from({ length: 5 }, (_, i) => ({
       messageId: 200 + i,
