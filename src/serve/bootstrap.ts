@@ -1,8 +1,10 @@
+import fs from "node:fs";
 import path from "node:path";
 import { OllamaEmbedder } from "../ask/embedder.js";
 import { createLogMailer } from "../auth/mailer.js";
 import { backfillGroup } from "../collector/backfill.js";
 import { recoverOnReconnect } from "../collector/reconnect-recovery.js";
+import { SingleTenantOnboardingAdapter } from "../collector/single-tenant-onboarding.js";
 import { loadConfig } from "../config.js";
 import { createAppPool, createDbClient, createOperatorPool } from "../db/client.js";
 import { countReadableSince, getNewestReadableSentAt } from "../db/repositories/messages.js";
@@ -214,6 +216,18 @@ export async function startServe(options: { port?: string; collect?: boolean }):
     }
   }
 
+  // 021 — single-user web onboarding. When auth is off (single-user) and --collect
+  // provides a default-tenant session, expose the same /api/onboarding/* surface backed
+  // by it. Built here because createServer reads deps.onboarding at construction; the
+  // live session is bridged in below once the --collect block starts it.
+  let singleUserOnboarding: SingleTenantOnboardingAdapter | null = null;
+  if (!config.auth.enabled && options.collect) {
+    const authDir = path.join(config.dataDir, "baileys-auth");
+    singleUserOnboarding = new SingleTenantOnboardingAdapter({
+      initiallyLinked: fs.existsSync(path.join(authDir, "creds.json")),
+    });
+  }
+
   const server = createServer({
     pool: appPool, // raw app pool — createServer scopes it per request
     summarizer,
@@ -222,7 +236,7 @@ export async function startServe(options: { port?: string; collect?: boolean }):
     model: config.summarization.model,
     getQueueDepths,
     logger: webLogger,
-    onboarding: tenantRegistry ?? undefined,
+    onboarding: tenantRegistry ?? singleUserOnboarding ?? undefined,
     // T5 operator dashboard — cross-tenant view via the operator pool + registry health.
     // Only meaningful in multi-tenant mode with at least one OPERATOR_EMAILS entry.
     admin:
@@ -415,6 +429,9 @@ export async function startServe(options: { port?: string; collect?: boolean }):
       const authDir = path.join(config.dataDir, "baileys-auth");
       const session = await startSession(authDir, config.whatsapp.allowSend);
       liveSession = session;
+
+      // 021 — light up the web QR + scan-progress streams for single-user onboarding.
+      singleUserOnboarding?.attachSession(session);
 
       // Snapshot the heartbeat BEFORE the collector connects (the heartbeat loop
       // writes a fresh value immediately on connect). A stale value means the
