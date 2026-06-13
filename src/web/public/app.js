@@ -1586,6 +1586,15 @@ async function renderThread(chat, aroundId) {
 
 const SEG_LABEL = { all: "הכול", included: "מוזנים", excluded: "מוחרגים" };
 const sourcesState = { scopes: [], categories: [], query: "", segment: "all" };
+let sourcesMenuWired = false;
+
+/** Close every open per-row ⋯ overflow menu in Sources. */
+function closeAllSourceMenus() {
+  for (const m of document.querySelectorAll(".src-row .cl-menu")) m.hidden = true;
+  for (const b of document.querySelectorAll('.src-row [data-act="menu"]')) {
+    b.setAttribute("aria-expanded", "false");
+  }
+}
 
 /** The Sources control center (§7): whitelist/blacklist + categorize chats. */
 async function renderSources() {
@@ -1669,12 +1678,11 @@ function buildSourceRow(s) {
   const catName = sourcesState.categories.find((c) => c.id === s.categoryId)?.name;
   const status = !s.included ? "מוחרג — לא ינוטר" : s.muted ? "מושתק · עדכונים בלבד" : "מוזן ל-CatchApp";
   const statusLine = catName ? `${escHtml(status)} · ${escHtml(catName)}` : escHtml(status);
-  const cats = sourcesState.categories
-    .map(
-      (c) =>
-        `<option value="${c.id}"${s.categoryId === c.id ? " selected" : ""}>${escHtml(c.name)}</option>`,
-    )
+  const moveItems = sourcesState.categories
+    .filter((c) => c.id !== s.categoryId)
+    .map((c) => `<button data-act="cat" data-cat="${c.id}" type="button">${escHtml(c.name)}${icon("chevL", { size: 13 })}</button>`)
     .join("");
+  const toNone = s.categoryId != null ? `<button data-act="cat" data-cat="" type="button">ללא קטגוריה${icon("chevL", { size: 13 })}</button>` : "";
   return `
     <div class="src-row${s.included ? "" : " src-row--off"}" data-group="${escHtml(s.group)}">
       ${avatarHtml(name, hueFromName(s.group), 38)}
@@ -1682,10 +1690,6 @@ function buildSourceRow(s) {
         <div class="src-row__name">${escHtml(name)}</div>
         <div class="src-row__status">${statusLine}</div>
       </div>
-      <select class="src-cat" data-act="cat" aria-label="קטגוריה">
-        <option value=""${s.categoryId == null ? " selected" : ""}>ללא</option>
-        ${cats}
-      </select>
       ${
         s.included
           ? `<button class="src-mute${s.muted ? " is-on" : ""}" data-act="mute" type="button"
@@ -1694,7 +1698,16 @@ function buildSourceRow(s) {
         title="${s.muted ? "ההצעות מושתקות — הצ׳אט עדיין מופיע בעדכונים" : "השתק הצעות (הצ׳אט עדיין מופיע בעדכונים)"}">${icon("moon", { size: 15 })}</button>`
           : ""
       }
-      <button class="src-remove" data-act="remove" type="button" aria-label="הסר">✕</button>
+      <div class="src-actions-wrap">
+        <button class="cl-ico" data-act="menu" type="button" aria-haspopup="true" aria-expanded="false" aria-label="פעולות">${icon("more", { size: 18 })}</button>
+        <div class="cl-menu surface" hidden>
+          <button data-act="toggle" type="button">${s.included ? "הסר מהסיכום" : "כלול בסיכום"}${icon(s.included ? "x" : "check", { size: 14 })}</button>
+          <div class="cl-menu-label">העבר לקבוצה</div>
+          ${moveItems}${toNone}
+          <div class="divide"></div>
+          <button class="danger" data-act="remove" type="button">הסר מהרשימה${icon("trash", { size: 14 })}</button>
+        </div>
+      </div>
       <button class="src-switch${s.included ? " is-on" : ""}" data-act="toggle" type="button"
         role="switch" aria-checked="${s.included}" aria-label="${s.included ? "מוזן" : "מוחרג"}">
         <span class="src-switch__knob"></span>
@@ -1777,10 +1790,13 @@ function wireSources() {
   }
   for (const row of document.querySelectorAll(".src-row[data-group]")) {
     const group = row.dataset.group;
-    row.querySelector('[data-act="toggle"]')?.addEventListener("click", () => {
-      const s = sourcesState.scopes.find((x) => x.group === group);
-      applyScopeChange([{ group, included: !s.included }]);
-    });
+    // The include switch AND the menu's "כלול/הסר מהסיכום" item both toggle inclusion.
+    for (const t of row.querySelectorAll('[data-act="toggle"]')) {
+      t.addEventListener("click", () => {
+        const s = sourcesState.scopes.find((x) => x.group === group);
+        applyScopeChange([{ group, included: !s.included }]);
+      });
+    }
     row.querySelector('[data-act="mute"]')?.addEventListener("click", () => {
       const s = sourcesState.scopes.find((x) => x.group === group);
       applyScopeChange([{ group, muted: !s.muted }]);
@@ -1791,10 +1807,30 @@ function wireSources() {
     row.querySelector('[data-act="restore"]')?.addEventListener("click", () =>
       applyScopeChange([{ group, removed: false }]),
     );
-    row.querySelector('[data-act="cat"]')?.addEventListener("change", (e) => {
-      const val = e.target.value;
-      applyScopeChange([{ group, categoryId: val === "" ? null : Number(val) }]);
-    });
+    for (const cb of row.querySelectorAll('[data-act="cat"]')) {
+      cb.addEventListener("click", () => {
+        const val = cb.dataset.cat;
+        applyScopeChange([{ group, categoryId: val === "" ? null : Number(val) }]);
+      });
+    }
+    // ⋯ overflow menu (move-to-group + remove): open one at a time.
+    const menuBtn = row.querySelector('[data-act="menu"]');
+    const menu = row.querySelector(".cl-menu");
+    if (menuBtn && menu) {
+      menuBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const willOpen = menu.hidden;
+        closeAllSourceMenus();
+        menu.hidden = !willOpen;
+        menuBtn.setAttribute("aria-expanded", String(willOpen));
+      });
+      menu.addEventListener("click", (e) => e.stopPropagation());
+    }
+  }
+  // Close any open ⋯ menu on an outside click (wired once).
+  if (!sourcesMenuWired) {
+    sourcesMenuWired = true;
+    document.addEventListener("click", closeAllSourceMenus);
   }
 }
 
