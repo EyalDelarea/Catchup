@@ -3974,6 +3974,9 @@ h2.sec .ic{ width:15px; height:15px; }
 .trust-line .ic{ width:15px; height:15px; }
 
 /* ---- guided onboarding flow ---- */
+/* Full-screen takeover that escapes the app shell's grid (the flow replaces
+   #layout's contents, which still carries the .shell grid). */
+.ob-takeover{ position:fixed; inset:0; z-index:80; background:var(--stage); display:grid; place-items:center; overflow:auto; padding:34px 24px; }
 .ob-flow .ob-card{ width:100%; }
 .ob-center{ text-align:center; }
 .ob-h{ margin:0 0 6px; font-size:30px; font-weight:800; letter-spacing:-.025em; }
