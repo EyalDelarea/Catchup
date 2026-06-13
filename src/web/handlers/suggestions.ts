@@ -1,4 +1,5 @@
 import type http from "node:http";
+import { listScopes } from "../../db/repositories/chat-scopes.js";
 import {
   decideSuggestion,
   listPendingDeck,
@@ -43,12 +44,21 @@ async function getDeck(res: http.ServerResponse, deps: ServerDeps): Promise<void
   try {
     const suggestions = await listPendingDeck(deps.pool);
     const [latest] = await listTotalSummaries(deps.pool, 1);
-    const info = latest
-      ? {
-          highlights: latest.output.highlights,
-          perChat: latest.output.perChat.map((p) => ({ chat: p.name, summary: p.summary })),
-        }
-      : { highlights: "", perChat: [] };
+    let info = { highlights: "", perChat: [] as { chat: string; summary: string }[] };
+    if (latest) {
+      // Defend against a stale digest (generated before the scope narrowed):
+      // only surface chats that are currently included, and suppress the
+      // cross-chat highlights prose if the digest covered any now-excluded chat
+      // (it would mention chats no longer in scope). A fresh digest repopulates it.
+      const included = new Set(
+        (await listScopes(deps.pool)).filter((s) => s.included && !s.removed).map((s) => s.group),
+      );
+      const perChat = latest.output.perChat
+        .filter((p) => included.has(p.name))
+        .map((p) => ({ chat: p.name, summary: p.summary }));
+      const noLeak = latest.output.perChat.every((p) => included.has(p.name));
+      info = { highlights: noLeak ? latest.output.highlights : "", perChat };
+    }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ suggestions, info }));
   } catch {
