@@ -861,9 +861,12 @@ function onCached(data) {
     teardownStream();
     return;
   }
-  detailState.summaryText = data.summary;
+  // `data.summary` is a normalized structured summary (same shape as `done`) —
+  // render the §3 card, not the legacy markdown card. `summaryText` keeps the
+  // full overview so "העתק סיכום" still copies the verbatim summary.
+  detailState.summaryText = data.summary?.overview ?? "";
   const statusText = `אין חדש — מתוך מטמון • נוצר ב־${fmtTime(data.generatedAt)}`;
-  setSummaryRegion(buildSummaryCardDone(detailState.summaryText, statusText, false));
+  setSummaryRegion(buildStructuredSummaryCard(data.summary, statusText, false));
   teardownStream();
 }
 
