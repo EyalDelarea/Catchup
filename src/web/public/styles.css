@@ -4172,6 +4172,20 @@ h2.sec .ic{ width:15px; height:15px; }
 .cal-evt i{ width:4px; height:4px; border-radius:50%; background:var(--accent); display:block; }
 .cal-cell.today .cal-evt i{ background:var(--on-accent); }
 
+/* meetings / todos — split screens */
+.mt-split{ align-items:start; }
+.mt-aside{ display:flex; flex-direction:column; gap:14px; position:sticky; top:8px; }
+.mt-aside .gcal{ margin-bottom:0; }
+.gcal-export{ display:flex; align-items:flex-start; gap:12px; padding:14px 15px; }
+.gcal-export .gcal-ic{ margin-top:1px; }
+.gcal-export b{ font-size:14px; }
+.gcal-export p{ margin:3px 0 0; font-size:12px; color:var(--ink-2); line-height:1.4; }
+.gcal-export .btn-sm{ flex:none; align-self:center; }
+.todos-wrap{ max-width:680px; }
+.tl-card .meta, .cl-row .meta{ margin-top:6px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.cl-row.is-done{ opacity:.5; }
+.cl-row.is-done .cl-title{ text-decoration:line-through; }
+
 /* logo lab */
 .lab-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:22px 0 18px; }
 .lab-card{ position:relative; padding:18px 14px; cursor:pointer; text-align:center; display:flex; flex-direction:column; align-items:center; gap:14px; background:var(--surface); transition:.15s; }
@@ -4239,6 +4253,8 @@ h2.sec .ic{ width:15px; height:15px; }
 /* ===================== responsive (container) ===================== */
 @media (max-width:1000px){
   .duo{ grid-template-columns:1fr; gap:28px; }
+  .mt-split{ grid-template-columns:1fr; gap:22px; }
+  .mt-aside{ position:static; max-width:380px; }
 }
 @media (max-width:720px){
   .split{ grid-template-columns:1fr; }

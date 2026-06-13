@@ -50,6 +50,7 @@ const PATHS = {
     '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/>'
     + '<path d="M16 5.2a3.2 3.2 0 0 1 0 5.6M17.5 20a5.5 5.5 0 0 0-3-4.9"/>',
   target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.4"/>',
+  download: '<path d="M12 4v10M8 11l4 4 4-4"/><path d="M5 19h14"/>',
   // ── Command-center port glyphs ────────────────────────
   inbox:
     '<path d="M3 13h4l1.5 2.5h7L17 13h4"/>'

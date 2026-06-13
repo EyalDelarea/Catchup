@@ -103,7 +103,8 @@ const META = {
   detail: { title: "עדכונים", sub: "מה פספסת — סיכומים במקום גלילה" },
   thread: { title: "השיחה המלאה", sub: "ההודעה שהסיכום הצביע עליה" },
   people: { title: "אנשים ולידים", sub: "CRM קליל שנבנה מהשיחות" },
-  agenda: { title: "פגישות ומשימות", sub: "כל פריט מקושר חזרה למקור" },
+  meetings: { title: "פגישות", sub: "סדר היום — כל פגישה מקושרת למקור" },
+  todos: { title: "משימות", sub: "מה שצריך לעשות — מחולץ מהשיחות" },
   ask: { title: "שאל את הוואטסאפ שלך", sub: "תשובות עם מקור — בלי לנחש" },
   sources: { title: "צ׳אטים מוזנים", sub: "בחרו אילו שיחות מזינות את CatchApp" },
   settings: { title: "הגדרות", sub: "פרטיות קודם כול" },
@@ -114,7 +115,6 @@ const META = {
 function navIdForView(view) {
   if (view === "detail") return "catchup";
   if (view === "thread") return "catchup";
-  if (view === "agenda") return "meetings";
   return view;
 }
 
@@ -126,12 +126,11 @@ function setView(view) {
 
 /**
  * Navigate to a view, pushing a history entry.
- * @param {"today"|"catchup"|"detail"|"total"|"ama"|"ask"|"thread"|"sources"|"settings"|"people"|"meetings"|"todos"|"agenda"} view
+ * @param {"today"|"catchup"|"detail"|"total"|"ama"|"ask"|"thread"|"sources"|"settings"|"people"|"meetings"|"todos"} view
  * @param {string|object} [arg] — group name (detail) or AMA scope (ama) or {chat,aroundId} (thread)
  */
 function navigate(view, arg) {
   if (view === "ask") view = "ama";
-  if (view === "meetings" || view === "todos") view = "agenda";
   if (view === "today") {
     history.pushState({ view: "today" }, "", "#today");
     renderToday();
@@ -164,9 +163,12 @@ function navigate(view, arg) {
   } else if (view === "people") {
     history.pushState({ view: "people" }, "", "#people");
     renderPeople();
-  } else if (view === "agenda") {
-    history.pushState({ view: "agenda" }, "", "#agenda");
-    renderAgenda();
+  } else if (view === "meetings") {
+    history.pushState({ view: "meetings" }, "", "#meetings");
+    renderMeetings();
+  } else if (view === "todos") {
+    history.pushState({ view: "todos" }, "", "#todos");
+    renderTodos();
   } else {
     history.pushState({ view: "today" }, "", "#today");
     renderToday();
@@ -188,8 +190,10 @@ window.addEventListener("popstate", (e) => {
     renderSettings();
   } else if (state?.view === "people") {
     renderPeople();
-  } else if (state?.view === "agenda") {
-    renderAgenda();
+  } else if (state?.view === "meetings") {
+    renderMeetings();
+  } else if (state?.view === "todos") {
+    renderTodos();
   } else if (state?.view === "ama") {
     renderAma(state.scope ?? null);
   } else if (state?.view === "thread" && state.chat) {
@@ -2375,7 +2379,7 @@ function buildCommandSide() {
 
   const meetingRows = meetings.length
     ? meetings.map((m) => `
-        <div class="cc-row" data-go="agenda">
+        <div class="cc-row" data-go="meetings">
           <div class="grow"><div class="cc-row-t">${escHtml(m.title || "")}</div>
           <div class="cc-row-s">${escHtml(m.where || m.chat || "")}</div></div>
           <div class="cc-row-time mono" dir="ltr">${escHtml(m.time || (m.startsAt ? formatTime(m.startsAt) : ""))}</div>
@@ -2384,7 +2388,7 @@ function buildCommandSide() {
 
   const todoRows = openTodos.length
     ? openTodos.map((t) => `
-        <div class="cc-todo" data-go="agenda"><span class="cc-check"></span><span>${escHtml(t.title || "")}</span></div>`).join("")
+        <div class="cc-todo" data-go="todos"><span class="cc-check"></span><span>${escHtml(t.title || "")}</span></div>`).join("")
     : `<div class="cc-empty">אין משימות פתוחות</div>`;
 
   const followRows = followups.length
@@ -2398,7 +2402,7 @@ function buildCommandSide() {
 
   return `
     <div class="cc-panel surface">
-      <div class="cc-panel-h" data-go="agenda">
+      <div class="cc-panel-h" data-go="meetings">
         <span class="cc-panel-ic">${icon("calendar", { size: 16 })}</span>
         <b>פגישות היום</b><span class="cc-count">${meetings.length}</span>
         <span class="cc-more">${icon("chevL", { size: 15 })}</span>
@@ -2406,7 +2410,7 @@ function buildCommandSide() {
       <div class="cc-panel-body">${meetingRows}</div>
     </div>
     <div class="cc-panel surface">
-      <div class="cc-panel-h" data-go="agenda">
+      <div class="cc-panel-h" data-go="todos">
         <span class="cc-panel-ic">${icon("checks", { size: 16 })}</span>
         <b>משימות פתוחות</b><span class="cc-count">${openTodos.length}</span>
         <span class="cc-more">${icon("chevL", { size: 15 })}</span>
@@ -3029,58 +3033,55 @@ function wirePeople() {
 
 /* ── 7f. Meetings & To-dos (§6) ──────────────────────────── */
 //
-// Two visually-distinct columns (`.duo`): a month calendar + day-grouped agenda
-// timeline on the left, and a checklist with a progress bar on the right.
-// Local-only — no Google-Calendar connect banner (that's the S8 gated work).
-// Both endpoints may be absent; any failure renders empty columns, never crashes.
+// Two separate screens (matching the design). Meetings: a day-grouped agenda
+// timeline with a month-calendar + .ics-export aside. To-dos: a standalone
+// checklist with a progress bar. Local-only — no Google-Calendar connect banner
+// (that's the S8 gated work). Either endpoint may be absent; any failure renders
+// an empty state, never crashes.
 
 const agendaState = { meetings: [], todos: [], monthOffset: 0 };
 const DOW_HE = ["א", "ב", "ג", "ד", "ה", "ו", "ש"];
 
-async function renderAgenda() {
+// ── Meetings screen ─────────────────────────────────────────
+
+async function renderMeetings() {
   teardownStream();
-  setView("agenda");
-  setAppbar("agenda");
-  paneMain.innerHTML = `<div class="agenda-view"><p class="thread-loading">טוען פגישות ומשימות…</p></div>`;
+  setView("meetings");
+  setAppbar("meetings");
+  paneMain.innerHTML = `<div class="mt-view"><p class="thread-loading">טוען פגישות…</p></div>`;
   let meetings = [];
-  let todos = [];
-  if (!DEMO) {
-    [meetings, todos] = await Promise.all([
-      getMeetings().catch(() => []),
-      getTodos().catch(() => []),
-    ]);
-  }
+  if (!DEMO) meetings = await getMeetings().catch(() => []);
   agendaState.meetings = Array.isArray(meetings) ? meetings : [];
-  agendaState.todos = Array.isArray(todos) ? todos : [];
   agendaState.monthOffset = 0;
   setNavCount("meetings", agendaState.meetings.length);
-  setNavCount("todos", agendaState.todos.filter((t) => !t.done).length);
-  paintAgenda();
+  paintMeetings();
 }
 
-function paintAgenda() {
+function paintMeetings() {
+  const total = agendaState.meetings.length;
   paneMain.innerHTML = `
-    <div class="agenda-view">
-      ${buildEntityNav("agenda-back")}
-      <div class="entity-head">
-        <div class="entity-head__title">${icon("calendar", { size: 18 })} פגישות ומשימות</div>
-      </div>
-      <div class="duo">
-        <section class="duo__col">
-          <div class="duo__sechead">
-            <h2 class="duo__sec">${icon("calendar", { size: 15 })} פגישות שנאספו</h2>
-            <a class="ics-export" href="/api/meetings.ics" download="catchapp.ics"
-               title="ייצוא הפגישות לקובץ יומן מקומי — שום דבר לא יוצא מהמכשיר">ייצוא ליומן (.ics)</a>
-          </div>
-          ${buildCalendar()}
+    <div class="mt-view">
+      ${buildEntityNav("meetings-back")}
+      <div class="split mt-split">
+        <section>
+          <h2 class="sec">${icon("calendar", { size: 15 })} סדר היום · <span class="mono" dir="ltr">${total}</span> פגישות שנאספו</h2>
           ${buildAgendaTimeline()}
         </section>
-        <section class="duo__col" id="agenda-todos">
-          ${buildTodosColumn()}
-        </section>
+        <aside class="mt-aside">
+          <div class="surface gcal">${buildCalendar()}</div>
+          <div class="surface gcal-export">
+            <span class="gcal-ic">${icon("calendar", { size: 20 })}</span>
+            <div class="grow">
+              <b>ייצוא ליומן</b>
+              <p>הורד קובץ <span class="mono" dir="ltr">.ics</span> — נפתח בכל יומן, בלי לחבר חשבון. הכול נשאר על המכשיר.</p>
+            </div>
+            <a class="btn btn-soft btn-sm" href="/api/meetings.ics" download="catchapp.ics"
+               title="ייצוא הפגישות לקובץ יומן מקומי — שום דבר לא יוצא מהמכשיר">${icon("download", { size: 15 })}הורד</a>
+          </div>
+        </aside>
       </div>
     </div>`;
-  wireAgenda();
+  wireMeetings();
 }
 
 /** Month calendar (today highlighted, event dots). Prev/next shift the month. */
@@ -3103,18 +3104,18 @@ function buildCalendar() {
   const dow = DOW_HE.map((d) => `<span>${d}</span>`).join("");
   const grid = cells
     .map((c) => {
-      if (c == null) return `<div class="cal-cell is-empty"></div>`;
-      const dots = c.hasEvent ? `<span class="cal-dot" aria-hidden="true"></span>` : "";
-      return `<div class="cal-cell${c.isToday ? " is-today" : ""}"><span class="cal-n mono" dir="ltr">${c.day}</span>${dots}</div>`;
+      if (c == null) return `<div class="cal-cell empty"></div>`;
+      const evt = c.hasEvent ? `<span class="cal-evt"><i></i></span>` : "";
+      return `<div class="cal-cell${c.isToday ? " today" : ""}"><span class="cal-n mono" dir="ltr">${c.day}</span>${evt}</div>`;
     })
     .join("");
   return `
-    <div class="cal surface">
+    <div class="cal">
       <div class="cal-head">
         <b>${escHtml(monthLabel)}</b>
         <div class="cal-nav">
-          <button class="cal-navbtn" data-cal-nav="prev" type="button" aria-label="חודש קודם">${icon("chevR", { size: 16 })}</button>
-          <button class="cal-navbtn" data-cal-nav="next" type="button" aria-label="חודש הבא">${icon("chevL", { size: 16 })}</button>
+          <button class="iconbtn sm" data-cal-nav="prev" type="button" aria-label="חודש קודם">${icon("chevR", { size: 16 })}</button>
+          <button class="iconbtn sm" data-cal-nav="next" type="button" aria-label="חודש הבא">${icon("chevL", { size: 16 })}</button>
         </div>
       </div>
       <div class="cal-grid cal-dow" aria-hidden="true">${dow}</div>
@@ -3150,17 +3151,17 @@ function agendaDayLabel(group) {
 function buildAgendaTimeline() {
   const groups = groupMeetingsByDay(agendaState.meetings, new Date().toISOString());
   if (groups.length === 0) {
-    return `<div class="agenda-timeline">${buildEntityEmpty("calendar", "אין פגישות", "פגישות שיזוהו בשיחות יופיעו כאן, מקובצות לפי יום.")}</div>`;
+    return buildEntityEmpty("calendar", "אין פגישות", "פגישות שיזוהו בשיחות יופיעו כאן, מקובצות לפי יום.");
   }
   return `
-    <div class="agenda-timeline">
+    <div class="agenda">
       ${groups
         .map(
           (g) => `
         <div class="day-group">
-          <div class="day-group__head">
-            <span class="day-pill">${escHtml(agendaDayLabel(g))}</span>
-            <span class="day-group__count"><span class="mono" dir="ltr">${g.items.length}</span> פגישות</span>
+          <div class="day-head">
+            <span class="pill">${escHtml(agendaDayLabel(g))}</span>
+            <span><span class="mono" dir="ltr">${g.items.length}</span> פגישות</span>
           </div>
           <div class="tl">
             ${g.items.map(buildMeetingItem).join("")}
@@ -3180,7 +3181,7 @@ function buildMeetingItem(m) {
       time = "";
     }
   }
-  const owner = m.owner ? `<span class="tl-owner">${icon("user", { size: 13 })}${escHtml(formatGroupName(m.owner))}</span>` : "";
+  const who = m.owner ? `<p>${escHtml(formatGroupName(m.owner))}</p>` : "";
   const chip = buildSrcJump({ chat: m.chat, sourceMessageId: m.sourceMessageId });
   return `
     <div class="tl-item">
@@ -3188,48 +3189,87 @@ function buildMeetingItem(m) {
       <div class="tl-rail" aria-hidden="true"><span class="tl-dot"></span></div>
       <div class="tl-card surface">
         <h4>${escHtml(m.title)}</h4>
-        <div class="tl-card__meta">${owner}${chip}</div>
+        ${who}
+        <div class="meta">${chip}</div>
       </div>
     </div>`;
 }
 
-/** To-dos checklist column: progress bar + round-checkbox rows. */
-function buildTodosColumn() {
+function wireMeetings() {
+  document.getElementById("meetings-back")?.addEventListener("click", () => history.back());
+  const root = paneMain.querySelector(".mt-view");
+  if (!root) return;
+  for (const btn of root.querySelectorAll("[data-cal-nav]")) {
+    btn.addEventListener("click", () => {
+      agendaState.monthOffset += btn.dataset.calNav === "next" ? 1 : -1;
+      paintMeetings();
+    });
+  }
+  wireSrcJumps(root);
+}
+
+// ── To-dos screen ───────────────────────────────────────────
+
+async function renderTodos() {
+  teardownStream();
+  setView("todos");
+  setAppbar("todos");
+  paneMain.innerHTML = `
+    <div class="todos-wrap">
+      ${buildEntityNav("todos-back")}
+      <h2 class="sec">${icon("checks", { size: 15 })} משימות שחולצו מהשיחות</h2>
+      <div id="todos-body"><p class="thread-loading">טוען משימות…</p></div>
+    </div>`;
+  document.getElementById("todos-back")?.addEventListener("click", () => history.back());
+  let todos = [];
+  if (!DEMO) todos = await getTodos().catch(() => []);
+  agendaState.todos = Array.isArray(todos) ? todos : [];
+  setNavCount("todos", agendaState.todos.filter((t) => !t.done).length);
+  paintTodosBody();
+}
+
+/** (Re)render the to-dos list region in place — first paint + after a toggle. */
+function paintTodosBody() {
+  const body = document.getElementById("todos-body");
+  if (!body) return;
   const todos = agendaState.todos;
-  const inner =
+  body.innerHTML =
     todos.length === 0
       ? buildEntityEmpty("checks", "אין משימות פתוחות", "משימות שיחולצו מהשיחות יופיעו כאן, עם מקור ותאריך יעד.")
       : buildChecklist(todos);
-  return `<h2 class="duo__sec">${icon("checks", { size: 15 })} משימות שחולצו</h2>${inner}`;
+  for (const btn of body.querySelectorAll("[data-todo-toggle]")) {
+    btn.addEventListener("click", () => onTodoToggle(Number(btn.dataset.todoToggle)));
+  }
+  wireSrcJumps(body);
 }
 
 function buildChecklist(todos) {
   const p = todoProgress(todos);
   const rows = todos.map(buildTodoRow).join("");
   return `
-    <div class="checklist surface">
-      <div class="checklist__head">
+    <div class="surface checklist">
+      <div class="cl-head">
         <b><span class="mono" dir="ltr">${p.done}</span> מתוך <span class="mono" dir="ltr">${p.total}</span> הושלמו</b>
-        <span class="entity-badge is-accent"><span class="mono" dir="ltr">${p.open}</span> פתוחות</span>
+        <span class="badge accent"><span class="mono" dir="ltr">${p.open}</span> פתוחות</span>
       </div>
-      <div class="checklist__bar" role="progressbar" aria-valuenow="${p.pct}" aria-valuemin="0" aria-valuemax="100">
-        <b style="inline-size:${p.pct}%"></b>
+      <div class="cl-progress" role="progressbar" aria-valuenow="${p.pct}" aria-valuemin="0" aria-valuemax="100">
+        <b style="width:${p.pct}%"></b>
       </div>
-      <div class="checklist__rows">${rows}</div>
+      <div class="cl-rows">${rows}</div>
     </div>`;
 }
 
 function buildTodoRow(t) {
   const chip = buildSrcJump({ chat: t.chat, sourceMessageId: t.sourceMessageId });
   const due = dueLabel(t.dueAt);
-  const dueBadge = due ? `<span class="entity-badge">${escHtml(due)}</span>` : "";
+  const dueBadge = due ? `<span class="badge">${escHtml(due)}</span>` : "";
   return `
     <div class="cl-row${t.done ? " is-done" : ""}" data-todo="${t.id}">
-      <button class="cl-box${t.done ? " is-on" : ""}" type="button" data-todo-toggle="${t.id}"
+      <button class="cbox${t.done ? " on" : ""}" type="button" data-todo-toggle="${t.id}"
         role="checkbox" aria-checked="${t.done}" aria-label="סימון כהושלם">${icon("check", { size: 14 })}</button>
-      <div class="cl-row__body">
-        <div class="cl-row__title">${escHtml(t.title)}</div>
-        <div class="cl-row__meta">${chip}${dueBadge}</div>
+      <div class="grow">
+        <div class="cl-title">${escHtml(t.title)}</div>
+        <div class="meta">${chip}${dueBadge}</div>
       </div>
     </div>`;
 }
@@ -3248,49 +3288,25 @@ function dueLabel(dueAt) {
   }
 }
 
-function paintTodos() {
-  const col = document.getElementById("agenda-todos");
-  if (!col) return;
-  col.innerHTML = buildTodosColumn();
-  for (const btn of col.querySelectorAll("[data-todo-toggle]")) {
-    btn.addEventListener("click", () => onTodoToggle(Number(btn.dataset.todoToggle)));
-  }
-  wireSrcJumps(col);
-}
-
 /** Optimistic checkbox toggle; reverts + repaints on a failed PATCH. */
 async function onTodoToggle(id) {
   const t = agendaState.todos.find((x) => x.id === id);
   if (!t) return;
   const next = !t.done;
   t.done = next;
-  paintTodos();
+  setNavCount("todos", agendaState.todos.filter((x) => !x.done).length);
+  paintTodosBody();
   if (DEMO) return;
   try {
     await setTodoDone(id, next);
   } catch {
     t.done = !next; // revert
-    paintTodos();
+    setNavCount("todos", agendaState.todos.filter((x) => !x.done).length);
+    paintTodosBody();
   }
 }
 
-function wireAgenda() {
-  document.getElementById("agenda-back")?.addEventListener("click", () => history.back());
-  const root = paneMain.querySelector(".agenda-view");
-  if (!root) return;
-  for (const btn of root.querySelectorAll("[data-cal-nav]")) {
-    btn.addEventListener("click", () => {
-      agendaState.monthOffset += btn.dataset.calNav === "next" ? 1 : -1;
-      paintAgenda();
-    });
-  }
-  for (const btn of root.querySelectorAll("[data-todo-toggle]")) {
-    btn.addEventListener("click", () => onTodoToggle(Number(btn.dataset.todoToggle)));
-  }
-  wireSrcJumps(root);
-}
-
-/** Shared empty-state card for People + Agenda columns. */
+/** Shared empty-state card for People, Meetings, and To-dos screens. */
 function buildEntityEmpty(iconName, title, text) {
   return `
     <div class="entity-empty surface">
@@ -3370,9 +3386,13 @@ function resolveInitialRoute() {
     history.replaceState({ view: "people" }, "", hash);
     return { view: "people" };
   }
-  if (hash === "#agenda") {
-    history.replaceState({ view: "agenda" }, "", hash);
-    return { view: "agenda" };
+  if (hash === "#meetings" || hash === "#agenda") {
+    history.replaceState({ view: "meetings" }, "", "#meetings");
+    return { view: "meetings" };
+  }
+  if (hash === "#todos") {
+    history.replaceState({ view: "todos" }, "", hash);
+    return { view: "todos" };
   }
   if (hash === "#catchup") {
     history.replaceState({ view: "catchup" }, "", hash);
@@ -4164,8 +4184,10 @@ async function boot() {
     renderSettings();
   } else if (route.view === "people") {
     renderPeople();
-  } else if (route.view === "agenda") {
-    renderAgenda();
+  } else if (route.view === "meetings") {
+    renderMeetings();
+  } else if (route.view === "todos") {
+    renderTodos();
   } else if (route.view === "catchup") {
     renderCatchup();
   } else {
