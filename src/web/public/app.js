@@ -1460,7 +1460,18 @@ function submitAmaQuestion(scope) {
       renderAmaMessages();
     },
     citations: (d) => finishAnswer(reply, d.citations),
-    done: settle,
+    done: (d) => {
+      // Show the designed "no results" surface when the answer cited nothing AND
+      // either retrieval was empty or the model returned its no-relevant-info
+      // marker — an answer that actually found something always carries citations.
+      const noCites = !(reply.citations && reply.citations.length);
+      const noInfo = /אין הודעות רלוונט|אין מידע/.test(reply.text || "");
+      if (noCites && (d?.candidateCount === 0 || noInfo)) {
+        reply.noResults = true;
+        reply.pending = false;
+      }
+      settle();
+    },
     error: (d) => {
       // A dropped connection after the answer completed is not a failure.
       if (reply.pending) failAnswer(reply, d.message);
@@ -1489,6 +1500,9 @@ function renderAmaMessages() {
             ? ["מחפש בכל ההיסטוריה…", "קורא הודעות רלוונטיות"]
             : ["חושב…", ""];
       return `<div class="msg ai"><div class="ask-state"><span class="sg-spark">${icon("sparkle", { size: 16 })}</span><div><b>${title}</b>${sub ? `<div class="ask-sub">${sub}</div>` : ""}</div><span class="ob-dots"><i></i><i></i><i></i></span></div></div>`;
+    }
+    if (m.noResults) {
+      return `<div class="msg ai"><div class="empty err"><div class="empty-ic err-ic err-ic--wiggle">${icon("search", { size: 26 })}<span class="err-ring"></span></div><h3>לא מצאתי על זה כלום</h3><p>לא נמצאו הודעות רלוונטיות בשיחות שבחרת. נסו לנסח אחרת או להרחיב את טווח הצ׳אטים.</p></div></div>`;
     }
     if (m.error) {
       return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble" style="color:var(--warn-ink)">${escHtml(m.error)}</div></div></div>`;
