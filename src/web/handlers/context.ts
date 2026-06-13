@@ -33,7 +33,10 @@ export type ServerDeps = {
   /** Target window for backfill (default 25). */
   backfillTargetWindow?: number;
   /** Optional structured logger (pino). Used to record backfill outcomes for the trace/dashboard. */
-  logger?: { info: (obj: Record<string, unknown>, msg?: string) => void };
+  logger?: {
+    info: (obj: Record<string, unknown>, msg?: string) => void;
+    warn: (obj: Record<string, unknown>, msg?: string) => void;
+  };
   /** Retrievers for the ask flow. Defaults to the lexical/recency/embedding set when absent. */
   askRetrievers?: Retriever[];
   /**

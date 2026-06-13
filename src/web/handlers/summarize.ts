@@ -7,7 +7,7 @@ import { normalizeSummaryOutput } from "../../summarization/normalize.js";
 import { parseStructuredSummary } from "../../summarization/parse-structured.js";
 import { prepareSummary } from "../../summarization/prepare.js";
 import { prepareCatchup } from "../../summarization/prepare-catchup.js";
-import { refreshEntitiesForGroup } from "../../summarization/refresh-entities.js";
+import { materializeEntities } from "../../summarization/refresh-entities.js";
 import { persistCatchupResult } from "../../summarization/run-summary.js";
 import type { Selection } from "../../summarization/select.js";
 import { sseFrame } from "../sse.js";
@@ -136,8 +136,8 @@ export async function handleSummarize(
         updateWatermark: upsertWatermark,
       });
       // S7: materialize meetings/todos/people from the structured decisions.
-      // Best-effort — never fail the summary on an extraction hiccup.
-      await refreshEntitiesForGroup(deps.pool, prepared.groupId, structured).catch(() => {});
+      // Best-effort + logged — never fail the summary on an extraction hiccup.
+      await materializeEntities(deps.pool, prepared.groupId, structured, deps.logger);
       deps.logger?.info(
         {
           evt: "summarize",
@@ -216,8 +216,8 @@ export async function handleSummarize(
       output: structured,
       model: deps.model,
     });
-    // S7: materialize meetings/todos/people (best-effort).
-    await refreshEntitiesForGroup(deps.pool, prepared.groupId, structured).catch(() => {});
+    // S7: materialize meetings/todos/people (best-effort + logged).
+    await materializeEntities(deps.pool, prepared.groupId, structured, deps.logger);
     deps.logger?.info(
       {
         evt: "summarize",
