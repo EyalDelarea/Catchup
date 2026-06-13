@@ -25,7 +25,7 @@ import { deriveHealth } from "./lib/health.js";
 import { shouldStartBackgroundRefresh } from "./lib/open-state.js";
 import { scanFill } from "./lib/phase-loader.js";
 import { appendToken, beginQuestion, createConversation, failAnswer, finishAnswer, loadConversation, saveConversation, setPhase } from "./lib/ama-conversation.js";
-import { createJobStore, findJob, markAllRead, markRead, readyNewestFirst, unreadCount } from "./lib/ask-jobs.js";
+import { addJob, createJobStore, findJob, markAllRead, markRead, markScopeRead, readyNewestFirst, settleJob, unreadCount, workingForScope } from "./lib/ask-jobs.js";
 import { DEMO_GROUPS, DEMO_SUMMARY, DEMO_SUMMARIES, DEMO_TOTAL_HIGHLIGHTS, DEMO_TOTAL_PERCHAT } from "./lib/demo-data.js";
 import { applyTheme, readStoredTheme, resolveInitialTheme, setTheme } from "./lib/theme.js";
 import { icon } from "./lib/icons.js";
@@ -67,6 +67,21 @@ let amaConversation = createConversation();
 let amaScope = null;
 /** Async Ask jobs — survive in-session navigation (notifications read from this). */
 const askStore = createJobStore();
+/** Per-job runtime (not serialized): id → { es, conv, reply, stallTimer }. */
+const askRuntime = new Map();
+/** Canonical in-memory conversation for any scope with a live job. */
+const liveConvByScope = new Map();
+/** Monotonic ask id counter. */
+let askSeq = 0;
+
+/** Scope → persistence/registry key (mirrors ama-conversation convKey). */
+function scopeKey(scope) {
+  return scope ?? "*all*";
+}
+/** True if the Ask screen is currently showing this scope. */
+function onAskScreen(scope) {
+  return layout?.dataset.view === "ama" && (amaScope ?? null) === (scope ?? null);
+}
 
 /** sessionStorage, or null if the browser blocks access (private mode, etc.). */
 function amaStorage() {
@@ -1360,7 +1375,9 @@ function runTotal({ since }) {
 function renderAma(scope) {
   teardownStream();
   amaScope = scope ?? null;
-  amaConversation = loadConversation(amaStorage(), amaScope);
+  // Reuse the live in-memory conversation while a job is streaming into this
+  // scope, so a background answer and the visible thread can't diverge.
+  amaConversation = liveConvByScope.get(scopeKey(amaScope)) ?? loadConversation(amaStorage(), amaScope);
   paneMain.innerHTML = `
     <div class="ama2">
       <div class="ama-scroll" id="ama-scroll">
@@ -1382,6 +1399,9 @@ function renderAma(scope) {
     </div>`;
   setView("ama");
   setAppbar("ask");
+  // Viewing a scope clears its unread answers + refreshes the bell badge.
+  markScopeRead(askStore, amaScope);
+  updateBellBadge();
 
   // Replace the empty-state hint with the restored thread, if there is one.
   if (amaConversation.messages.length) renderAmaMessages();
@@ -1428,47 +1448,71 @@ function amaSuggestHtml(scope) {
 
 /** No SSE activity for this long → treat the request as stuck and surface it. */
 const AMA_STALL_MS = 120_000;
-let amaStallTimer = null;
 
-/** Send the typed question to /api/ask and stream the answer into the panel. */
+/**
+ * Send the typed question to /api/ask as a background job that survives
+ * in-session navigation: each job owns its EventSource (never the shared
+ * `activeEventSource`, so `teardownStream()` won't kill it) and streams into the
+ * scope's conversation. When it lands while the user is elsewhere, a toast +
+ * bell badge bring them back to the answer.
+ */
 function submitAmaQuestion(scope) {
-  if (activeEventSource) return; // one question at a time
+  const sc = scope ?? null;
+  if (workingForScope(askStore, sc)) return; // one in-flight question per scope
   const input = document.getElementById("ama-q");
   const q = (input?.value || "").trim();
-  const reply = beginQuestion(amaConversation, q);
+  const conv = amaConversation; // we're on the Ask screen for this scope
+  const reply = beginQuestion(conv, q);
   if (!reply) return;
   if (input) input.value = "";
-  document.querySelector(".ama-suggest")?.remove();
+  document.querySelector(".suggrow")?.remove();
+
+  const id = `ask${++askSeq}`;
+  reply.id = id;
+  liveConvByScope.set(scopeKey(sc), conv);
+  addJob(askStore, { id, q, scope: sc, ts: Date.now() });
   renderAmaMessages();
-  saveConversation(amaStorage(), amaScope, amaConversation);
+  saveConversation(amaStorage(), sc, conv);
+
+  const rt = { es: null, conv, reply, stallTimer: null };
+  askRuntime.set(id, rt);
+  const rerender = () => { if (onAskScreen(sc)) renderAmaMessages(); };
 
   const settle = () => {
-    if (amaStallTimer) { clearTimeout(amaStallTimer); amaStallTimer = null; }
-    teardownStream();
-    renderAmaMessages();
-    saveConversation(amaStorage(), amaScope, amaConversation);
+    if (rt.stallTimer) { clearTimeout(rt.stallTimer); rt.stallTimer = null; }
+    if (rt.es) { rt.es.close(); rt.es = null; }
+    askRuntime.delete(id);
+    liveConvByScope.delete(scopeKey(sc));
+    saveConversation(amaStorage(), sc, conv);
+    const read = onAskScreen(sc);
+    const status = reply.error ? "error" : "ready";
+    settleJob(askStore, id, { status, answer: reply.text, citations: reply.citations, read });
+    rerender();
+    updateBellBadge();
+    if (status === "ready" && !read) showAskToast(id);
   };
   // Reset on every event; if the server goes silent for too long (a hung or
   // overloaded model), fail visibly instead of spinning "חושב…" forever.
   const armStall = () => {
-    if (amaStallTimer) clearTimeout(amaStallTimer);
-    amaStallTimer = setTimeout(() => {
+    if (rt.stallTimer) clearTimeout(rt.stallTimer);
+    rt.stallTimer = setTimeout(() => {
       if (reply.pending) failAnswer(reply, "אין תגובה מהשרת. נסה שוב.");
       settle();
     }, AMA_STALL_MS);
   };
   armStall();
 
-  activeEventSource = askStream({ q, chat: scope ?? undefined }, {
+  rt.es = askStream({ q, chat: sc ?? undefined }, {
     phase: (d) => {
       armStall();
       setPhase(reply, d.phase);
-      renderAmaMessages();
+      rerender();
     },
     token: (d) => {
       armStall();
       appendToken(reply, d.delta);
-      renderAmaMessages();
+      rerender();
+      saveConversation(amaStorage(), sc, conv);
     },
     citations: (d) => finishAnswer(reply, d.citations),
     done: (d) => {
@@ -1513,12 +1557,12 @@ function renderAmaMessages() {
       return `<div class="msg ai"><div class="ask-state"><span class="sg-spark">${icon("sparkle", { size: 16 })}</span><div><b>${title}</b>${sub ? `<div class="ask-sub">${sub}</div>` : ""}</div><span class="ob-dots"><i></i><i></i><i></i></span></div></div>`;
     }
     if (m.noResults) {
-      return `<div class="msg ai"><div class="empty err"><div class="empty-ic err-ic err-ic--wiggle">${icon("search", { size: 26 })}<span class="err-ring"></span></div><h3>לא מצאתי על זה כלום</h3><p>לא נמצאו הודעות רלוונטיות בשיחות שבחרת. נסו לנסח אחרת או להרחיב את טווח הצ׳אטים.</p></div></div>`;
+      return `<div class="msg ai" data-msg-id="${escHtml(m.id || "")}"><div class="empty err"><div class="empty-ic err-ic err-ic--wiggle">${icon("search", { size: 26 })}<span class="err-ring"></span></div><h3>לא מצאתי על זה כלום</h3><p>לא נמצאו הודעות רלוונטיות בשיחות שבחרת. נסו לנסח אחרת או להרחיב את טווח הצ׳אטים.</p></div></div>`;
     }
     if (m.error) {
-      return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble" style="color:var(--warn-ink)">${escHtml(m.error)}</div></div></div>`;
+      return `<div class="msg ai" data-msg-id="${escHtml(m.id || "")}">${amaAiAvatar()}<div><div class="bubble" style="color:var(--warn-ink)">${escHtml(m.error)}</div></div></div>`;
     }
-    return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble">${escHtml(m.text)}</div>${renderAmaSources(m.citations)}</div></div>`;
+    return `<div class="msg ai" data-msg-id="${escHtml(m.id || "")}">${amaAiAvatar()}<div><div class="bubble">${escHtml(m.text)}</div>${renderAmaSources(m.citations)}</div></div>`;
   }).join("");
   const scroller = document.getElementById("ama-scroll");
   if (scroller) scroller.scrollTop = scroller.scrollHeight;
