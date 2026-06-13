@@ -44,7 +44,7 @@ function makeFakePool(groupName: string | null): pg.Pool {
 }
 
 function makeCacheHitCatchup(): PreparedCatchup {
-  return { kind: "cache-hit", summary: "cached text", generatedAt: new Date() };
+  return { kind: "cache-hit", summary: { overview: "cached text" }, generatedAt: new Date() };
 }
 
 function makeReadyCatchup(): PreparedCatchup {
