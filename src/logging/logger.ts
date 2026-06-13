@@ -34,8 +34,10 @@ export function createLogger(opts: LoggingOptions): Logger {
       level: opts.level,
       options: {
         host: opts.lokiUrl,
-        batching: true,
-        interval: 5,
+        // pino-loki v3 consolidated batching into a single object (was
+        // `batching: true` + top-level `interval: 5`). maxBufferSize defaults to
+        // 10_000, bounding memory and dropping oldest (FIFO) when Loki is down.
+        batching: { interval: 5 },
         silenceErrors: true, // never surface transport errors into the app
         // `service_name` is what Grafana Logs Drilldown lists services by; `app`
         // is kept for the existing dashboard queries ({app="catchup"}).
