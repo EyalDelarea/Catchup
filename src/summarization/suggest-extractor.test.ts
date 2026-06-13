@@ -7,8 +7,17 @@ describe("parseSuggestDrafts", () => {
   it("parses a clean JSON array and tags the kind", () => {
     const raw = '[{"groupId":1,"proposedText":"לקנות חלב","reason":"כי","sourceMessageId":42}]';
     expect(parseSuggestDrafts(raw, "task", valid)).toEqual([
-      { kind: "task", groupId: 1, proposedText: "לקנות חלב", reason: "כי", sourceMessageId: 42 },
+      { kind: "task", groupId: 1, proposedText: "לקנות חלב", reason: "כי", sourceMessageId: null },
     ]);
+  });
+
+  it("never trusts a model-supplied sourceMessageId (no grounding → always null)", () => {
+    // The extractor's input is summary text with no message ids, so any id the
+    // model emits is fabricated. Passing it through would break the
+    // suggestions→messages(id) FK (the 23503 crash) or mis-cite an unrelated
+    // message on a coincidental hit. It must always be dropped to null.
+    const raw = '[{"groupId":1,"proposedText":"x","reason":"r","sourceMessageId":44}]';
+    expect(parseSuggestDrafts(raw, "task", valid)[0]).toMatchObject({ sourceMessageId: null });
   });
 
   it("extracts the array out of surrounding prose", () => {

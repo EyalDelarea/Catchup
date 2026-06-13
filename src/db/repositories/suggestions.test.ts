@@ -1,8 +1,11 @@
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { NormalizedMessage } from "../../importer/types.js";
 import { createTestDatabase } from "../../test/db.js";
 import { upsertScope } from "./chat-scopes.js";
 import { upsertGroup } from "./groups.js";
+import { getMessageIdByExternalId, insertMessages } from "./messages.js";
+import { upsertParticipant } from "./participants.js";
 import {
   decideSuggestion,
   insertSuggestions,
@@ -87,5 +90,55 @@ describe("suggestions repository", () => {
 
     await resetLearning(pool);
     expect((await loadBias(pool)).size).toBe(0);
+  });
+
+  it("resolves source_message_id through messages: keeps a real id, nulls an unknown one", async () => {
+    const g = await upsertGroup(pool, { name: "sug-srcid", source: "import" });
+    const participantId = await upsertParticipant(pool, "מקור");
+    const msg: NormalizedMessage & { participantId: number } = {
+      groupId: g,
+      importId: null,
+      source: "import",
+      senderName: "מקור",
+      participantId,
+      messageType: "text",
+      textContent: "hi",
+      mediaFilename: null,
+      mediaPath: null,
+      mediaStatus: null,
+      sentAt: new Date(),
+      dedupeKey: `sug-${Math.random()}`,
+      externalId: "SUG-MSG-1",
+      fromMe: null,
+    };
+    await insertMessages(pool, [msg]);
+    const realId = (await getMessageIdByExternalId(pool, g, "SUG-MSG-1"))!.id;
+
+    // A fabricated id must NOT throw (the FK violation crash-loops the worker);
+    // it degrades to NULL. A real id is preserved unchanged.
+    await expect(
+      insertSuggestions(pool, [
+        {
+          totalSummaryId: totalId,
+          kind: "task",
+          groupId: g,
+          proposedText: "real",
+          reason: "r",
+          sourceMessageId: realId,
+        },
+        {
+          totalSummaryId: totalId,
+          kind: "task",
+          groupId: g,
+          proposedText: "ghost",
+          reason: "r",
+          sourceMessageId: 2_000_000_000,
+        },
+      ]),
+    ).resolves.toBeUndefined();
+
+    const deck = await listPendingDeck(pool);
+    expect(deck.find((d) => d.proposedText === "real")?.sourceMessageId).toBe(realId);
+    expect(deck.find((d) => d.proposedText === "ghost")?.sourceMessageId).toBeNull();
   });
 });
