@@ -8,6 +8,8 @@ export type MeetingRow = {
   owner: string | null;
   chat: string;
   sourceMessageId: number;
+  /** When the source message was sent — powers the source chip's date. */
+  sourceAt: Date | null;
 };
 
 export type TodoRow = {
@@ -18,6 +20,8 @@ export type TodoRow = {
   done: boolean;
   chat: string;
   sourceMessageId: number;
+  /** When the source message was sent — powers the source chip's date. */
+  sourceAt: Date | null;
 };
 
 /** Upsert meetings, keyed by source message (re-extraction updates, never dupes). */
@@ -27,11 +31,12 @@ export async function upsertMeetings(
 ): Promise<void> {
   for (const m of items) {
     await client.query(
-      `INSERT INTO meetings (title, owner, group_id, source_message_id)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO meetings (title, owner, starts_at, group_id, source_message_id)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (tenant_id, source_message_id)
-       DO UPDATE SET title = EXCLUDED.title, owner = EXCLUDED.owner, updated_at = now()`,
-      [m.title, m.owner, m.groupId, m.sourceMessageId],
+       DO UPDATE SET title = EXCLUDED.title, owner = EXCLUDED.owner,
+                     starts_at = EXCLUDED.starts_at, updated_at = now()`,
+      [m.title, m.owner, m.when, m.groupId, m.sourceMessageId],
     );
   }
 }
@@ -43,11 +48,12 @@ export async function upsertTodos(
 ): Promise<void> {
   for (const t of items) {
     await client.query(
-      `INSERT INTO todos (title, owner, group_id, source_message_id)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO todos (title, owner, due_at, group_id, source_message_id)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (tenant_id, source_message_id)
-       DO UPDATE SET title = EXCLUDED.title, owner = EXCLUDED.owner, updated_at = now()`,
-      [t.title, t.owner, t.groupId, t.sourceMessageId],
+       DO UPDATE SET title = EXCLUDED.title, owner = EXCLUDED.owner,
+                     due_at = EXCLUDED.due_at, updated_at = now()`,
+      [t.title, t.owner, t.when, t.groupId, t.sourceMessageId],
     );
   }
 }
@@ -75,9 +81,13 @@ export async function listMeetings(
     owner: string | null;
     chat: string | null;
     source_message_id: string;
+    source_at: Date | null;
   }>(
-    `SELECT m.id, m.title, m.starts_at, m.owner, g.name AS chat, m.source_message_id
-     FROM meetings m LEFT JOIN groups g ON g.id = m.group_id
+    `SELECT m.id, m.title, m.starts_at, m.owner, g.name AS chat, m.source_message_id,
+            msrc.sent_at AS source_at
+     FROM meetings m
+       LEFT JOIN groups g ON g.id = m.group_id
+       LEFT JOIN messages msrc ON msrc.id = m.source_message_id
      ${where}
      ORDER BY m.starts_at ASC NULLS LAST, m.id ASC`,
     params,
@@ -89,6 +99,7 @@ export async function listMeetings(
     owner: r.owner,
     chat: r.chat ?? "",
     sourceMessageId: Number(r.source_message_id),
+    sourceAt: r.source_at,
   }));
 }
 
@@ -102,9 +113,13 @@ export async function listTodos(client: pg.Pool | pg.PoolClient): Promise<TodoRo
     done: boolean;
     chat: string | null;
     source_message_id: string;
+    source_at: Date | null;
   }>(
-    `SELECT t.id, t.title, t.due_at, t.owner, t.done, g.name AS chat, t.source_message_id
-     FROM todos t LEFT JOIN groups g ON g.id = t.group_id
+    `SELECT t.id, t.title, t.due_at, t.owner, t.done, g.name AS chat, t.source_message_id,
+            msrc.sent_at AS source_at
+     FROM todos t
+       LEFT JOIN groups g ON g.id = t.group_id
+       LEFT JOIN messages msrc ON msrc.id = t.source_message_id
      ORDER BY t.done ASC, t.created_at DESC, t.id DESC`,
   );
   return rows.map((r) => ({
@@ -115,6 +130,7 @@ export async function listTodos(client: pg.Pool | pg.PoolClient): Promise<TodoRo
     done: r.done,
     chat: r.chat ?? "",
     sourceMessageId: Number(r.source_message_id),
+    sourceAt: r.source_at,
   }));
 }
 

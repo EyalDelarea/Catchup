@@ -8,6 +8,7 @@ import {
   initials,
   peopleStatusMeta,
   relativeDay,
+  sourceDateLabel,
   todoProgress,
 } from "./agenda.js";
 
@@ -152,5 +153,16 @@ describe("todoProgress", () => {
   it("is safe on an empty list", () => {
     expect(todoProgress([])).toEqual({ done: 0, total: 0, open: 0, pct: 0 });
     expect(todoProgress(null)).toEqual({ done: 0, total: 0, open: 0, pct: 0 });
+  });
+});
+
+describe("sourceDateLabel", () => {
+  it("formats an ISO date as a short Hebrew day + month (UTC)", () => {
+    expect(sourceDateLabel("2026-06-09T07:30:00.000Z")).toBe("9 ביוני");
+  });
+  it("returns an empty string for null / unparseable input", () => {
+    expect(sourceDateLabel(null)).toBe("");
+    expect(sourceDateLabel(undefined)).toBe("");
+    expect(sourceDateLabel("not-a-date")).toBe("");
   });
 });
