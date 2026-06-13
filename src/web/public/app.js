@@ -2236,13 +2236,22 @@ async function renderToday() {
 /** Command-center side-rail data: today's meetings, open to-dos, follow-up
  *  people. Best-effort against the live endpoints; demo uses small fixtures. */
 async function loadTodaySide() {
-  if (DEMO) return DEMO_SIDE;
-  const [meetings, todos, people] = await Promise.all([
+  if (DEMO) return { ...DEMO_SIDE, discover: [] };
+  const [meetings, todos, people, scopes] = await Promise.all([
     getMeetings().catch(() => []),
     getTodos().catch(() => []),
     getPeople().catch(() => []),
+    getScopes().catch(() => []),
   ]);
-  return { meetings, todos, people };
+  // "שיחות שאולי פיספת": chats with recent activity that aren't included yet
+  // (default-OFF) and weren't removed — the design's discover/miss nudge. Top 3.
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const discover = (Array.isArray(scopes) ? scopes : [])
+    .filter((s) => !s.included && !s.removed && s.messageCount > 0 && s.lastMessageAt && new Date(s.lastMessageAt).getTime() > weekAgo)
+    .sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt))
+    .slice(0, 3)
+    .map((s) => ({ name: s.group, hue: hueFromName(s.group), why: `${s.messageCount} הודעות · פעילה לאחרונה` }));
+  return { meetings, todos, people, discover };
 }
 
 function paintToday() {
@@ -2305,10 +2314,11 @@ function buildTodayHeader(now) {
 /** The desktop command-center side rail: meetings today · open to-dos ·
  *  follow-up people · an Ask shortcut. Each row links to its full screen. */
 function buildCommandSide() {
-  const side = todayState.side || { meetings: [], todos: [], people: [] };
+  const side = todayState.side || { meetings: [], todos: [], people: [], discover: [] };
   const meetings = (side.meetings || []).slice(0, 3);
   const openTodos = (side.todos || []).filter((t) => !t.done).slice(0, 4);
   const followups = (side.people || []).filter((p) => p.warn || p.status?.includes("מתקרר")).slice(0, 3);
+  const discover = (side.discover || []).slice(0, 3);
 
   const meetingRows = meetings.length
     ? meetings.map((m) => `
@@ -2358,6 +2368,27 @@ function buildCommandSide() {
       </div>
       <div class="cc-panel-body">${followRows}</div>
     </div>
+    ${
+      discover.length
+        ? `<div class="cc-panel surface">
+      <div class="cc-panel-h" data-go="sources">
+        <span class="cc-panel-ic">${icon("filter", { size: 16 })}</span>
+        <b>שיחות שאולי פיספת</b><span class="cc-count">${discover.length}</span>
+        <span class="cc-more">${icon("chevL", { size: 15 })}</span>
+      </div>
+      <div class="cc-panel-body">${discover
+        .map(
+          (d) => `
+        <div class="cc-row">
+          ${avatarHtml(formatGroupName(d.name), d.hue, 30)}
+          <div class="grow"><div class="cc-row-t">${escHtml(formatGroupName(d.name))}</div><div class="cc-row-s">${escHtml(d.why)}</div></div>
+          <button class="btn btn-soft btn-sm" data-add-chat="${escHtml(d.name)}" type="button">${icon("plus", { size: 14 })}הוסף</button>
+        </div>`,
+        )
+        .join("")}</div>
+    </div>`
+        : ""
+    }
     <div class="cc-ask surface" data-go="ama">
       <span class="cc-ask-ic">${icon("sparkle", { size: 18 })}</span>
       <div class="grow"><b>שאל את הצ׳אטים שלך</b><small>״מה הכי דחוף היום?״</small></div>
@@ -2621,6 +2652,22 @@ function wireToday() {
   // Command-center side rail: every panel/row links to its full screen.
   for (const el of paneMain.querySelectorAll("[data-go]")) {
     el.addEventListener("click", () => navigate(el.dataset.go));
+  }
+
+  // "שיחות שאולי פיספת" → one-tap add to scope, then drop the row + flash.
+  for (const btn of paneMain.querySelectorAll("[data-add-chat]")) {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const group = btn.dataset.addChat;
+      btn.disabled = true;
+      await putScopes([{ group, included: true }]).catch(() => {});
+      if (todayState.side?.discover) {
+        todayState.side.discover = todayState.side.discover.filter((d) => d.name !== group);
+      }
+      cachedGroups = []; // force the Updates list to re-fetch with the new chat
+      paintToday();
+      showTodayFlash("נוסף לצ׳אטים המוזנים ✓");
+    });
   }
 
   // Desktop digest board: act buttons (commit/snooze/discard), per-card draft
