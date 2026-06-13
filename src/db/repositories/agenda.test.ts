@@ -45,18 +45,27 @@ describe("agenda + people repositories", () => {
     await pool?.end();
   }, 30_000);
 
-  it("upserts + lists meetings and todos, joined to the chat", async () => {
+  it("upserts + lists meetings and todos, joined to the chat, with their dates", async () => {
+    const start = new Date("2026-06-11T14:00:00.000Z");
+    const due = new Date("2026-06-12T00:00:00.000Z");
     await upsertMeetings(pool, [
-      { title: "פגישה 14:00", owner: "דנה", groupId, sourceMessageId: msgId },
+      { title: "פגישה 14:00", owner: "דנה", when: start, groupId, sourceMessageId: msgId },
     ]);
     await upsertTodos(pool, [
-      { title: "לשלוח דוח", owner: "דנה", groupId, sourceMessageId: msgId },
+      { title: "לשלוח דוח", owner: "דנה", when: due, groupId, sourceMessageId: msgId },
     ]);
 
     const meetings = await listMeetings(pool);
-    expect(meetings.find((m) => m.title === "פגישה 14:00")?.chat).toBe("agenda-grp");
+    const meeting = meetings.find((m) => m.title === "פגישה 14:00");
+    expect(meeting?.chat).toBe("agenda-grp");
+    expect(meeting?.startsAt?.toISOString()).toBe(start.toISOString());
     const todos = await listTodos(pool);
-    expect(todos.find((t) => t.title === "לשלוח דוח")).toMatchObject({ done: false, owner: "דנה" });
+    const todo = todos.find((t) => t.title === "לשלוח דוח");
+    expect(todo).toMatchObject({ done: false, owner: "דנה" });
+    expect(todo?.dueAt?.toISOString()).toBe(due.toISOString());
+    // The source chip needs the source MESSAGE's date (distinct from the due date).
+    expect(todo?.sourceAt).toBeInstanceOf(Date);
+    expect(meeting?.sourceAt).toBeInstanceOf(Date);
   });
 
   it("preserves done across re-extraction (a checked box is never reset)", async () => {
@@ -64,7 +73,13 @@ describe("agenda + people repositories", () => {
     expect(await setTodoDone(pool, todo.id, true)).toBe(true);
     // re-extract the same source → upsert must NOT reset done
     await upsertTodos(pool, [
-      { title: "לשלוח דוח (עודכן)", owner: "דנה", groupId, sourceMessageId: msgId },
+      {
+        title: "לשלוח דוח (עודכן)",
+        owner: "דנה",
+        when: null,
+        groupId,
+        sourceMessageId: msgId,
+      },
     ]);
     const after = (await listTodos(pool)).find((t) => t.sourceMessageId === msgId)!;
     expect(after.done).toBe(true);

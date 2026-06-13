@@ -44,7 +44,11 @@ export async function handleMeetings(
       to: parseDate("to"),
     });
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(meetings.map((m) => ({ ...m, startsAt: iso(m.startsAt) }))));
+    res.end(
+      JSON.stringify(
+        meetings.map((m) => ({ ...m, startsAt: iso(m.startsAt), sourceAt: iso(m.sourceAt) })),
+      ),
+    );
   } catch {
     res.writeHead(500, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "Failed to load meetings." }));
@@ -89,7 +93,11 @@ export async function handleTodos(
     try {
       const todos = await listTodos(deps.pool);
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(todos.map((t) => ({ ...t, dueAt: iso(t.dueAt) }))));
+      res.end(
+        JSON.stringify(
+          todos.map((t) => ({ ...t, dueAt: iso(t.dueAt), sourceAt: iso(t.sourceAt) })),
+        ),
+      );
     } catch {
       res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "Failed to load todos." }));

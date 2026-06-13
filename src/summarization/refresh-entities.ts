@@ -4,6 +4,9 @@ import { refreshPeople } from "../db/repositories/people.js";
 import { extractEntities } from "./extract-entities.js";
 import type { SummaryOutput } from "./summarizer.js";
 
+/** Minimal structural logger (pino-compatible) — only `warn` is used here. */
+type Warner = { warn: (obj: Record<string, unknown>, msg?: string) => void };
+
 /** Distinct participant display names that have posted in a group (for owner matching). */
 async function participantNamesForGroup(
   client: pg.Pool | pg.PoolClient,
@@ -35,4 +38,24 @@ export async function refreshEntitiesForGroup(
   await upsertMeetings(client, meetings);
   await upsertTodos(client, todos);
   await refreshPeople(client);
+}
+
+/**
+ * Best-effort, LOGGED wrapper around {@link refreshEntitiesForGroup} — the single
+ * extraction policy shared by the worker digest path and the streaming serve path.
+ * Never throws: an extraction hiccup must not fail (or roll back) a committed
+ * summary, but — unlike a bare `.catch(() => {})` — it leaves a `warn` breadcrumb
+ * so an empty To-dos tab is diagnosable instead of silent.
+ */
+export async function materializeEntities(
+  client: pg.Pool | pg.PoolClient,
+  groupId: number,
+  output: SummaryOutput,
+  logger?: Warner,
+): Promise<void> {
+  try {
+    await refreshEntitiesForGroup(client, groupId, output);
+  } catch (err) {
+    logger?.warn({ evt: "extract", op: "materialize", groupId, err }, "entity extraction failed");
+  }
 }
