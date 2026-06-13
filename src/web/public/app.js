@@ -1460,7 +1460,18 @@ function submitAmaQuestion(scope) {
       renderAmaMessages();
     },
     citations: (d) => finishAnswer(reply, d.citations),
-    done: settle,
+    done: (d) => {
+      // Show the designed "no results" surface when the answer cited nothing AND
+      // either retrieval was empty or the model returned its no-relevant-info
+      // marker — an answer that actually found something always carries citations.
+      const noCites = !(reply.citations && reply.citations.length);
+      const noInfo = /אין הודעות רלוונט|אין מידע/.test(reply.text || "");
+      if (noCites && (d?.candidateCount === 0 || noInfo)) {
+        reply.noResults = true;
+        reply.pending = false;
+      }
+      settle();
+    },
     error: (d) => {
       // A dropped connection after the answer completed is not a failure.
       if (reply.pending) failAnswer(reply, d.message);
@@ -1489,6 +1500,9 @@ function renderAmaMessages() {
             ? ["מחפש בכל ההיסטוריה…", "קורא הודעות רלוונטיות"]
             : ["חושב…", ""];
       return `<div class="msg ai"><div class="ask-state"><span class="sg-spark">${icon("sparkle", { size: 16 })}</span><div><b>${title}</b>${sub ? `<div class="ask-sub">${sub}</div>` : ""}</div><span class="ob-dots"><i></i><i></i><i></i></span></div></div>`;
+    }
+    if (m.noResults) {
+      return `<div class="msg ai"><div class="empty err"><div class="empty-ic err-ic err-ic--wiggle">${icon("search", { size: 26 })}<span class="err-ring"></span></div><h3>לא מצאתי על זה כלום</h3><p>לא נמצאו הודעות רלוונטיות בשיחות שבחרת. נסו לנסח אחרת או להרחיב את טווח הצ׳אטים.</p></div></div>`;
     }
     if (m.error) {
       return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble" style="color:var(--warn-ink)">${escHtml(m.error)}</div></div></div>`;
@@ -1572,6 +1586,15 @@ async function renderThread(chat, aroundId) {
 
 const SEG_LABEL = { all: "הכול", included: "מוזנים", excluded: "מוחרגים" };
 const sourcesState = { scopes: [], categories: [], query: "", segment: "all" };
+let sourcesMenuWired = false;
+
+/** Close every open per-row ⋯ overflow menu in Sources. */
+function closeAllSourceMenus() {
+  for (const m of document.querySelectorAll(".src-row .cl-menu")) m.hidden = true;
+  for (const b of document.querySelectorAll('.src-row [data-act="menu"]')) {
+    b.setAttribute("aria-expanded", "false");
+  }
+}
 
 /** The Sources control center (§7): whitelist/blacklist + categorize chats. */
 async function renderSources() {
@@ -1655,12 +1678,11 @@ function buildSourceRow(s) {
   const catName = sourcesState.categories.find((c) => c.id === s.categoryId)?.name;
   const status = !s.included ? "מוחרג — לא ינוטר" : s.muted ? "מושתק · עדכונים בלבד" : "מוזן ל-CatchApp";
   const statusLine = catName ? `${escHtml(status)} · ${escHtml(catName)}` : escHtml(status);
-  const cats = sourcesState.categories
-    .map(
-      (c) =>
-        `<option value="${c.id}"${s.categoryId === c.id ? " selected" : ""}>${escHtml(c.name)}</option>`,
-    )
+  const moveItems = sourcesState.categories
+    .filter((c) => c.id !== s.categoryId)
+    .map((c) => `<button data-act="cat" data-cat="${c.id}" type="button">${escHtml(c.name)}${icon("chevL", { size: 13 })}</button>`)
     .join("");
+  const toNone = s.categoryId != null ? `<button data-act="cat" data-cat="" type="button">ללא קטגוריה${icon("chevL", { size: 13 })}</button>` : "";
   return `
     <div class="src-row${s.included ? "" : " src-row--off"}" data-group="${escHtml(s.group)}">
       ${avatarHtml(name, hueFromName(s.group), 38)}
@@ -1668,10 +1690,6 @@ function buildSourceRow(s) {
         <div class="src-row__name">${escHtml(name)}</div>
         <div class="src-row__status">${statusLine}</div>
       </div>
-      <select class="src-cat" data-act="cat" aria-label="קטגוריה">
-        <option value=""${s.categoryId == null ? " selected" : ""}>ללא</option>
-        ${cats}
-      </select>
       ${
         s.included
           ? `<button class="src-mute${s.muted ? " is-on" : ""}" data-act="mute" type="button"
@@ -1680,7 +1698,16 @@ function buildSourceRow(s) {
         title="${s.muted ? "ההצעות מושתקות — הצ׳אט עדיין מופיע בעדכונים" : "השתק הצעות (הצ׳אט עדיין מופיע בעדכונים)"}">${icon("moon", { size: 15 })}</button>`
           : ""
       }
-      <button class="src-remove" data-act="remove" type="button" aria-label="הסר">✕</button>
+      <div class="src-actions-wrap">
+        <button class="cl-ico" data-act="menu" type="button" aria-haspopup="true" aria-expanded="false" aria-label="פעולות">${icon("more", { size: 18 })}</button>
+        <div class="cl-menu surface" hidden>
+          <button data-act="toggle" type="button">${s.included ? "הסר מהסיכום" : "כלול בסיכום"}${icon(s.included ? "x" : "check", { size: 14 })}</button>
+          <div class="cl-menu-label">העבר לקבוצה</div>
+          ${moveItems}${toNone}
+          <div class="divide"></div>
+          <button class="danger" data-act="remove" type="button">הסר מהרשימה${icon("trash", { size: 14 })}</button>
+        </div>
+      </div>
       <button class="src-switch${s.included ? " is-on" : ""}" data-act="toggle" type="button"
         role="switch" aria-checked="${s.included}" aria-label="${s.included ? "מוזן" : "מוחרג"}">
         <span class="src-switch__knob"></span>
@@ -1763,10 +1790,13 @@ function wireSources() {
   }
   for (const row of document.querySelectorAll(".src-row[data-group]")) {
     const group = row.dataset.group;
-    row.querySelector('[data-act="toggle"]')?.addEventListener("click", () => {
-      const s = sourcesState.scopes.find((x) => x.group === group);
-      applyScopeChange([{ group, included: !s.included }]);
-    });
+    // The include switch AND the menu's "כלול/הסר מהסיכום" item both toggle inclusion.
+    for (const t of row.querySelectorAll('[data-act="toggle"]')) {
+      t.addEventListener("click", () => {
+        const s = sourcesState.scopes.find((x) => x.group === group);
+        applyScopeChange([{ group, included: !s.included }]);
+      });
+    }
     row.querySelector('[data-act="mute"]')?.addEventListener("click", () => {
       const s = sourcesState.scopes.find((x) => x.group === group);
       applyScopeChange([{ group, muted: !s.muted }]);
@@ -1777,10 +1807,30 @@ function wireSources() {
     row.querySelector('[data-act="restore"]')?.addEventListener("click", () =>
       applyScopeChange([{ group, removed: false }]),
     );
-    row.querySelector('[data-act="cat"]')?.addEventListener("change", (e) => {
-      const val = e.target.value;
-      applyScopeChange([{ group, categoryId: val === "" ? null : Number(val) }]);
-    });
+    for (const cb of row.querySelectorAll('[data-act="cat"]')) {
+      cb.addEventListener("click", () => {
+        const val = cb.dataset.cat;
+        applyScopeChange([{ group, categoryId: val === "" ? null : Number(val) }]);
+      });
+    }
+    // ⋯ overflow menu (move-to-group + remove): open one at a time.
+    const menuBtn = row.querySelector('[data-act="menu"]');
+    const menu = row.querySelector(".cl-menu");
+    if (menuBtn && menu) {
+      menuBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const willOpen = menu.hidden;
+        closeAllSourceMenus();
+        menu.hidden = !willOpen;
+        menuBtn.setAttribute("aria-expanded", String(willOpen));
+      });
+      menu.addEventListener("click", (e) => e.stopPropagation());
+    }
+  }
+  // Close any open ⋯ menu on an outside click (wired once).
+  if (!sourcesMenuWired) {
+    sourcesMenuWired = true;
+    document.addEventListener("click", closeAllSourceMenus);
   }
 }
 
@@ -2236,13 +2286,22 @@ async function renderToday() {
 /** Command-center side-rail data: today's meetings, open to-dos, follow-up
  *  people. Best-effort against the live endpoints; demo uses small fixtures. */
 async function loadTodaySide() {
-  if (DEMO) return DEMO_SIDE;
-  const [meetings, todos, people] = await Promise.all([
+  if (DEMO) return { ...DEMO_SIDE, discover: [] };
+  const [meetings, todos, people, scopes] = await Promise.all([
     getMeetings().catch(() => []),
     getTodos().catch(() => []),
     getPeople().catch(() => []),
+    getScopes().catch(() => []),
   ]);
-  return { meetings, todos, people };
+  // "שיחות שאולי פיספת": chats with recent activity that aren't included yet
+  // (default-OFF) and weren't removed — the design's discover/miss nudge. Top 3.
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const discover = (Array.isArray(scopes) ? scopes : [])
+    .filter((s) => !s.included && !s.removed && s.messageCount > 0 && s.lastMessageAt && new Date(s.lastMessageAt).getTime() > weekAgo)
+    .sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt))
+    .slice(0, 3)
+    .map((s) => ({ name: s.group, hue: hueFromName(s.group), why: `${s.messageCount} הודעות · פעילה לאחרונה` }));
+  return { meetings, todos, people, discover };
 }
 
 function paintToday() {
@@ -2305,10 +2364,11 @@ function buildTodayHeader(now) {
 /** The desktop command-center side rail: meetings today · open to-dos ·
  *  follow-up people · an Ask shortcut. Each row links to its full screen. */
 function buildCommandSide() {
-  const side = todayState.side || { meetings: [], todos: [], people: [] };
+  const side = todayState.side || { meetings: [], todos: [], people: [], discover: [] };
   const meetings = (side.meetings || []).slice(0, 3);
   const openTodos = (side.todos || []).filter((t) => !t.done).slice(0, 4);
   const followups = (side.people || []).filter((p) => p.warn || p.status?.includes("מתקרר")).slice(0, 3);
+  const discover = (side.discover || []).slice(0, 3);
 
   const meetingRows = meetings.length
     ? meetings.map((m) => `
@@ -2358,6 +2418,27 @@ function buildCommandSide() {
       </div>
       <div class="cc-panel-body">${followRows}</div>
     </div>
+    ${
+      discover.length
+        ? `<div class="cc-panel surface">
+      <div class="cc-panel-h" data-go="sources">
+        <span class="cc-panel-ic">${icon("filter", { size: 16 })}</span>
+        <b>שיחות שאולי פיספת</b><span class="cc-count">${discover.length}</span>
+        <span class="cc-more">${icon("chevL", { size: 15 })}</span>
+      </div>
+      <div class="cc-panel-body">${discover
+        .map(
+          (d) => `
+        <div class="cc-row">
+          ${avatarHtml(formatGroupName(d.name), d.hue, 30)}
+          <div class="grow"><div class="cc-row-t">${escHtml(formatGroupName(d.name))}</div><div class="cc-row-s">${escHtml(d.why)}</div></div>
+          <button class="btn btn-soft btn-sm" data-add-chat="${escHtml(d.name)}" type="button">${icon("plus", { size: 14 })}הוסף</button>
+        </div>`,
+        )
+        .join("")}</div>
+    </div>`
+        : ""
+    }
     <div class="cc-ask surface" data-go="ama">
       <span class="cc-ask-ic">${icon("sparkle", { size: 18 })}</span>
       <div class="grow"><b>שאל את הצ׳אטים שלך</b><small>״מה הכי דחוף היום?״</small></div>
@@ -2621,6 +2702,22 @@ function wireToday() {
   // Command-center side rail: every panel/row links to its full screen.
   for (const el of paneMain.querySelectorAll("[data-go]")) {
     el.addEventListener("click", () => navigate(el.dataset.go));
+  }
+
+  // "שיחות שאולי פיספת" → one-tap add to scope, then drop the row + flash.
+  for (const btn of paneMain.querySelectorAll("[data-add-chat]")) {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const group = btn.dataset.addChat;
+      btn.disabled = true;
+      await putScopes([{ group, included: true }]).catch(() => {});
+      if (todayState.side?.discover) {
+        todayState.side.discover = todayState.side.discover.filter((d) => d.name !== group);
+      }
+      cachedGroups = []; // force the Updates list to re-fetch with the new chat
+      paintToday();
+      showTodayFlash("נוסף לצ׳אטים המוזנים ✓");
+    });
   }
 
   // Desktop digest board: act buttons (commit/snooze/discard), per-card draft
@@ -3289,13 +3386,19 @@ function resolveInitialRoute() {
 // login/register pane. /verify + /reset are the emailed-link landing pages.
 
 async function authGate() {
-  const token = new URLSearchParams(location.search).get("token");
+  const params = new URLSearchParams(location.search);
+  const token = params.get("token");
   if (location.pathname === "/verify" && token) {
     await renderVerifyResult(token);
     return false;
   }
   if (location.pathname === "/reset" && token) {
     renderResetForm(token);
+    return false;
+  }
+  // Review the guided onboarding any time (even when already linked).
+  if (params.get("onboarding") === "preview") {
+    renderOnboardingFlow({ preview: true });
     return false;
   }
   const me = await fetch("/api/auth/me").catch(() => null);
@@ -3314,121 +3417,472 @@ async function authGate() {
   }
   // No session. Distinguish single-user (APIs open) from multi-tenant (gated).
   const probe = await fetch("/api/status").catch(() => null);
-  if (probe && probe.status !== 401) return true;
+  if (probe && probe.status !== 401) {
+    // Single-user: run the guided first-run flow once — only when a WhatsApp
+    // link is actually pending (the onboarding registry is mounted AND not yet
+    // connected) and the user hasn't already completed/skipped it.
+    let onboarded = false;
+    try {
+      onboarded = localStorage.getItem("catchapp-onboarded") === "1";
+    } catch {
+      /* ignore */
+    }
+    if (!onboarded) {
+      const ob = await fetch("/api/onboarding/status").catch(() => null);
+      if (ob?.ok) {
+        const { status } = await ob.json();
+        if (status && status !== "connected") {
+          renderOnboardingFlow({ initialStatus: status });
+          return false;
+        }
+      }
+    }
+    return true;
+  }
   renderAuthPane("login");
   return false;
 }
 
-/**
- * T4 onboarding pane: link a WhatsApp account by scanning a QR. Opens the
- * /api/onboarding/qr SSE stream (server renders the QR to a data URL); when the
- * session reports "connected" we reload into the app.
+/* ── §1 Onboarding — guided 5-step first-run flow ────────────
+ *
+ * welcome → connect (QR) → scanning → choose chats → digest time → ready.
+ * Seeds the suggestion engine's scopes so the very first digest is already
+ * focused. Reuses the real /api/onboarding/qr + /progress SSE streams and
+ * getGroups/putScopes/putPreferences. Runs on first-run (single-user OR the
+ * multi-tenant gate) and is reachable any time via ?onboarding=preview.
  */
+const OB_STEPS = ["ברוכים הבאים", "חיבור", "סריקה", "צ׳אטים", "סיום"];
+const OB_WIDTHS = { 0: 560, 1: 660, 2: 520, 3: 680, 4: 540 };
+const OB_TIMES = ["07:00", "08:00", "09:00", "20:00"];
+const obState = {
+  step: 0,
+  preview: false,
+  initialStatus: null,
+  chats: [],
+  loadedChats: false,
+  digestTime: "08:00",
+  morningNotif: true,
+  timers: [],
+};
+
+/** Entry point. The multi-tenant gate passes the link status; ?onboarding=preview
+ *  passes {preview:true} so the flow can be reviewed even when already linked. */
 function renderOnboarding(initialStatus) {
-  authShell(`
-    <p class="auth-card__sub">כדי להתחיל, חברו את חשבון הוואטסאפ שלכם.</p>
-    <div id="qr-box" class="qr-box" aria-live="polite">
-      <div class="qr-spinner" aria-hidden="true"></div>
-      <p id="qr-hint" class="qr-hint">מכינים קוד QR…</p>
-    </div>
-    <ol class="qr-steps">
-      <li>פתחו וואטסאפ בטלפון → הגדרות → מכשירים מקושרים</li>
-      <li>הקישו "קישור מכשיר" וסרקו את הקוד שלמעלה</li>
-    </ol>
-    <p id="qr-status" class="qr-status"></p>
-    <button type="button" id="auth-logout" class="auth-link">התנתקות</button>
-  `);
-  const logout = document.getElementById("auth-logout");
-  if (logout)
-    logout.onclick = async () => {
-      await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
-      location.href = "/";
-    };
+  renderOnboardingFlow({ initialStatus });
+}
 
-  if (initialStatus === "logged-out" || initialStatus === "failed") {
-    setOnboardingStatus(
-      initialStatus === "logged-out"
-        ? "החיבור נותק. סרקו שוב כדי לקשר מחדש."
-        : "החיבור נכשל. מנסים שוב…",
-    );
+function renderOnboardingFlow({ initialStatus = null, preview = false } = {}) {
+  obState.step = 0;
+  obState.preview = preview;
+  obState.initialStatus = initialStatus;
+  obState.chats = [];
+  obState.loadedChats = false;
+  obState.digestTime = "08:00";
+  obState.morningNotif = true;
+  obTeardown();
+  obPaint();
+}
+
+/** Stop the active SSE + any scan timers (called on every step change). */
+function obTeardown() {
+  if (activeEventSource) {
+    activeEventSource.close();
+    activeEventSource = null;
   }
+  for (const t of obState.timers) {
+    clearInterval(t);
+    clearTimeout(t);
+  }
+  obState.timers = [];
+}
 
-  const es = new EventSource("/api/onboarding/qr");
-  activeEventSource = es;
-  es.addEventListener("qr", (e) => {
-    const { dataUrl } = JSON.parse(e.data);
-    const box = document.getElementById("qr-box");
-    if (box && dataUrl) {
-      box.innerHTML = `<img class="qr-img" src="${dataUrl}" alt="קוד QR לקישור וואטסאפ" width="264" height="264" />`;
+function obGo(step) {
+  obTeardown();
+  obState.step = step;
+  obPaint();
+}
+
+function obProgressHtml(step) {
+  return `<div class="ob-prog">${OB_STEPS.map((l, k) => {
+    const cls = k < step ? " done" : k === step ? " on" : "";
+    const dot = k < step ? icon("check", { size: 13 }) : String(k + 1);
+    const bar = k < OB_STEPS.length - 1 ? '<span class="ob-prog-bar"></span>' : "";
+    return `<div class="ob-prog-step${cls}"><span class="ob-prog-dot">${dot}</span><span class="ob-prog-lbl">${escHtml(l)}</span></div>${bar}`;
+  }).join("")}</div>`;
+}
+
+function obPaint() {
+  const step = obState.step;
+  const back =
+    step > 0 && step < 4
+      ? `<button class="ob-back" id="ob-back" type="button">${icon("chevR", { size: 16 })}חזרה</button>`
+      : "";
+  const card =
+    step === 0
+      ? obWelcomeHtml()
+      : step === 1
+        ? obConnectHtml()
+        : step === 2
+          ? obScanHtml()
+          : step === 3
+            ? obChatsHtml()
+            : obReadyHtml();
+  document.getElementById("layout").innerHTML = `
+    <div class="ob ob-flow ob-takeover">
+      <div style="width:min(${OB_WIDTHS[step]}px,100%)">
+        ${obProgressHtml(step >= 4 ? 4 : step)}
+        ${back}
+        ${card}
+      </div>
+    </div>`;
+  document.getElementById("ob-back")?.addEventListener("click", () => obGo(step - 1));
+  obWire(step);
+}
+
+function obWelcomeHtml() {
+  return `
+    <div class="ob-card surface shadow-sm ob-center">
+      <div style="display:grid;place-items:center;margin-bottom:22px">${brandGlyph(84, { d3: true })}</div>
+      <h2 class="ob-h">CatchApp</h2>
+      <p class="ob-p">סיכום יומי, מעקב אנשים, פגישות ומשימות — הכול מתוך הצ׳אטים שלך.<b> והכול נשאר אצלך בלבד.</b></p>
+      <div class="ob-bullets">
+        <div><span class="ob-bi">${icon("sparkle", { size: 16 })}</span>סיכום יומי שמתמצת את היום בדקה</div>
+        <div><span class="ob-bi">${icon("filter", { size: 16 })}</span>אתם בוחרים אילו צ׳אטים נכנסים</div>
+        <div><span class="ob-bi">${icon("lock", { size: 16 })}</span>הכול מעובד ונשמר על המכשיר</div>
+      </div>
+      <button class="btn btn-primary btn-lg btn-block" id="ob-welcome-cta" type="button">${icon("phone")}התחברות עם וואטסאפ</button>
+      <div class="trust-line">${icon("lock")}שום דבר לא עולה לענן בלי אישורך</div>
+    </div>`;
+}
+
+/** A deterministic QR-ish placeholder grid (13×13) shown until the real
+ *  server-rendered QR data-URL arrives over SSE. */
+function obQrCellsHtml() {
+  let cells = "";
+  for (let i = 0; i < 169; i++) {
+    const on = (Math.imul(i + 1, 2654435761) >>> 27) & 1;
+    cells += `<i class="${on ? "" : "off"}"></i>`;
+  }
+  return cells;
+}
+
+function obConnectHtml() {
+  return `
+    <div class="ob-card surface shadow-sm" style="text-align:start;padding:34px">
+      <div class="ob-qr-grid">
+        <div>
+          <h2 class="ob-h" style="font-size:23px;text-align:start">חברו את הוואטסאפ שלכם</h2>
+          <p class="ob-p" style="font-size:14.5px;text-align:start;margin:0 0 18px">סריקה חד-פעמית. החיבור נשאר על המכשיר הזה.</p>
+          <ol class="steps">
+            <li><span class="sn">1</span><div>פתחו וואטסאפ בטלפון</div></li>
+            <li><span class="sn">2</span><div>היכנסו ל<b>הגדרות ← מכשירים מקושרים</b></div></li>
+            <li><span class="sn">3</span><div>הקישו <b>קישור מכשיר</b> וכוונו את המצלמה לקוד</div></li>
+          </ol>
+          <div class="trust-line" style="margin-top:20px">${icon("lock")}חיבור מוצפן מקצה לקצה · אנחנו לא רואים את ההודעות</div>
+        </div>
+        <div style="text-align:center">
+          <div class="qr" id="ob-qr">${obQrCellsHtml()}</div>
+          <p class="ob-p" id="ob-qr-hint" style="font-size:12px;margin:10px 0 0">${obState.preview ? "תצוגה מקדימה — קוד לדוגמה" : "מכינים קוד…"}</p>
+        </div>
+      </div>
+      <div class="divide" style="margin:24px 0 18px"></div>
+      <button class="btn btn-primary btn-block" id="ob-connect-cta" type="button">${icon("check")}סרקתי — המשך</button>
+    </div>`;
+}
+
+function obScanItems() {
+  return [
+    { t: "מתחבר לוואטסאפ", icon: "phone" },
+    { t: "קורא את 3 הימים האחרונים", icon: "message" },
+    { t: "מזהה אנשים, פגישות ומשימות", icon: "users" },
+    { t: "מחלץ משימות ופגישות", icon: "checks" },
+    { t: "בונה את הסיכום הראשון", icon: "sun" },
+  ];
+}
+
+function obScanHtml() {
+  const floats = [
+    ["12%", "0s", "2.6s", 150, 26],
+    ["26%", ".5s", "3.1s", 20, 20],
+    ["44%", "1.1s", "2.4s", 230, 30],
+    ["62%", ".3s", "3.4s", 60, 22],
+    ["78%", "1.4s", "2.8s", 330, 26],
+    ["88%", ".8s", "3.2s", 200, 18],
+  ]
+    .map(
+      ([l, d, dur, hue, s]) =>
+        `<span class="ob-float" style="inset-inline-start:${l};animation-delay:${d};animation-duration:${dur};--fh:${hue};width:${s}px;height:${s}px">${icon("message", { size: Math.round(s * 0.5) })}</span>`,
+    )
+    .join("");
+  const list = obScanItems()
+    .map(
+      (it, k) =>
+        `<div class="ob-scan-item" data-k="${k}"><span class="ob-scan-ic">${icon(it.icon, { size: 15 })}</span><span>${escHtml(it.t)}</span></div>`,
+    )
+    .join("");
+  return `
+    <div class="ob-card surface shadow-sm ob-center ob-scan">
+      <div class="ob-scan-stage">
+        <div class="ob-floats">${floats}</div>
+        <div class="ob-orbit"><i></i><i></i><i></i></div>
+        <div class="ob-scan-ring" id="ob-ring" style="--p:0">
+          <div class="ob-scan-inner">${brandGlyph(46)}<span class="ob-scan-pct mono" id="ob-pct" dir="ltr">0%</span></div>
+        </div>
+        <span class="ob-spark s1">${icon("sparkle", { size: 16 })}</span>
+        <span class="ob-spark s2">${icon("sparkle", { size: 12 })}</span>
+        <span class="ob-spark s3">${icon("sparkle", { size: 14 })}</span>
+      </div>
+      <h2 class="ob-h" style="font-size:22px">מכינים בשבילך הכול…</h2>
+      <p class="ob-quip" id="ob-quip">ממיין הודעות חשובות מרעש…</p>
+      <div class="ob-scan-list">${list}</div>
+    </div>`;
+}
+
+function obChatsHtml() {
+  const on = obState.chats.filter((c) => c.included).length;
+  const body = !obState.loadedChats
+    ? `<p class="ob-p" style="text-align:center">טוען את הצ׳אטים שלך…</p>`
+    : obState.chats.length === 0
+      ? `<p class="ob-p" style="text-align:center">לא נמצאו צ׳אטים עדיין — אפשר להמשיך ולבחור אחר כך.</p>`
+      : `<div class="ob-cat"><div class="ob-cat-head"><b>הצ׳אטים הפעילים שלך</b><button class="src-bulk" id="ob-bulk" type="button">${on === obState.chats.length ? "כבה הכול" : "הפעל הכול"}</button></div>
+          <div class="ob-chat-grid">${obState.chats
+            .map(
+              (c, i) =>
+                `<button class="ob-chat-pill${c.included ? " on" : ""}" data-i="${i}" type="button">${avatarHtml(formatGroupName(c.name), c.hue, 30)}<span class="ob-chat-name">${escHtml(formatGroupName(c.name))}</span><span class="ob-chat-check">${c.included ? icon("check", { size: 14 }) : icon("plus", { size: 14 })}</span></button>`,
+            )
+            .join("")}</div></div>`;
+  return `
+    <div class="ob-card surface shadow-sm ob-chats" style="text-align:start">
+      <div class="ob-chats-head">
+        <div>
+          <h2 class="ob-h" style="font-size:22px;text-align:start;margin:0 0 4px">אילו צ׳אטים שווה לעקוב אחריהם?</h2>
+          <p class="ob-p" style="font-size:14px;text-align:start;margin:0">בחרו את הצ׳אטים שיוזנו ל-CatchApp. תמיד אפשר לשנות אחר כך.</p>
+        </div>
+        <span class="badge accent ob-count" id="ob-count">${on} נבחרו</span>
+      </div>
+      <div class="ob-chip-hint">${icon("sparkle", { size: 13 })}רק המסומנים יוזנו לסיכום, לעדכונים ולהצעות</div>
+      <div class="ob-chats-scroll">${body}</div>
+      <div class="ob-foot">
+        <button class="btn btn-primary btn-block" id="ob-chats-cta" type="button"${on === 0 ? " disabled" : ""}>המשך עם ${on} צ׳אטים</button>
+        <button class="ob-skip" id="ob-chats-skip" type="button">אבחר אחר כך</button>
+      </div>
+    </div>`;
+}
+
+function obReadyHtml() {
+  const times = OB_TIMES.map(
+    (t) =>
+      `<button class="chip ob-time${t === obState.digestTime ? " on" : ""}" data-t="${t}" type="button"><span class="mono" dir="ltr">${t}</span></button>`,
+  ).join("");
+  return `
+    <div class="ob-card surface shadow-sm ob-center">
+      <div class="done-badge" style="width:60px;height:60px;margin-bottom:16px">${icon("check", { size: 30 })}</div>
+      <h2 class="ob-h">הכול מוכן ✦</h2>
+      <p class="ob-p">הסיכום הראשון שלך מחכה. מתי תרצו לקבל אותו כל בוקר?</p>
+      <div class="ob-times">${times}</div>
+      <button class="ob-notif" id="ob-notif" type="button" aria-pressed="${obState.morningNotif}">
+        <span><b>התראת בוקר עדינה</b><small>נזכיר לכם כשהסיכום מוכן</small></span>
+        <span class="switch${obState.morningNotif ? " on" : ""}"></span>
+      </button>
+      <button class="btn btn-primary btn-lg btn-block" id="ob-finish" type="button">${icon("sun")}כניסה לסיכום</button>
+      <div class="trust-line">${icon("lock")}הנתונים נשארים על המכשיר · בשליטתכם המלאה</div>
+    </div>`;
+}
+
+/** Per-step event wiring. */
+function obWire(step) {
+  if (step === 0) {
+    document.getElementById("ob-welcome-cta")?.addEventListener("click", () => obGo(1));
+    return;
+  }
+  if (step === 1) {
+    document.getElementById("ob-connect-cta")?.addEventListener("click", () => obGo(2));
+    if (obState.preview) return; // placeholder QR only — no live link in preview
+    const es = new EventSource("/api/onboarding/qr");
+    activeEventSource = es;
+    es.addEventListener("qr", (e) => {
+      const { dataUrl } = JSON.parse(e.data);
+      const box = document.getElementById("ob-qr");
+      const hint = document.getElementById("ob-qr-hint");
+      if (box && dataUrl) box.outerHTML = `<img class="qr-img" id="ob-qr" src="${dataUrl}" alt="קוד QR לקישור וואטסאפ" width="208" height="208" />`;
+      if (hint) hint.textContent = "סרקו עם הטלפון";
+    });
+    es.addEventListener("connected", () => obGo(2));
+    es.onerror = () => {}; // graceful: the manual "סרקתי — המשך" still advances
+    return;
+  }
+  if (step === 2) {
+    obRunScan();
+    return;
+  }
+  if (step === 3) {
+    if (!obState.loadedChats) {
+      obLoadChats().then(() => {
+        if (obState.step === 3) obPaint();
+      });
+      return;
     }
-  });
-  es.addEventListener("connected", () => {
-    es.close();
-    setOnboardingStatus("✅ מחובר! סורקים את הצ׳אטים שלכם…");
-    // S5: the link is up — WhatsApp now streams history. Show a live scan ring
-    // driven by /api/onboarding/progress, then load the app when the sync completes.
-    renderScanProgress();
-  });
-  es.addEventListener("logged-out", () => {
-    setOnboardingStatus("הקישור נדחה. רעננו ונסו שוב.");
-  });
-  es.onerror = () => setOnboardingStatus("שגיאת חיבור לשרת. רעננו את הדף.");
-}
-
-function setOnboardingStatus(text) {
-  const el = document.getElementById("qr-status");
-  if (el) el.textContent = text;
-}
-
-/**
- * S5 scan-progress ring: after the WhatsApp link connects, WhatsApp streams the
- * chat history. Replace the QR with a circular progress ring fed by the
- * /api/onboarding/progress SSE stream; load the app once the sync completes.
- * A safety timeout reloads anyway if the server never reports 100 (older syncs
- * report null progress) so onboarding can't get stuck on this screen.
- */
-function renderScanProgress() {
-  const box = document.getElementById("qr-box");
-  const steps = document.querySelector(".qr-steps");
-  if (steps) steps.remove();
-  if (box) {
-    const C = 2 * Math.PI * 52; // ring circumference (r=52)
-    box.innerHTML = `
-      <svg class="scan-ring" viewBox="0 0 120 120" width="160" height="160" aria-hidden="true">
-        <circle class="scan-ring__track" cx="60" cy="60" r="52" />
-        <circle class="scan-ring__fill" cx="60" cy="60" r="52"
-          style="stroke-dasharray:${C};stroke-dashoffset:${C}" />
-      </svg>
-      <p id="scan-pct" class="qr-hint">0%</p>`;
+    obWireChats();
+    return;
   }
-  const done = () => location.reload();
-  // Fallback: if no terminal 'done' arrives within 90s, load the app anyway.
-  let timer = setTimeout(done, 90000);
-  const es = new EventSource("/api/onboarding/progress");
-  activeEventSource = es;
-  es.addEventListener("progress", (e) => {
-    const { progress } = JSON.parse(e.data);
-    if (typeof progress === "number") setScanProgress(progress);
-  });
-  es.addEventListener("done", () => {
-    clearTimeout(timer);
-    es.close();
-    setScanProgress(100);
-    setOnboardingStatus("✅ הסריקה הושלמה! טוען את האפליקציה…");
-    timer = setTimeout(done, 600);
-  });
-  es.onerror = () => setOnboardingStatus("הסריקה ממשיכה ברקע…");
+  if (step === 4) {
+    for (const btn of document.querySelectorAll(".ob-time")) {
+      btn.addEventListener("click", () => {
+        obState.digestTime = btn.dataset.t;
+        obPaint();
+      });
+    }
+    document.getElementById("ob-notif")?.addEventListener("click", () => {
+      obState.morningNotif = !obState.morningNotif;
+      obPaint();
+    });
+    document.getElementById("ob-finish")?.addEventListener("click", obFinish);
+  }
 }
 
-function setScanProgress(pct) {
-  const clamped = Math.max(0, Math.min(100, pct));
-  const fill = document.querySelector(".scan-ring__fill");
-  const label = document.getElementById("scan-pct");
-  if (fill) {
-    const C = 2 * Math.PI * 52;
-    fill.style.strokeDashoffset = String(C * (1 - clamped / 100));
+/** Drive the scan ring + checklist with a timed simulation, overridden by real
+ *  /api/onboarding/progress events when a live sync is streaming. Advances to
+ *  the chat picker on completion. */
+function obRunScan() {
+  let pct = 0;
+  const quips = [
+    "ממיין הודעות חשובות מרעש…",
+    "מאתר מה מחכה לתשובה…",
+    "מחבר נקודות בין שיחות…",
+    "כמעט שם — מסדר את הבוקר שלך ✦",
+  ];
+  let q = 0;
+  const items = obScanItems().length;
+  const apply = (p) => {
+    pct = Math.max(0, Math.min(100, p));
+    const ring = document.getElementById("ob-ring");
+    const pctEl = document.getElementById("ob-pct");
+    if (ring) ring.style.setProperty("--p", String(pct));
+    if (pctEl) pctEl.textContent = `${Math.round(pct)}%`;
+    const active = Math.min(items - 1, Math.floor(pct / (100 / items)));
+    for (const el of document.querySelectorAll(".ob-scan-item")) {
+      const k = Number(el.dataset.k);
+      const ok = pct >= (k + 1) * (100 / items);
+      el.classList.toggle("ok", ok);
+      el.classList.toggle("active", !ok && k === active);
+      let dots = el.querySelector(".ob-dots");
+      if (!ok && k === active && !dots) {
+        dots = document.createElement("span");
+        dots.className = "ob-dots";
+        dots.innerHTML = "<i></i><i></i><i></i>";
+        el.appendChild(dots);
+      } else if ((ok || k !== active) && dots) {
+        dots.remove();
+      }
+      if (ok && !el.querySelector(".ob-scan-tick")) {
+        const tick = document.createElement("span");
+        tick.className = "ob-scan-tick";
+        tick.innerHTML = icon("check", { size: 13 });
+        el.appendChild(tick);
+      }
+    }
+  };
+  const finish = () => {
+    obTeardown();
+    if (obState.step === 2) obGo(3);
+  };
+  const tick = setInterval(() => {
+    apply(pct + 1);
+    if (pct >= 100) {
+      clearInterval(tick);
+      setTimeout(finish, 600);
+    }
+  }, 55);
+  const quipTimer = setInterval(() => {
+    q = (q + 1) % quips.length;
+    const el = document.getElementById("ob-quip");
+    if (el) el.textContent = quips[q];
+  }, 1700);
+  obState.timers.push(tick, quipTimer);
+  if (!obState.preview) {
+    const es = new EventSource("/api/onboarding/progress");
+    activeEventSource = es;
+    es.addEventListener("progress", (e) => {
+      const { progress } = JSON.parse(e.data);
+      if (typeof progress === "number") apply(Math.max(pct, progress));
+    });
+    es.addEventListener("done", () => {
+      apply(100);
+      finish();
+    });
+    es.onerror = () => {}; // fall back to the timed simulation
   }
-  if (label) label.textContent = `${Math.round(clamped)}%`;
+}
+
+/** Load the user's most-active chats into the picker (default all included). */
+async function obLoadChats() {
+  let groups = [];
+  try {
+    groups = await getGroups();
+  } catch {
+    groups = [];
+  }
+  obState.chats = groups
+    .slice(0, 40)
+    .map((g) => ({ name: g.name, hue: hueFromName(g.name), included: true }));
+  obState.loadedChats = true;
+}
+
+function obWireChats() {
+  const recount = () => {
+    const on = obState.chats.filter((c) => c.included).length;
+    const cnt = document.getElementById("ob-count");
+    if (cnt) cnt.textContent = `${on} נבחרו`;
+    const cta = document.getElementById("ob-chats-cta");
+    if (cta) {
+      cta.textContent = `המשך עם ${on} צ׳אטים`;
+      cta.disabled = on === 0;
+    }
+    const bulk = document.getElementById("ob-bulk");
+    if (bulk) bulk.textContent = on === obState.chats.length ? "כבה הכול" : "הפעל הכול";
+  };
+  for (const pill of document.querySelectorAll(".ob-chat-pill")) {
+    pill.addEventListener("click", () => {
+      const i = Number(pill.dataset.i);
+      obState.chats[i].included = !obState.chats[i].included;
+      pill.classList.toggle("on", obState.chats[i].included);
+      pill.querySelector(".ob-chat-check").innerHTML = obState.chats[i].included
+        ? icon("check", { size: 14 })
+        : icon("plus", { size: 14 });
+      recount();
+    });
+  }
+  document.getElementById("ob-bulk")?.addEventListener("click", () => {
+    const allOn = obState.chats.every((c) => c.included);
+    for (const c of obState.chats) c.included = !allOn;
+    obPaint();
+  });
+  document.getElementById("ob-chats-cta")?.addEventListener("click", () => obCommitChats(true));
+  document.getElementById("ob-chats-skip")?.addEventListener("click", () => obCommitChats(false));
+}
+
+/** Persist the chat selection (seeding the engine's scopes) then advance. In
+ *  preview mode we don't write — the flow is just being reviewed. */
+async function obCommitChats(useSelection) {
+  if (!obState.preview && obState.loadedChats && obState.chats.length) {
+    const updates = obState.chats.map((c) => ({ group: c.name, included: useSelection ? c.included : false }));
+    await putScopes(updates).catch(() => {});
+  }
+  obGo(4);
+}
+
+/** Save the digest preferences, mark onboarding done, and enter the app. */
+async function obFinish() {
+  if (!obState.preview) {
+    await putPreferences({ digestTimes: obState.digestTime, morningNotification: obState.morningNotif }).catch(() => {});
+    try {
+      localStorage.setItem("catchapp-onboarded", "1");
+    } catch {
+      /* ignore storage failures */
+    }
+  }
+  obTeardown();
+  location.href = "/"; // drops ?onboarding=preview; boot loads the app
 }
 
 /* ── T5 operator dashboard (/admin) ──────────────────────────────────────── */

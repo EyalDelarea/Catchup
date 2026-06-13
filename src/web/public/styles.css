@@ -3974,6 +3974,9 @@ h2.sec .ic{ width:15px; height:15px; }
 .trust-line .ic{ width:15px; height:15px; }
 
 /* ---- guided onboarding flow ---- */
+/* Full-screen takeover that escapes the app shell's grid (the flow replaces
+   #layout's contents, which still carries the .shell grid). */
+.ob-takeover{ position:fixed; inset:0; z-index:80; background:var(--stage); display:grid; place-items:center; overflow:auto; padding:34px 24px; }
 .ob-flow .ob-card{ width:100%; }
 .ob-center{ text-align:center; }
 .ob-h{ margin:0 0 6px; font-size:30px; font-weight:800; letter-spacing:-.025em; }
@@ -4201,6 +4204,8 @@ h2.sec .ic{ width:15px; height:15px; }
 .cl-ico:hover{ background:var(--hover); color:var(--ink); }
 .cl-snooze-wrap{ position:relative; }
 .cl-menu{ position:absolute; top:44px; inset-inline-end:0; z-index:10; padding:6px; display:flex; flex-direction:column; gap:2px; min-width:160px; box-shadow:0 12px 30px -10px rgba(20,24,28,.35); }
+/* the [hidden] attribute must beat the display:flex above */
+.cl-menu[hidden]{ display:none; }
 .cl-menu button{ text-align:start; border:none; background:transparent; font:600 13px "Heebo",sans-serif; color:var(--ink); padding:9px 11px; border-radius:8px; cursor:pointer; }
 .cl-menu button:hover{ background:var(--accent-weak); color:var(--accent-ink); }
 .cl-status{ margin-top:12px; font:700 12.5px "Heebo",sans-serif; color:var(--accent-ink); background:var(--accent-weak); padding:7px 12px; border-radius:10px; text-align:center; }
