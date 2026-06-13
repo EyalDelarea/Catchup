@@ -1460,7 +1460,18 @@ function submitAmaQuestion(scope) {
       renderAmaMessages();
     },
     citations: (d) => finishAnswer(reply, d.citations),
-    done: settle,
+    done: (d) => {
+      // Show the designed "no results" surface when the answer cited nothing AND
+      // either retrieval was empty or the model returned its no-relevant-info
+      // marker — an answer that actually found something always carries citations.
+      const noCites = !(reply.citations && reply.citations.length);
+      const noInfo = /אין הודעות רלוונט|אין מידע/.test(reply.text || "");
+      if (noCites && (d?.candidateCount === 0 || noInfo)) {
+        reply.noResults = true;
+        reply.pending = false;
+      }
+      settle();
+    },
     error: (d) => {
       // A dropped connection after the answer completed is not a failure.
       if (reply.pending) failAnswer(reply, d.message);
@@ -1489,6 +1500,9 @@ function renderAmaMessages() {
             ? ["מחפש בכל ההיסטוריה…", "קורא הודעות רלוונטיות"]
             : ["חושב…", ""];
       return `<div class="msg ai"><div class="ask-state"><span class="sg-spark">${icon("sparkle", { size: 16 })}</span><div><b>${title}</b>${sub ? `<div class="ask-sub">${sub}</div>` : ""}</div><span class="ob-dots"><i></i><i></i><i></i></span></div></div>`;
+    }
+    if (m.noResults) {
+      return `<div class="msg ai"><div class="empty err"><div class="empty-ic err-ic err-ic--wiggle">${icon("search", { size: 26 })}<span class="err-ring"></span></div><h3>לא מצאתי על זה כלום</h3><p>לא נמצאו הודעות רלוונטיות בשיחות שבחרת. נסו לנסח אחרת או להרחיב את טווח הצ׳אטים.</p></div></div>`;
     }
     if (m.error) {
       return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble" style="color:var(--warn-ink)">${escHtml(m.error)}</div></div></div>`;
@@ -1572,6 +1586,15 @@ async function renderThread(chat, aroundId) {
 
 const SEG_LABEL = { all: "הכול", included: "מוזנים", excluded: "מוחרגים" };
 const sourcesState = { scopes: [], categories: [], query: "", segment: "all" };
+let sourcesMenuWired = false;
+
+/** Close every open per-row ⋯ overflow menu in Sources. */
+function closeAllSourceMenus() {
+  for (const m of document.querySelectorAll(".src-row .cl-menu")) m.hidden = true;
+  for (const b of document.querySelectorAll('.src-row [data-act="menu"]')) {
+    b.setAttribute("aria-expanded", "false");
+  }
+}
 
 /** The Sources control center (§7): whitelist/blacklist + categorize chats. */
 async function renderSources() {
@@ -1655,12 +1678,11 @@ function buildSourceRow(s) {
   const catName = sourcesState.categories.find((c) => c.id === s.categoryId)?.name;
   const status = !s.included ? "מוחרג — לא ינוטר" : s.muted ? "מושתק · עדכונים בלבד" : "מוזן ל-CatchApp";
   const statusLine = catName ? `${escHtml(status)} · ${escHtml(catName)}` : escHtml(status);
-  const cats = sourcesState.categories
-    .map(
-      (c) =>
-        `<option value="${c.id}"${s.categoryId === c.id ? " selected" : ""}>${escHtml(c.name)}</option>`,
-    )
+  const moveItems = sourcesState.categories
+    .filter((c) => c.id !== s.categoryId)
+    .map((c) => `<button data-act="cat" data-cat="${c.id}" type="button">${escHtml(c.name)}${icon("chevL", { size: 13 })}</button>`)
     .join("");
+  const toNone = s.categoryId != null ? `<button data-act="cat" data-cat="" type="button">ללא קטגוריה${icon("chevL", { size: 13 })}</button>` : "";
   return `
     <div class="src-row${s.included ? "" : " src-row--off"}" data-group="${escHtml(s.group)}">
       ${avatarHtml(name, hueFromName(s.group), 38)}
@@ -1668,10 +1690,6 @@ function buildSourceRow(s) {
         <div class="src-row__name">${escHtml(name)}</div>
         <div class="src-row__status">${statusLine}</div>
       </div>
-      <select class="src-cat" data-act="cat" aria-label="קטגוריה">
-        <option value=""${s.categoryId == null ? " selected" : ""}>ללא</option>
-        ${cats}
-      </select>
       ${
         s.included
           ? `<button class="src-mute${s.muted ? " is-on" : ""}" data-act="mute" type="button"
@@ -1680,7 +1698,16 @@ function buildSourceRow(s) {
         title="${s.muted ? "ההצעות מושתקות — הצ׳אט עדיין מופיע בעדכונים" : "השתק הצעות (הצ׳אט עדיין מופיע בעדכונים)"}">${icon("moon", { size: 15 })}</button>`
           : ""
       }
-      <button class="src-remove" data-act="remove" type="button" aria-label="הסר">✕</button>
+      <div class="src-actions-wrap">
+        <button class="cl-ico" data-act="menu" type="button" aria-haspopup="true" aria-expanded="false" aria-label="פעולות">${icon("more", { size: 18 })}</button>
+        <div class="cl-menu surface" hidden>
+          <button data-act="toggle" type="button">${s.included ? "הסר מהסיכום" : "כלול בסיכום"}${icon(s.included ? "x" : "check", { size: 14 })}</button>
+          <div class="cl-menu-label">העבר לקבוצה</div>
+          ${moveItems}${toNone}
+          <div class="divide"></div>
+          <button class="danger" data-act="remove" type="button">הסר מהרשימה${icon("trash", { size: 14 })}</button>
+        </div>
+      </div>
       <button class="src-switch${s.included ? " is-on" : ""}" data-act="toggle" type="button"
         role="switch" aria-checked="${s.included}" aria-label="${s.included ? "מוזן" : "מוחרג"}">
         <span class="src-switch__knob"></span>
@@ -1763,10 +1790,13 @@ function wireSources() {
   }
   for (const row of document.querySelectorAll(".src-row[data-group]")) {
     const group = row.dataset.group;
-    row.querySelector('[data-act="toggle"]')?.addEventListener("click", () => {
-      const s = sourcesState.scopes.find((x) => x.group === group);
-      applyScopeChange([{ group, included: !s.included }]);
-    });
+    // The include switch AND the menu's "כלול/הסר מהסיכום" item both toggle inclusion.
+    for (const t of row.querySelectorAll('[data-act="toggle"]')) {
+      t.addEventListener("click", () => {
+        const s = sourcesState.scopes.find((x) => x.group === group);
+        applyScopeChange([{ group, included: !s.included }]);
+      });
+    }
     row.querySelector('[data-act="mute"]')?.addEventListener("click", () => {
       const s = sourcesState.scopes.find((x) => x.group === group);
       applyScopeChange([{ group, muted: !s.muted }]);
@@ -1777,10 +1807,30 @@ function wireSources() {
     row.querySelector('[data-act="restore"]')?.addEventListener("click", () =>
       applyScopeChange([{ group, removed: false }]),
     );
-    row.querySelector('[data-act="cat"]')?.addEventListener("change", (e) => {
-      const val = e.target.value;
-      applyScopeChange([{ group, categoryId: val === "" ? null : Number(val) }]);
-    });
+    for (const cb of row.querySelectorAll('[data-act="cat"]')) {
+      cb.addEventListener("click", () => {
+        const val = cb.dataset.cat;
+        applyScopeChange([{ group, categoryId: val === "" ? null : Number(val) }]);
+      });
+    }
+    // ⋯ overflow menu (move-to-group + remove): open one at a time.
+    const menuBtn = row.querySelector('[data-act="menu"]');
+    const menu = row.querySelector(".cl-menu");
+    if (menuBtn && menu) {
+      menuBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const willOpen = menu.hidden;
+        closeAllSourceMenus();
+        menu.hidden = !willOpen;
+        menuBtn.setAttribute("aria-expanded", String(willOpen));
+      });
+      menu.addEventListener("click", (e) => e.stopPropagation());
+    }
+  }
+  // Close any open ⋯ menu on an outside click (wired once).
+  if (!sourcesMenuWired) {
+    sourcesMenuWired = true;
+    document.addEventListener("click", closeAllSourceMenus);
   }
 }
 
@@ -2236,13 +2286,22 @@ async function renderToday() {
 /** Command-center side-rail data: today's meetings, open to-dos, follow-up
  *  people. Best-effort against the live endpoints; demo uses small fixtures. */
 async function loadTodaySide() {
-  if (DEMO) return DEMO_SIDE;
-  const [meetings, todos, people] = await Promise.all([
+  if (DEMO) return { ...DEMO_SIDE, discover: [] };
+  const [meetings, todos, people, scopes] = await Promise.all([
     getMeetings().catch(() => []),
     getTodos().catch(() => []),
     getPeople().catch(() => []),
+    getScopes().catch(() => []),
   ]);
-  return { meetings, todos, people };
+  // "שיחות שאולי פיספת": chats with recent activity that aren't included yet
+  // (default-OFF) and weren't removed — the design's discover/miss nudge. Top 3.
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const discover = (Array.isArray(scopes) ? scopes : [])
+    .filter((s) => !s.included && !s.removed && s.messageCount > 0 && s.lastMessageAt && new Date(s.lastMessageAt).getTime() > weekAgo)
+    .sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt))
+    .slice(0, 3)
+    .map((s) => ({ name: s.group, hue: hueFromName(s.group), why: `${s.messageCount} הודעות · פעילה לאחרונה` }));
+  return { meetings, todos, people, discover };
 }
 
 function paintToday() {
@@ -2305,10 +2364,11 @@ function buildTodayHeader(now) {
 /** The desktop command-center side rail: meetings today · open to-dos ·
  *  follow-up people · an Ask shortcut. Each row links to its full screen. */
 function buildCommandSide() {
-  const side = todayState.side || { meetings: [], todos: [], people: [] };
+  const side = todayState.side || { meetings: [], todos: [], people: [], discover: [] };
   const meetings = (side.meetings || []).slice(0, 3);
   const openTodos = (side.todos || []).filter((t) => !t.done).slice(0, 4);
   const followups = (side.people || []).filter((p) => p.warn || p.status?.includes("מתקרר")).slice(0, 3);
+  const discover = (side.discover || []).slice(0, 3);
 
   const meetingRows = meetings.length
     ? meetings.map((m) => `
@@ -2358,6 +2418,27 @@ function buildCommandSide() {
       </div>
       <div class="cc-panel-body">${followRows}</div>
     </div>
+    ${
+      discover.length
+        ? `<div class="cc-panel surface">
+      <div class="cc-panel-h" data-go="sources">
+        <span class="cc-panel-ic">${icon("filter", { size: 16 })}</span>
+        <b>שיחות שאולי פיספת</b><span class="cc-count">${discover.length}</span>
+        <span class="cc-more">${icon("chevL", { size: 15 })}</span>
+      </div>
+      <div class="cc-panel-body">${discover
+        .map(
+          (d) => `
+        <div class="cc-row">
+          ${avatarHtml(formatGroupName(d.name), d.hue, 30)}
+          <div class="grow"><div class="cc-row-t">${escHtml(formatGroupName(d.name))}</div><div class="cc-row-s">${escHtml(d.why)}</div></div>
+          <button class="btn btn-soft btn-sm" data-add-chat="${escHtml(d.name)}" type="button">${icon("plus", { size: 14 })}הוסף</button>
+        </div>`,
+        )
+        .join("")}</div>
+    </div>`
+        : ""
+    }
     <div class="cc-ask surface" data-go="ama">
       <span class="cc-ask-ic">${icon("sparkle", { size: 18 })}</span>
       <div class="grow"><b>שאל את הצ׳אטים שלך</b><small>״מה הכי דחוף היום?״</small></div>
@@ -2621,6 +2702,22 @@ function wireToday() {
   // Command-center side rail: every panel/row links to its full screen.
   for (const el of paneMain.querySelectorAll("[data-go]")) {
     el.addEventListener("click", () => navigate(el.dataset.go));
+  }
+
+  // "שיחות שאולי פיספת" → one-tap add to scope, then drop the row + flash.
+  for (const btn of paneMain.querySelectorAll("[data-add-chat]")) {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const group = btn.dataset.addChat;
+      btn.disabled = true;
+      await putScopes([{ group, included: true }]).catch(() => {});
+      if (todayState.side?.discover) {
+        todayState.side.discover = todayState.side.discover.filter((d) => d.name !== group);
+      }
+      cachedGroups = []; // force the Updates list to re-fetch with the new chat
+      paintToday();
+      showTodayFlash("נוסף לצ׳אטים המוזנים ✓");
+    });
   }
 
   // Desktop digest board: act buttons (commit/snooze/discard), per-card draft
