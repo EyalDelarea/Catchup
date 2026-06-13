@@ -25,6 +25,7 @@ import { deriveHealth } from "./lib/health.js";
 import { shouldStartBackgroundRefresh } from "./lib/open-state.js";
 import { scanFill } from "./lib/phase-loader.js";
 import { appendToken, beginQuestion, createConversation, failAnswer, finishAnswer, loadConversation, saveConversation, setPhase } from "./lib/ama-conversation.js";
+import { createJobStore, findJob, markAllRead, markRead, readyNewestFirst, unreadCount } from "./lib/ask-jobs.js";
 import { DEMO_GROUPS, DEMO_SUMMARY, DEMO_SUMMARIES, DEMO_TOTAL_HIGHLIGHTS, DEMO_TOTAL_PERCHAT } from "./lib/demo-data.js";
 import { applyTheme, readStoredTheme, resolveInitialTheme, setTheme } from "./lib/theme.js";
 import { icon } from "./lib/icons.js";
@@ -64,6 +65,8 @@ let catchupCategories = [];
 let amaConversation = createConversation();
 /** Scope of the active AMA conversation, for persistence keying. */
 let amaScope = null;
+/** Async Ask jobs — survive in-session navigation (notifications read from this). */
+const askStore = createJobStore();
 
 /** sessionStorage, or null if the browser blocks access (private mode, etc.). */
 function amaStorage() {
@@ -355,8 +358,9 @@ function setAppbar(view, { back, title, sub: subOverride } = {}) {
     </div>`;
   document.getElementById("appbar-back")?.addEventListener("click", () => history.back());
   document.getElementById("appbar-search")?.addEventListener("click", () => navigate("catchup"));
-  document.getElementById("appbar-bell")?.addEventListener("click", () => navigate("settings"));
+  document.getElementById("appbar-bell")?.addEventListener("click", toggleNotifPanel);
   document.getElementById("appbar-theme")?.addEventListener("click", toggleTheme);
+  updateBellBadge();
 }
 
 /** Hebrew "weekday, D Month" for the Today appbar subtitle. */
@@ -1530,6 +1534,142 @@ function renderAmaSources(citations) {
     `<span class="src-date" dir="ltr"> · ${escHtml(fmtTime(c.sentAt))}</span></button>`
   ).join("");
   return `<div class="cites">${items}</div>`;
+}
+
+/* ── 7a. Async-ask notifications (bell badge · panel · toast · flash) ── */
+
+/** A fixed host for app-level ask overlays (panel + toast + clearbar), mounted once. */
+function askOverlayHost() {
+  let host = document.getElementById("ask-overlays");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "ask-overlays";
+    document.body.appendChild(host);
+  }
+  return host;
+}
+
+/** Reflect the unread count on the appbar bell (badge hidden at 0). */
+function updateBellBadge() {
+  const bell = document.getElementById("appbar-bell");
+  if (!bell) return;
+  bell.classList.add("notif-bell");
+  const n = unreadCount(askStore);
+  let badge = bell.querySelector(".notif-badge");
+  if (n > 0) {
+    if (!badge) {
+      badge = document.createElement("span");
+      badge.className = "notif-badge";
+      bell.appendChild(badge);
+    }
+    badge.textContent = String(n);
+  } else if (badge) {
+    badge.remove();
+  }
+}
+
+let notifPanelOpen = false;
+function toggleNotifPanel() {
+  if (notifPanelOpen) closeNotifPanel();
+  else openNotifPanel();
+}
+function closeNotifPanel() {
+  notifPanelOpen = false;
+  document.getElementById("notif-panel")?.remove();
+  document.getElementById("notif-back")?.remove();
+}
+
+/** Open the notifications panel: ready answers newest-first. */
+function openNotifPanel() {
+  notifPanelOpen = true;
+  const host = askOverlayHost();
+  const items = readyNewestFirst(askStore);
+  const anyUnread = items.some((j) => !j.read);
+  const list = items.length
+    ? items
+        .map(
+          (j) => `
+      <button type="button" class="notif-item${j.read ? "" : " unread"}" data-job="${escHtml(j.id)}">
+        <span class="notif-ic">${icon("sparkle", { size: 16 })}</span>
+        <span class="notif-body">
+          <span class="notif-title">התשובה מוכנה</span>
+          <span class="notif-q">${escHtml(j.q)}</span>
+          <span class="notif-scope">${icon("filter", { size: 12 })}${escHtml(scopeLabel(j.scope))}</span>
+        </span>
+        ${j.read ? "" : `<span class="notif-dot"></span>`}
+      </button>`,
+        )
+        .join("")
+    : `<div class="notif-empty">${icon("bell", { size: 26 })}<span>אין התראות כרגע</span></div>`;
+  host.insertAdjacentHTML(
+    "beforeend",
+    `<div id="notif-back" class="notif-back"></div>
+     <div id="notif-panel" class="notif-panel surface" role="dialog" aria-label="התראות">
+       <div class="notif-head"><b>התראות</b>${anyUnread ? `<button type="button" class="notif-clear" id="notif-markall">סמן הכל כנקרא</button>` : ""}</div>
+       <div class="notif-list">${list}</div>
+     </div>`,
+  );
+  document.getElementById("notif-back")?.addEventListener("click", closeNotifPanel);
+  document.getElementById("notif-markall")?.addEventListener("click", () => {
+    markAllRead(askStore);
+    updateBellBadge();
+    closeNotifPanel();
+  });
+  for (const it of document.querySelectorAll("#notif-panel .notif-item")) {
+    it.addEventListener("click", () => openAskJob(it.dataset.job));
+  }
+}
+
+let askToastTimer = null;
+function dismissAskToast() {
+  if (askToastTimer) {
+    clearTimeout(askToastTimer);
+    askToastTimer = null;
+  }
+  document.getElementById("ask-toast")?.remove();
+}
+
+/** Slide up a toast when an answer lands while the user is elsewhere. */
+function showAskToast(id) {
+  const job = findJob(askStore, id);
+  if (!job) return;
+  dismissAskToast();
+  askOverlayHost().insertAdjacentHTML(
+    "beforeend",
+    `<div id="ask-toast" class="asktoast surface" role="status" data-job="${escHtml(id)}">
+       <span class="asktoast-ic">${icon("sparkle", { size: 18 })}</span>
+       <span class="asktoast-body"><span class="asktoast-title">התשובה מוכנה ✦</span><span class="asktoast-q">${escHtml(job.q)}</span></span>
+       <button type="button" class="btn btn-primary" id="ask-toast-view">צפה</button>
+       <button type="button" class="asktoast-x" id="ask-toast-x" aria-label="סגור">${icon("x", { size: 16 })}</button>
+     </div>`,
+  );
+  document.getElementById("ask-toast-view")?.addEventListener("click", () => openAskJob(id));
+  document.getElementById("ask-toast-x")?.addEventListener("click", dismissAskToast);
+}
+
+/** Open a job's answer: clear its unread, dismiss chrome, navigate to its scope, flash it. */
+function openAskJob(id) {
+  const job = findJob(askStore, id);
+  if (!job) return;
+  markRead(askStore, id);
+  closeNotifPanel();
+  dismissAskToast();
+  navigate("ama", job.scope ?? undefined);
+  requestAnimationFrame(() => flashAskMsg(id));
+}
+
+/** Briefly highlight an answer bubble (reduced-motion: CSS no-ops the animation). */
+function flashAskMsg(id) {
+  const node = document.querySelector(`[data-msg-id="${CSS.escape(id)}"]`);
+  const bubble = node?.querySelector(".bubble") || node;
+  if (!bubble) return;
+  bubble.classList.add("flash");
+  setTimeout(() => bubble.classList.remove("flash"), 1800);
+}
+
+/** Scope → human label for notifications + the scope picker. */
+function scopeLabel(scope) {
+  return scope == null ? "כל הצ׳אטים" : formatGroupName(scope);
 }
 
 /* ── 7b. Thread view (Ask source-jump) ───────────────────── */
