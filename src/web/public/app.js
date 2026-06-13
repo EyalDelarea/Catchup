@@ -25,6 +25,7 @@ import { deriveHealth } from "./lib/health.js";
 import { shouldStartBackgroundRefresh } from "./lib/open-state.js";
 import { scanFill } from "./lib/phase-loader.js";
 import { appendToken, beginQuestion, createConversation, failAnswer, finishAnswer, loadConversation, saveConversation, setPhase } from "./lib/ama-conversation.js";
+import { addJob, createJobStore, findJob, markAllRead, markRead, markScopeRead, readyNewestFirst, settleJob, unreadCount, workingForScope } from "./lib/ask-jobs.js";
 import { DEMO_GROUPS, DEMO_SUMMARY, DEMO_SUMMARIES, DEMO_TOTAL_HIGHLIGHTS, DEMO_TOTAL_PERCHAT } from "./lib/demo-data.js";
 import { applyTheme, readStoredTheme, resolveInitialTheme, setTheme } from "./lib/theme.js";
 import { icon } from "./lib/icons.js";
@@ -64,6 +65,23 @@ let catchupCategories = [];
 let amaConversation = createConversation();
 /** Scope of the active AMA conversation, for persistence keying. */
 let amaScope = null;
+/** Async Ask jobs — survive in-session navigation (notifications read from this). */
+const askStore = createJobStore();
+/** Per-job runtime (not serialized): id → { es, conv, reply, stallTimer }. */
+const askRuntime = new Map();
+/** Canonical in-memory conversation for any scope with a live job. */
+const liveConvByScope = new Map();
+/** Monotonic ask id counter. */
+let askSeq = 0;
+
+/** Scope → persistence/registry key (mirrors ama-conversation convKey). */
+function scopeKey(scope) {
+  return scope ?? "*all*";
+}
+/** True if the Ask screen is currently showing this scope. */
+function onAskScreen(scope) {
+  return layout?.dataset.view === "ama" && (amaScope ?? null) === (scope ?? null);
+}
 
 /** sessionStorage, or null if the browser blocks access (private mode, etc.). */
 function amaStorage() {
@@ -355,8 +373,9 @@ function setAppbar(view, { back, title, sub: subOverride } = {}) {
     </div>`;
   document.getElementById("appbar-back")?.addEventListener("click", () => history.back());
   document.getElementById("appbar-search")?.addEventListener("click", () => navigate("catchup"));
-  document.getElementById("appbar-bell")?.addEventListener("click", () => navigate("settings"));
+  document.getElementById("appbar-bell")?.addEventListener("click", toggleNotifPanel);
   document.getElementById("appbar-theme")?.addEventListener("click", toggleTheme);
+  updateBellBadge();
 }
 
 /** Hebrew "weekday, D Month" for the Today appbar subtitle. */
@@ -1356,28 +1375,31 @@ function runTotal({ since }) {
 function renderAma(scope) {
   teardownStream();
   amaScope = scope ?? null;
-  amaConversation = loadConversation(amaStorage(), amaScope);
+  // Reuse the live in-memory conversation while a job is streaming into this
+  // scope, so a background answer and the visible thread can't diverge.
+  amaConversation = liveConvByScope.get(scopeKey(amaScope)) ?? loadConversation(amaStorage(), amaScope);
   paneMain.innerHTML = `
     <div class="ama2">
+      ${askCtxBarHtml(amaScope)}
       <div class="ama-scroll" id="ama-scroll">
         <div class="content">
-          <div class="chat" id="ama-messages" aria-live="polite">
-            <div class="empty">
-              <div class="empty-ic">${icon("sparkle", { size: 26 })}</div>
-              <p>${scope ? "שאל כל שאלה על הצ׳אט הזה ✨" : "שאל כל שאלה על השיחות שלך ✨"}</p>
-            </div>
-          </div>
-          ${amaSuggestHtml(scope)}
+          <div class="chat" id="ama-messages" aria-live="polite">${askEmptyHtml(amaScope)}</div>
+          ${amaSuggestHtml(amaScope)}
         </div>
       </div>
       <form class="askbar" id="ama-form">
         <label class="field">${icon("message", { size: 18 })}<input id="ama-q" type="text"
-          placeholder="${scope ? "שאל על הצ׳אט הזה…" : "שאל על כל ההיסטוריה שלך…"}" aria-label="שאלה" autocomplete="off" /></label>
+          placeholder="${amaScope ? `שאל על הצ׳אט עם ${escHtml(formatGroupName(amaScope))}…` : "שאל על כל ההיסטוריה שלך…"}" aria-label="שאלה" autocomplete="off" /></label>
         <button class="btn btn-primary" type="submit" aria-label="שלח">${icon("arrowL", { size: 18 })}שלח</button>
       </form>
     </div>`;
   setView("ama");
   setAppbar("ask");
+  // Viewing a scope clears its unread answers + refreshes the bell badge.
+  markScopeRead(askStore, amaScope);
+  updateBellBadge();
+  // The scope picker lists fed chats; make sure they're loaded.
+  if (!cachedGroups.length) loadGroupsIntoList();
 
   // Replace the empty-state hint with the restored thread, if there is one.
   if (amaConversation.messages.length) renderAmaMessages();
@@ -1396,14 +1418,19 @@ function renderAma(scope) {
     if (chat && Number.isFinite(id)) navigate("thread", { chat, aroundId: id });
   });
 
-  // Suggestion chips fill the box and submit.
-  for (const chip of document.querySelectorAll(".suggrow .chip")) {
+  // Suggestion chips (global row + scoped empty-state) fill the box and submit.
+  for (const chip of document.querySelectorAll(".suggrow .chip, .ask-empty-sugg .chip")) {
     chip.addEventListener("click", () => {
       const input = document.getElementById("ama-q");
       if (input) input.value = chip.dataset.q || chip.textContent || "";
-      submitAmaQuestion(scope);
+      submitAmaQuestion(amaScope);
     });
   }
+
+  // Context bar: scope picker · exit to all-chats · clear conversation.
+  document.getElementById("ama-scope")?.addEventListener("click", () => openScopeMenu(amaScope));
+  document.getElementById("ama-exit")?.addEventListener("click", () => navigate("ama", undefined));
+  document.getElementById("ama-clear")?.addEventListener("click", () => clearAskConversation(amaScope));
 }
 
 /** Starter prompts shown above the input on the global Ask, before any question. */
@@ -1422,49 +1449,219 @@ function amaSuggestHtml(scope) {
   return `<div class="suggrow">${chips}</div>`;
 }
 
+/* ── 7c. Scope-as-conversation (picker · context bar · empty · clear) ── */
+
+/** Scoped suggestion chips — the same trio for any specific chat (per the design). */
+const AMA_SCOPED_SUGGESTIONS = ["מה סוכם בצ׳אט הזה?", "מה הכי דחוף כאן?", "על מה עוד לא עניתי?"];
+
+/** Empty-state block: scoped (avatar + scoped chips) or global (sparkle). "" once a thread exists. */
+function askEmptyHtml(scope) {
+  if (amaConversation.messages.length) return "";
+  if (!scope) {
+    return `<div class="empty"><div class="empty-ic">${icon("sparkle", { size: 26 })}</div><p>שאל כל שאלה על השיחות שלך ✨</p></div>`;
+  }
+  const name = formatGroupName(scope);
+  const chips = AMA_SCOPED_SUGGESTIONS.map(
+    (q) => `<button type="button" class="chip" data-q="${escHtml(q)}">${escHtml(q)}</button>`,
+  ).join("");
+  return `<div class="ask-empty">
+      <div style="margin-bottom:18px">${avatarHtml(name, groupHue(scope), 64)}</div>
+      <h3>שאל על השיחה עם <span class="nowrap">${escHtml(name)}</span></h3>
+      <p>אענה עם הפניות להודעות המקור — בלי לנחש.</p>
+      <div class="ask-empty-sugg">${chips}</div>
+    </div>`;
+}
+
+/** Ask context bar: scope pill + (when scoped) exit + clear. */
+function askCtxBarHtml(scope) {
+  const scoped = scope != null;
+  // Offer "clear" only when there's a settled thread to clear — not mid-stream
+  // (clearing is blocked while a job is in flight, so the button would no-op).
+  const canClear = amaConversation.messages.length > 0 && !workingForScope(askStore, scope ?? null);
+  return `<div class="ask-ctxbar${scoped ? " scoped" : ""}">
+      ${scopePillHtml(scope)}
+      ${scoped ? `<button type="button" class="ask-exit" id="ama-exit" title="חזרה לכל הצ׳אטים">${icon("inbox", { size: 15 })}כל הצ׳אטים</button>` : ""}
+      ${canClear ? `<button type="button" class="ask-clear" id="ama-clear" title="נקה שיחה">${icon("trash", { size: 15 })}נקה שיחה</button>` : ""}
+    </div>`;
+}
+
+/** The scope-selector pill (opens the scope menu). */
+function scopePillHtml(scope) {
+  const scoped = scope != null;
+  const ic = scoped
+    ? avatarHtml(formatGroupName(scope), groupHue(scope), 22)
+    : `<span class="scopepill-ic">${icon("inbox", { size: 14 })}</span>`;
+  return `<div class="scopepick">
+      <button type="button" class="scopepill${scoped ? " scoped" : ""}" id="ama-scope">
+        ${ic}
+        <span class="scopepill-lbl"><span class="scopepill-cap">${scoped ? "שואל על הצ׳אט עם" : "שואל על"}</span><b>${escHtml(scopeLabel(scope))}</b></span>
+        ${icon("chevD", { size: 15 })}
+      </button>
+    </div>`;
+}
+
+/** Open the scope menu: "all chats" + every fed chat (re-scopes without leaving). */
+function openScopeMenu(currentScope) {
+  closeScopeMenu();
+  const pick = document.querySelector(".scopepick");
+  if (!pick) return;
+  if (!cachedGroups.length) {
+    loadGroupsIntoList().then(() => {
+      if (document.getElementById("scope-menu")) { closeScopeMenu(); openScopeMenu(currentScope); }
+    });
+  }
+  const cur = currentScope ?? null;
+  const allOn = cur == null;
+  const rows = cachedGroups.map((g) => {
+    const on = cur === g.name;
+    return `<button type="button" class="scopeopt${on ? " on" : ""}" data-scope="${escHtml(g.name)}">
+        ${avatarHtml(formatGroupName(g.name), groupHue(g.name), 26)}
+        <span class="scopeopt-t"><b>${escHtml(formatGroupName(g.name))}</b></span>
+        ${on ? icon("check", { size: 16 }) : ""}
+      </button>`;
+  }).join("");
+  pick.insertAdjacentHTML(
+    "beforeend",
+    `<div id="scope-back" class="scopeback"></div>
+     <div id="scope-menu" class="scopemenu surface down">
+       <div class="scopemenu-h">על מה לשאול?</div>
+       <button type="button" class="scopeopt${allOn ? " on" : ""}" data-scope="">
+         <span class="scopeopt-ic">${icon("inbox", { size: 15 })}</span>
+         <span class="scopeopt-t"><b>כל הצ׳אטים</b><span>חיפוש על כל ההיסטוריה שבמעקב</span></span>
+         ${allOn ? icon("check", { size: 16 }) : ""}
+       </button>
+       <div class="scopemenu-sep">צ׳אט ספציפי</div>
+       ${rows}
+     </div>`,
+  );
+  document.getElementById("scope-back")?.addEventListener("click", closeScopeMenu);
+  for (const opt of document.querySelectorAll("#scope-menu .scopeopt")) {
+    opt.addEventListener("click", () => {
+      const s = opt.dataset.scope || null;
+      closeScopeMenu();
+      navigate("ama", s ?? undefined);
+    });
+  }
+}
+function closeScopeMenu() {
+  document.getElementById("scope-menu")?.remove();
+  document.getElementById("scope-back")?.remove();
+}
+
+/** Per-group avatar hue, stable from the name. */
+function groupHue(name) {
+  let h = 0;
+  for (const ch of String(name || "")) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return h;
+}
+
+let askClearUndo = null; // { scope, conv } stashed for undo
+let askClearTimer = null;
+
+/** Clear the current scope's conversation, with a ~5s undo snackbar. */
+function clearAskConversation(scope) {
+  const sc = scope ?? null;
+  if (workingForScope(askStore, sc)) return; // don't clear mid-stream
+  if (!amaConversation.messages.length) return;
+  askClearUndo = { scope: sc, conv: amaConversation };
+  amaConversation = createConversation();
+  liveConvByScope.delete(scopeKey(sc));
+  saveConversation(amaStorage(), sc, amaConversation);
+  renderAma(sc); // repaint empty state + drop the clear button
+  showClearBar();
+}
+
+function showClearBar() {
+  dismissClearBar();
+  askOverlayHost().insertAdjacentHTML(
+    "beforeend",
+    `<div id="ask-clearbar" class="clearbar" role="status"><span>השיחה נוקתה</span><button type="button" class="clearbar-undo" id="ask-undo">ביטול</button></div>`,
+  );
+  document.getElementById("ask-undo")?.addEventListener("click", undoClearAsk);
+  askClearTimer = setTimeout(dismissClearBar, 5000);
+}
+function dismissClearBar() {
+  if (askClearTimer) { clearTimeout(askClearTimer); askClearTimer = null; }
+  document.getElementById("ask-clearbar")?.remove();
+}
+
+/** Restore the last-cleared conversation. */
+function undoClearAsk() {
+  if (!askClearUndo) { dismissClearBar(); return; }
+  const { scope, conv } = askClearUndo;
+  askClearUndo = null;
+  saveConversation(amaStorage(), scope, conv);
+  dismissClearBar();
+  if (onAskScreen(scope)) renderAma(scope);
+}
+
 /** No SSE activity for this long → treat the request as stuck and surface it. */
 const AMA_STALL_MS = 120_000;
-let amaStallTimer = null;
 
-/** Send the typed question to /api/ask and stream the answer into the panel. */
+/**
+ * Send the typed question to /api/ask as a background job that survives
+ * in-session navigation: each job owns its EventSource (never the shared
+ * `activeEventSource`, so `teardownStream()` won't kill it) and streams into the
+ * scope's conversation. When it lands while the user is elsewhere, a toast +
+ * bell badge bring them back to the answer.
+ */
 function submitAmaQuestion(scope) {
-  if (activeEventSource) return; // one question at a time
+  const sc = scope ?? null;
+  if (workingForScope(askStore, sc)) return; // one in-flight question per scope
   const input = document.getElementById("ama-q");
   const q = (input?.value || "").trim();
-  const reply = beginQuestion(amaConversation, q);
+  const conv = amaConversation; // we're on the Ask screen for this scope
+  const reply = beginQuestion(conv, q);
   if (!reply) return;
   if (input) input.value = "";
-  document.querySelector(".ama-suggest")?.remove();
+  document.querySelector(".suggrow")?.remove();
+
+  const id = `ask${++askSeq}`;
+  reply.id = id;
+  liveConvByScope.set(scopeKey(sc), conv);
+  addJob(askStore, { id, q, scope: sc, ts: Date.now() });
   renderAmaMessages();
-  saveConversation(amaStorage(), amaScope, amaConversation);
+  saveConversation(amaStorage(), sc, conv);
+
+  const rt = { es: null, conv, reply, stallTimer: null };
+  askRuntime.set(id, rt);
+  const rerender = () => { if (onAskScreen(sc)) renderAmaMessages(); };
 
   const settle = () => {
-    if (amaStallTimer) { clearTimeout(amaStallTimer); amaStallTimer = null; }
-    teardownStream();
-    renderAmaMessages();
-    saveConversation(amaStorage(), amaScope, amaConversation);
+    if (rt.stallTimer) { clearTimeout(rt.stallTimer); rt.stallTimer = null; }
+    if (rt.es) { rt.es.close(); rt.es = null; }
+    askRuntime.delete(id);
+    liveConvByScope.delete(scopeKey(sc));
+    saveConversation(amaStorage(), sc, conv);
+    const read = onAskScreen(sc);
+    const status = reply.error ? "error" : "ready";
+    settleJob(askStore, id, { status, answer: reply.text, citations: reply.citations, read });
+    rerender();
+    updateBellBadge();
+    if (status === "ready" && !read) showAskToast(id);
   };
   // Reset on every event; if the server goes silent for too long (a hung or
   // overloaded model), fail visibly instead of spinning "חושב…" forever.
   const armStall = () => {
-    if (amaStallTimer) clearTimeout(amaStallTimer);
-    amaStallTimer = setTimeout(() => {
+    if (rt.stallTimer) clearTimeout(rt.stallTimer);
+    rt.stallTimer = setTimeout(() => {
       if (reply.pending) failAnswer(reply, "אין תגובה מהשרת. נסה שוב.");
       settle();
     }, AMA_STALL_MS);
   };
   armStall();
 
-  activeEventSource = askStream({ q, chat: scope ?? undefined }, {
+  rt.es = askStream({ q, chat: sc ?? undefined }, {
     phase: (d) => {
       armStall();
       setPhase(reply, d.phase);
-      renderAmaMessages();
+      rerender();
     },
     token: (d) => {
       armStall();
       appendToken(reply, d.delta);
-      renderAmaMessages();
+      rerender();
+      saveConversation(amaStorage(), sc, conv);
     },
     citations: (d) => finishAnswer(reply, d.citations),
     done: (d) => {
@@ -1509,12 +1706,12 @@ function renderAmaMessages() {
       return `<div class="msg ai"><div class="ask-state"><span class="sg-spark">${icon("sparkle", { size: 16 })}</span><div><b>${title}</b>${sub ? `<div class="ask-sub">${sub}</div>` : ""}</div><span class="ob-dots"><i></i><i></i><i></i></span></div></div>`;
     }
     if (m.noResults) {
-      return `<div class="msg ai"><div class="empty err"><div class="empty-ic err-ic err-ic--wiggle">${icon("search", { size: 26 })}<span class="err-ring"></span></div><h3>לא מצאתי על זה כלום</h3><p>לא נמצאו הודעות רלוונטיות בשיחות שבחרת. נסו לנסח אחרת או להרחיב את טווח הצ׳אטים.</p></div></div>`;
+      return `<div class="msg ai" data-msg-id="${escHtml(m.id || "")}"><div class="empty err"><div class="empty-ic err-ic err-ic--wiggle">${icon("search", { size: 26 })}<span class="err-ring"></span></div><h3>לא מצאתי על זה כלום</h3><p>לא נמצאו הודעות רלוונטיות בשיחות שבחרת. נסו לנסח אחרת או להרחיב את טווח הצ׳אטים.</p></div></div>`;
     }
     if (m.error) {
-      return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble" style="color:var(--warn-ink)">${escHtml(m.error)}</div></div></div>`;
+      return `<div class="msg ai" data-msg-id="${escHtml(m.id || "")}">${amaAiAvatar()}<div><div class="bubble" style="color:var(--warn-ink)">${escHtml(m.error)}</div></div></div>`;
     }
-    return `<div class="msg ai">${amaAiAvatar()}<div><div class="bubble">${escHtml(m.text)}</div>${renderAmaSources(m.citations)}</div></div>`;
+    return `<div class="msg ai" data-msg-id="${escHtml(m.id || "")}">${amaAiAvatar()}<div><div class="bubble">${escHtml(m.text)}</div>${renderAmaSources(m.citations)}</div></div>`;
   }).join("");
   const scroller = document.getElementById("ama-scroll");
   if (scroller) scroller.scrollTop = scroller.scrollHeight;
@@ -1530,6 +1727,144 @@ function renderAmaSources(citations) {
     `<span class="src-date" dir="ltr"> · ${escHtml(fmtTime(c.sentAt))}</span></button>`
   ).join("");
   return `<div class="cites">${items}</div>`;
+}
+
+/* ── 7a. Async-ask notifications (bell badge · panel · toast · flash) ── */
+
+/** A fixed host for app-level ask overlays (panel + toast + clearbar), mounted once. */
+function askOverlayHost() {
+  let host = document.getElementById("ask-overlays");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "ask-overlays";
+    document.body.appendChild(host);
+  }
+  return host;
+}
+
+/** Reflect the unread count on the appbar bell (badge hidden at 0). */
+function updateBellBadge() {
+  const bell = document.getElementById("appbar-bell");
+  if (!bell) return;
+  bell.classList.add("notif-bell");
+  const n = unreadCount(askStore);
+  let badge = bell.querySelector(".notif-badge");
+  if (n > 0) {
+    if (!badge) {
+      badge = document.createElement("span");
+      badge.className = "notif-badge";
+      bell.appendChild(badge);
+    }
+    badge.textContent = String(n);
+  } else if (badge) {
+    badge.remove();
+  }
+}
+
+let notifPanelOpen = false;
+function toggleNotifPanel() {
+  if (notifPanelOpen) closeNotifPanel();
+  else openNotifPanel();
+}
+function closeNotifPanel() {
+  notifPanelOpen = false;
+  document.getElementById("notif-panel")?.remove();
+  document.getElementById("notif-back")?.remove();
+}
+
+/** Open the notifications panel: ready answers newest-first. */
+function openNotifPanel() {
+  notifPanelOpen = true;
+  const host = askOverlayHost();
+  const items = readyNewestFirst(askStore);
+  const anyUnread = items.some((j) => !j.read);
+  const list = items.length
+    ? items
+        .map(
+          (j) => `
+      <button type="button" class="notif-item${j.read ? "" : " unread"}" data-job="${escHtml(j.id)}">
+        <span class="notif-ic">${icon("sparkle", { size: 16 })}</span>
+        <span class="notif-body">
+          <span class="notif-title">התשובה מוכנה</span>
+          <span class="notif-q">${escHtml(j.q)}</span>
+          <span class="notif-scope">${icon("filter", { size: 12 })}${escHtml(scopeLabel(j.scope))}</span>
+        </span>
+        ${j.read ? "" : `<span class="notif-dot"></span>`}
+      </button>`,
+        )
+        .join("")
+    : `<div class="notif-empty">${icon("bell", { size: 26 })}<span>אין התראות כרגע</span></div>`;
+  host.insertAdjacentHTML(
+    "beforeend",
+    `<div id="notif-back" class="notif-back"></div>
+     <div id="notif-panel" class="notif-panel surface" role="dialog" aria-label="התראות">
+       <div class="notif-head"><b>התראות</b>${anyUnread ? `<button type="button" class="notif-clear" id="notif-markall">סמן הכל כנקרא</button>` : ""}</div>
+       <div class="notif-list">${list}</div>
+     </div>`,
+  );
+  document.getElementById("notif-back")?.addEventListener("click", closeNotifPanel);
+  document.getElementById("notif-markall")?.addEventListener("click", () => {
+    markAllRead(askStore);
+    updateBellBadge();
+    closeNotifPanel();
+  });
+  for (const it of document.querySelectorAll("#notif-panel .notif-item")) {
+    it.addEventListener("click", () => openAskJob(it.dataset.job));
+  }
+}
+
+let askToastTimer = null;
+function dismissAskToast() {
+  if (askToastTimer) {
+    clearTimeout(askToastTimer);
+    askToastTimer = null;
+  }
+  document.getElementById("ask-toast")?.remove();
+}
+
+/** Slide up a toast when an answer lands while the user is elsewhere. */
+function showAskToast(id) {
+  const job = findJob(askStore, id);
+  if (!job) return;
+  dismissAskToast();
+  askOverlayHost().insertAdjacentHTML(
+    "beforeend",
+    `<div id="ask-toast" class="asktoast surface" role="status" data-job="${escHtml(id)}">
+       <span class="asktoast-ic">${icon("sparkle", { size: 18 })}</span>
+       <span class="asktoast-body"><span class="asktoast-title">התשובה מוכנה ✦</span><span class="asktoast-q">${escHtml(job.q)}</span></span>
+       <button type="button" class="btn btn-primary" id="ask-toast-view">צפה</button>
+       <button type="button" class="asktoast-x" id="ask-toast-x" aria-label="סגור">${icon("x", { size: 16 })}</button>
+     </div>`,
+  );
+  document.getElementById("ask-toast-view")?.addEventListener("click", () => openAskJob(id));
+  document.getElementById("ask-toast-x")?.addEventListener("click", dismissAskToast);
+  // Auto-dismiss after a while; the bell badge stays as the durable indicator.
+  askToastTimer = setTimeout(dismissAskToast, 9000);
+}
+
+/** Open a job's answer: clear its unread, dismiss chrome, navigate to its scope, flash it. */
+function openAskJob(id) {
+  const job = findJob(askStore, id);
+  if (!job) return;
+  markRead(askStore, id);
+  closeNotifPanel();
+  dismissAskToast();
+  navigate("ama", job.scope ?? undefined);
+  requestAnimationFrame(() => flashAskMsg(id));
+}
+
+/** Briefly highlight an answer bubble (reduced-motion: CSS no-ops the animation). */
+function flashAskMsg(id) {
+  const node = document.querySelector(`[data-msg-id="${CSS.escape(id)}"]`);
+  const bubble = node?.querySelector(".bubble") || node;
+  if (!bubble) return;
+  bubble.classList.add("flash");
+  setTimeout(() => bubble.classList.remove("flash"), 1800);
+}
+
+/** Scope → human label for notifications + the scope picker. */
+function scopeLabel(scope) {
+  return scope == null ? "כל הצ׳אטים" : formatGroupName(scope);
 }
 
 /* ── 7b. Thread view (Ask source-jump) ───────────────────── */
